@@ -101,6 +101,8 @@ OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
 }
 
 OverviewController::~OverviewController() {
+    deactivateHooks();
+
     if (m_renderWindowHook) {
         HyprlandAPI::removeFunctionHook(m_handle, m_renderWindowHook);
         m_renderWindowHook = nullptr;
@@ -369,9 +371,8 @@ void OverviewController::renderWindowHook(void* rendererThisptr, PHLWINDOW windo
 
 void OverviewController::renderWorkspaceWindowsFullscreenHook(void* rendererThisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now) {
     if (!m_renderWorkspaceWindowsOriginal || !monitor || !workspace || !isVisible() || !ownsMonitor(monitor) || !ownsWorkspace(workspace)) {
-        if (m_renderWorkspaceWindowsFullscreenHook && m_renderWorkspaceWindowsFullscreenHook->m_original) {
-            auto* original = reinterpret_cast<RenderWorkspaceWindowsFn>(m_renderWorkspaceWindowsFullscreenHook->m_original);
-            original(rendererThisptr, std::move(monitor), std::move(workspace), now);
+        if (m_renderWorkspaceWindowsFullscreenOriginal) {
+            m_renderWorkspaceWindowsFullscreenOriginal(rendererThisptr, std::move(monitor), std::move(workspace), now);
         }
         return;
     }
@@ -411,6 +412,8 @@ bool OverviewController::installHooks() {
         return false;
     }
 
+    m_renderWorkspaceWindowsFullscreenOriginal = reinterpret_cast<RenderWorkspaceWindowsFn>(m_renderWorkspaceWindowsFullscreenHook->m_original);
+
     auto* renderWorkspaceWindows = findFunction("renderWorkspaceWindows", "CHyprRenderer::renderWorkspaceWindows(");
     if (!renderWorkspaceWindows) {
         notify("[hymission] failed to find renderWorkspaceWindows", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
@@ -418,6 +421,15 @@ bool OverviewController::installHooks() {
     }
 
     m_renderWorkspaceWindowsOriginal = reinterpret_cast<RenderWorkspaceWindowsFn>(renderWorkspaceWindows);
+    return true;
+}
+
+bool OverviewController::activateHooks() {
+    if (m_hooksActive)
+        return true;
+
+    if (!m_renderWindowHook || !m_renderWorkspaceWindowsFullscreenHook)
+        return false;
 
     if (!m_renderWindowHook->hook()) {
         notify("[hymission] renderWindow hook attach failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
@@ -425,11 +437,26 @@ bool OverviewController::installHooks() {
     }
 
     if (!m_renderWorkspaceWindowsFullscreenHook->hook()) {
+        m_renderWindowHook->unhook();
         notify("[hymission] fullscreen workspace hook attach failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         return false;
     }
 
+    m_hooksActive = true;
     return true;
+}
+
+void OverviewController::deactivateHooks() {
+    if (!m_hooksActive)
+        return;
+
+    if (m_renderWorkspaceWindowsFullscreenHook)
+        m_renderWorkspaceWindowsFullscreenHook->unhook();
+
+    if (m_renderWindowHook)
+        m_renderWindowHook->unhook();
+
+    m_hooksActive = false;
 }
 
 bool OverviewController::hookFunction(const std::string& symbolName, const std::string& demangledNeedle, CFunctionHook*& hook, void* destination) {
@@ -541,6 +568,9 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor) {
         return;
     }
 
+    if (!activateHooks())
+        return;
+
     next.phase = Phase::Opening;
     next.animationProgress = 0.0;
     next.animationStart = std::chrono::steady_clock::now();
@@ -563,6 +593,7 @@ void OverviewController::beginClose() {
 }
 
 void OverviewController::deactivate() {
+    deactivateHooks();
     m_state = {};
 }
 

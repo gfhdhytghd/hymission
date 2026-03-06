@@ -86,6 +86,8 @@ class OverviewController {
     [[nodiscard]] LayoutConfig loadLayoutConfig() const;
     [[nodiscard]] bool         focusFollowsMouseEnabled() const;
     [[nodiscard]] bool         installHooks();
+    [[nodiscard]] bool         activateHooks();
+    void                       deactivateHooks();
     [[nodiscard]] bool         hookFunction(const std::string& symbolName, const std::string& demangledNeedle, CFunctionHook*& hook, void* destination);
     [[nodiscard]] void*        findFunction(const std::string& symbolName, const std::string& demangledNeedle) const;
 
@@ -123,6 +125,8 @@ class OverviewController {
     CFunctionHook*            m_renderWorkspaceWindowsFullscreenHook = nullptr;
     RenderWindowFn            m_renderWindowOriginal = nullptr;
     RenderWorkspaceWindowsFn  m_renderWorkspaceWindowsOriginal = nullptr;
+    RenderWorkspaceWindowsFn  m_renderWorkspaceWindowsFullscreenOriginal = nullptr;
+    bool                      m_hooksActive = false;
 
     CHyprSignalListener       m_renderStageListener;
     CHyprSignalListener       m_mouseMoveListener;
