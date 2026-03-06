@@ -18,6 +18,7 @@
 #include <hyprland/src/helpers/Monitor.hpp>
 #include <hyprland/src/helpers/math/Math.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
+#include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/render/Renderer.hpp>
@@ -646,6 +647,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor) {
     next.animationStart = std::chrono::steady_clock::now();
     m_state = std::move(next);
 
+    refreshScene(m_state.ownerMonitor, m_state.windows);
     g_pCompositor->scheduleFrameForMonitor(m_state.ownerMonitor);
 }
 
@@ -663,8 +665,25 @@ void OverviewController::beginClose() {
 }
 
 void OverviewController::deactivate() {
+    const auto monitor = m_state.ownerMonitor;
+    const auto windows = m_state.windows;
     deactivateHooks();
     m_state = {};
+    refreshScene(monitor, windows);
+}
+
+void OverviewController::refreshScene(const PHLMONITOR& monitor, const std::vector<ManagedWindow>& windows) const {
+    if (!monitor)
+        return;
+
+    for (const auto& managed : windows) {
+        if (managed.window)
+            g_pHyprRenderer->damageWindow(managed.window);
+    }
+
+    g_pHyprRenderer->damageMonitor(monitor);
+    g_layoutManager->recalculateMonitor(monitor);
+    g_pCompositor->scheduleFrameForMonitor(monitor);
 }
 
 void OverviewController::updateAnimation() {

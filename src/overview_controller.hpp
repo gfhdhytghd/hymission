@@ -108,6 +108,7 @@ class OverviewController {
     void beginOpen(const PHLMONITOR& monitor);
     void beginClose();
     void deactivate();
+    void refreshScene(const PHLMONITOR& monitor, const std::vector<ManagedWindow>& windows) const;
     void updateAnimation();
     void updateFocusPolicy();
     void updateHoveredFromPointer();
