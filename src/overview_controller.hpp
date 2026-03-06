@@ -13,6 +13,10 @@
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/helpers/signal/Signal.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
+#include <hyprland/src/layout/algorithm/Algorithm.hpp>
+#include <hyprland/src/layout/algorithm/TiledAlgorithm.hpp>
+#include <hyprland/src/layout/space/Space.hpp>
+#include <hyprland/src/layout/supplementary/WorkspaceAlgoMatcher.hpp>
 #include <hyprland/src/plugins/HookSystem.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/render/Renderer.hpp>
@@ -85,6 +89,8 @@ class OverviewController {
 
     [[nodiscard]] LayoutConfig loadLayoutConfig() const;
     [[nodiscard]] bool         focusFollowsMouseEnabled() const;
+    [[nodiscard]] bool         isScrollingWorkspace(const PHLWORKSPACE& workspace) const;
+    void                       setScrollingFollowFocusOverride(bool disable);
     [[nodiscard]] bool         installHooks();
     [[nodiscard]] bool         activateHooks();
     void                       deactivateHooks();
@@ -129,6 +135,8 @@ class OverviewController {
     RenderWorkspaceWindowsFn  m_renderWorkspaceWindowsOriginal = nullptr;
     RenderWorkspaceWindowsFn  m_renderWorkspaceWindowsFullscreenOriginal = nullptr;
     bool                      m_hooksActive = false;
+    bool                      m_scrollingFollowFocusOverridden = false;
+    long                      m_scrollingFollowFocusBackup = 1;
 
     CHyprSignalListener       m_renderStageListener;
     CHyprSignalListener       m_mouseMoveListener;

@@ -15,6 +15,7 @@
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
 #include <hyprland/src/event/EventBus.hpp>
+#include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/helpers/Monitor.hpp>
 #include <hyprland/src/helpers/math/Math.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
@@ -399,6 +400,56 @@ bool OverviewController::focusFollowsMouseEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:overview_focus_follows_mouse", 0) != 0;
 }
 
+bool OverviewController::isScrollingWorkspace(const PHLWORKSPACE& workspace) const {
+    if (!workspace || !workspace->m_space)
+        return false;
+
+    const auto algorithm = workspace->m_space->algorithm();
+    if (!algorithm || !algorithm->tiledAlgo())
+        return false;
+
+    return Layout::Supplementary::algoMatcher()->getNameForTiledAlgo(&typeid(*algorithm->tiledAlgo())) == "scrolling";
+}
+
+void OverviewController::setScrollingFollowFocusOverride(bool disable) {
+    if (!isScrollingWorkspace(m_state.ownerWorkspace))
+        return;
+
+    const auto* value = HyprlandAPI::getConfigValue(m_handle, "scrolling:follow_focus");
+    if (!value)
+        return;
+
+    const auto* data = reinterpret_cast<Hyprlang::INT* const*>(value->getDataStaticPtr());
+    if (!data || !*data)
+        return;
+
+    if (disable) {
+        if (m_scrollingFollowFocusOverridden)
+            return;
+
+        m_scrollingFollowFocusBackup = static_cast<long>(**data);
+        const auto err = g_pConfigManager->parseKeyword("scrolling:follow_focus", "0");
+        if (!err.empty()) {
+            notify("[hymission] failed to disable scrolling:follow_focus", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+            return;
+        }
+
+        m_scrollingFollowFocusOverridden = true;
+        return;
+    }
+
+    if (!m_scrollingFollowFocusOverridden)
+        return;
+
+    const auto err = g_pConfigManager->parseKeyword("scrolling:follow_focus", std::to_string(m_scrollingFollowFocusBackup));
+    if (!err.empty()) {
+        notify("[hymission] failed to restore scrolling:follow_focus", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+        return;
+    }
+
+    m_scrollingFollowFocusOverridden = false;
+}
+
 bool OverviewController::installHooks() {
     if (!hookFunction("renderWindow", "CHyprRenderer::renderWindow(", m_renderWindowHook, reinterpret_cast<void*>(&hkRenderWindow))) {
         notify("[hymission] failed to hook renderWindow", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
@@ -646,6 +697,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor) {
     next.animationProgress = 0.0;
     next.animationStart = std::chrono::steady_clock::now();
     m_state = std::move(next);
+    setScrollingFollowFocusOverride(true);
 
     refreshScene(m_state.ownerMonitor, m_state.windows);
     g_pCompositor->scheduleFrameForMonitor(m_state.ownerMonitor);
@@ -667,6 +719,7 @@ void OverviewController::beginClose() {
 void OverviewController::deactivate() {
     const auto monitor = m_state.ownerMonitor;
     const auto windows = m_state.windows;
+    setScrollingFollowFocusOverride(false);
     deactivateHooks();
     m_state = {};
     refreshScene(monitor, windows);
