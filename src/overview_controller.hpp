@@ -17,14 +17,14 @@
 #include <hyprland/src/layout/algorithm/TiledAlgorithm.hpp>
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/layout/supplementary/WorkspaceAlgoMatcher.hpp>
-#include <hyprland/src/plugins/HookSystem.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
-#include <hyprland/src/render/Renderer.hpp>
 
 #include "mission_layout.hpp"
 #include "overview_logic.hpp"
 
 namespace hymission {
+
+class OverviewTransformer;
 
 class OverviewController {
   public:
@@ -50,12 +50,9 @@ class OverviewController {
     void handleWorkspaceChange();
     void handleMonitorChange(PHLMONITOR monitor);
 
-    void renderWindowHook(void* rendererThisptr, PHLWINDOW window, PHLMONITOR monitor, const Time::steady_tp& now, bool decorate, eRenderPassMode passMode, bool ignorePosition,
-                          bool standalone);
-    void renderWorkspaceWindowsHook(void* rendererThisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now);
-    void renderWorkspaceWindowsFullscreenHook(void* rendererThisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now);
-
   private:
+    friend class OverviewTransformer;
+
     enum class Phase {
         Inactive,
         Opening,
@@ -69,8 +66,6 @@ class OverviewController {
         Rect         naturalGlobal;
         Rect         targetGlobal;
         WindowSlot   slot;
-        bool         isFloating = false;
-        bool         isPinned = false;
     };
 
     struct State {
@@ -87,18 +82,10 @@ class OverviewController {
         std::chrono::steady_clock::time_point  animationStart = {};
     };
 
-    using RenderWindowFn = void (*)(void*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, eRenderPassMode, bool, bool);
-    using RenderWorkspaceWindowsFn = void (*)(void*, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp&);
-
     [[nodiscard]] LayoutConfig loadLayoutConfig() const;
     [[nodiscard]] bool         focusFollowsMouseEnabled() const;
     [[nodiscard]] bool         isScrollingWorkspace(const PHLWORKSPACE& workspace) const;
     void                       setScrollingFollowFocusOverride(bool disable);
-    [[nodiscard]] bool         installHooks();
-    [[nodiscard]] bool         activateHooks();
-    void                       deactivateHooks();
-    [[nodiscard]] bool         hookFunction(const std::string& symbolName, const std::string& demangledNeedle, CFunctionHook*& hook, void* destination);
-    [[nodiscard]] void*        findFunction(const std::string& symbolName, const std::string& demangledNeedle) const;
 
     [[nodiscard]] bool         isAnimating() const;
     [[nodiscard]] bool         isVisible() const;
@@ -112,11 +99,14 @@ class OverviewController {
     [[nodiscard]] std::vector<Rect> targetRects() const;
     [[nodiscard]] std::optional<std::size_t> hitTestTarget(double x, double y) const;
     [[nodiscard]] Rect         currentPreviewRect(const ManagedWindow& window) const;
+    [[nodiscard]] std::optional<Rect> currentPreviewRect(const PHLWINDOW& window) const;
     [[nodiscard]] double       visualProgress() const;
 
     void beginOpen(const PHLMONITOR& monitor);
     void beginClose();
     void deactivate();
+    void attachTransformers();
+    void detachTransformers();
     void refreshScene(const PHLMONITOR& monitor, const std::vector<ManagedWindow>& windows) const;
     void updateAnimation();
     void updateFocusPolicy();
@@ -127,19 +117,11 @@ class OverviewController {
     void renderBackdrop() const;
     void renderSelectionChrome() const;
     void renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const;
-    void renderManagedWorkspace(void* rendererThisptr, const PHLMONITOR& monitor, const PHLWORKSPACE& workspace, const Time::steady_tp& now);
 
     State  buildState(const PHLMONITOR& monitor) const;
     State  m_state;
     HANDLE m_handle = nullptr;
 
-    CFunctionHook*            m_renderWindowHook = nullptr;
-    CFunctionHook*            m_renderWorkspaceWindowsHook = nullptr;
-    CFunctionHook*            m_renderWorkspaceWindowsFullscreenHook = nullptr;
-    RenderWindowFn            m_renderWindowOriginal = nullptr;
-    RenderWorkspaceWindowsFn  m_renderWorkspaceWindowsOriginal = nullptr;
-    RenderWorkspaceWindowsFn  m_renderWorkspaceWindowsFullscreenOriginal = nullptr;
-    bool                      m_hooksActive = false;
     bool                      m_scrollingFollowFocusOverridden = false;
     long                      m_scrollingFollowFocusBackup = 1;
 
