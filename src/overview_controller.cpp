@@ -251,8 +251,6 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
     if (!shouldHandleInput())
         return;
 
-    info.cancelled = true;
-
     if (m_state.phase == Phase::Closing || event.state != WL_KEYBOARD_KEY_STATE_PRESSED)
         return;
 
@@ -268,6 +266,7 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
         return;
 
     const xkb_keysym_t keysym = xkb_state_key_get_one_sym(keyboard->m_xkbState, event.keycode + 8);
+    bool               handled = true;
     switch (keysym) {
         case XKB_KEY_Escape:
             beginClose();
@@ -289,8 +288,12 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
             moveSelection(Direction::Down);
             break;
         default:
+            handled = false;
             break;
     }
+
+    if (handled)
+        info.cancelled = true;
 }
 
 void OverviewController::handleTick() {
@@ -350,11 +353,13 @@ void OverviewController::renderWindowHook(void* rendererThisptr, PHLWINDOW windo
 
     const Rect current = currentPreviewRect(*it);
     const Vector2D renderedPos = renderedWindowPosition(window);
-    const Rect actual = makeRect(renderedPos.x, renderedPos.y, window->m_realSize->value().x, window->m_realSize->value().y);
+    const Vector2D monitorPos = monitor->m_position;
+    const Rect actual = makeRect(renderedPos.x - monitorPos.x, renderedPos.y - monitorPos.y, window->m_realSize->value().x, window->m_realSize->value().y);
+    const Rect target = makeRect(current.x - monitorPos.x, current.y - monitorPos.y, current.width, current.height);
     const double scale = std::clamp(current.width / std::max(1.0, actual.width), 0.05, 10.0);
     const Vector2D translation = {
-        current.x - actual.x * scale,
-        current.y - actual.y * scale,
+        target.x - actual.x * scale,
+        target.y - actual.y * scale,
     };
 
     SRenderModifData renderModif;
@@ -872,8 +877,8 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                                  {
                                      0.0,
                                      0.0,
-                                     static_cast<double>(monitor->m_transformedSize.x),
-                                     static_cast<double>(monitor->m_transformedSize.y),
+                                     static_cast<double>(monitor->m_size.x),
+                                     static_cast<double>(monitor->m_size.y),
                                  },
                                  loadLayoutConfig());
 
