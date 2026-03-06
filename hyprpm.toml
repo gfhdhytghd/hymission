@@ -1,0 +1,12 @@
+[repository]
+name = "hymission"
+authors = ["wilf"]
+
+[hymission]
+description = "Mission Control style overview plugin prototype for Hyprland"
+authors = ["wilf"]
+output = "build/libhymission.so"
+build = [
+  "cmake -DCMAKE_BUILD_TYPE=Release -B build",
+  "cmake --build build -j $(nproc)"
+]
