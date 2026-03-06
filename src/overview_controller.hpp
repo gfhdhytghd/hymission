@@ -52,9 +52,6 @@ class OverviewController {
 
     void renderWindowHook(void* rendererThisptr, PHLWINDOW window, PHLMONITOR monitor, const Time::steady_tp& now, bool decorate, eRenderPassMode passMode, bool ignorePosition,
                           bool standalone);
-    void renderWorkspaceWindowsHook(void* rendererThisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now);
-    void renderWorkspaceWindowsFullscreenHook(void* rendererThisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now);
-
   private:
     enum class Phase {
         Inactive,
@@ -88,8 +85,6 @@ class OverviewController {
     };
 
     using RenderWindowFn = void (*)(void*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, eRenderPassMode, bool, bool);
-    using RenderWorkspaceWindowsFn = void (*)(void*, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp&);
-
     [[nodiscard]] LayoutConfig loadLayoutConfig() const;
     [[nodiscard]] bool         focusFollowsMouseEnabled() const;
     [[nodiscard]] bool         isScrollingWorkspace(const PHLWORKSPACE& workspace) const;
@@ -127,18 +122,12 @@ class OverviewController {
     void renderBackdrop() const;
     void renderSelectionChrome() const;
     void renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const;
-    void renderManagedWorkspace(void* rendererThisptr, const PHLMONITOR& monitor, const PHLWORKSPACE& workspace, const Time::steady_tp& now);
-
     State  buildState(const PHLMONITOR& monitor) const;
     State  m_state;
     HANDLE m_handle = nullptr;
 
     CFunctionHook*            m_renderWindowHook = nullptr;
-    CFunctionHook*            m_renderWorkspaceWindowsHook = nullptr;
-    CFunctionHook*            m_renderWorkspaceWindowsFullscreenHook = nullptr;
     RenderWindowFn            m_renderWindowOriginal = nullptr;
-    RenderWorkspaceWindowsFn  m_renderWorkspaceWindowsOriginal = nullptr;
-    RenderWorkspaceWindowsFn  m_renderWorkspaceWindowsFullscreenOriginal = nullptr;
     bool                      m_hooksActive = false;
     bool                      m_scrollingFollowFocusOverridden = false;
     long                      m_scrollingFollowFocusBackup = 1;

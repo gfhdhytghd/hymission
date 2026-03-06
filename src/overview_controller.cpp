@@ -102,18 +102,6 @@ void hkRenderWindow(void* rendererThisptr, PHLWINDOW window, PHLMONITOR monitor,
     }
 }
 
-void hkRenderWorkspaceWindows(void* rendererThisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now) {
-    if (g_controller) {
-        g_controller->renderWorkspaceWindowsHook(rendererThisptr, std::move(monitor), std::move(workspace), now);
-    }
-}
-
-void hkRenderWorkspaceWindowsFullscreen(void* rendererThisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now) {
-    if (g_controller) {
-        g_controller->renderWorkspaceWindowsFullscreenHook(rendererThisptr, std::move(monitor), std::move(workspace), now);
-    }
-}
-
 } // namespace
 
 OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
@@ -126,16 +114,6 @@ OverviewController::~OverviewController() {
     if (m_renderWindowHook) {
         HyprlandAPI::removeFunctionHook(m_handle, m_renderWindowHook);
         m_renderWindowHook = nullptr;
-    }
-
-    if (m_renderWorkspaceWindowsHook) {
-        HyprlandAPI::removeFunctionHook(m_handle, m_renderWorkspaceWindowsHook);
-        m_renderWorkspaceWindowsHook = nullptr;
-    }
-
-    if (m_renderWorkspaceWindowsFullscreenHook) {
-        HyprlandAPI::removeFunctionHook(m_handle, m_renderWorkspaceWindowsFullscreenHook);
-        m_renderWorkspaceWindowsFullscreenHook = nullptr;
     }
 
     g_controller = nullptr;
@@ -395,30 +373,6 @@ void OverviewController::renderWindowHook(void* rendererThisptr, PHLWINDOW windo
     renderModif.enabled = oldEnabled;
 }
 
-void OverviewController::renderWorkspaceWindowsHook(void* rendererThisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now) {
-    if (!m_renderWorkspaceWindowsOriginal)
-        return;
-
-    if (!monitor || !workspace || !isVisible() || !ownsMonitor(monitor) || !ownsWorkspace(workspace)) {
-        m_renderWorkspaceWindowsOriginal(rendererThisptr, std::move(monitor), std::move(workspace), now);
-        return;
-    }
-
-    renderManagedWorkspace(rendererThisptr, monitor, workspace, now);
-}
-
-void OverviewController::renderWorkspaceWindowsFullscreenHook(void* rendererThisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now) {
-    if (!m_renderWorkspaceWindowsFullscreenOriginal)
-        return;
-
-    if (!monitor || !workspace || !isVisible() || !ownsMonitor(monitor) || !ownsWorkspace(workspace)) {
-        m_renderWorkspaceWindowsFullscreenOriginal(rendererThisptr, std::move(monitor), std::move(workspace), now);
-        return;
-    }
-
-    renderManagedWorkspace(rendererThisptr, monitor, workspace, now);
-}
-
 LayoutConfig OverviewController::loadLayoutConfig() const {
     return {
         .outerPadding = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding", 48)),
@@ -494,21 +448,6 @@ bool OverviewController::installHooks() {
     }
 
     m_renderWindowOriginal = reinterpret_cast<RenderWindowFn>(m_renderWindowHook->m_original);
-
-    if (!hookFunction("renderWorkspaceWindows", "CHyprRenderer::renderWorkspaceWindows(", m_renderWorkspaceWindowsHook, reinterpret_cast<void*>(&hkRenderWorkspaceWindows))) {
-        notify("[hymission] failed to hook workspace renderer", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
-    }
-
-    m_renderWorkspaceWindowsOriginal = reinterpret_cast<RenderWorkspaceWindowsFn>(m_renderWorkspaceWindowsHook->m_original);
-
-    if (!hookFunction("renderWorkspaceWindowsFullscreen", "CHyprRenderer::renderWorkspaceWindowsFullscreen(", m_renderWorkspaceWindowsFullscreenHook,
-                      reinterpret_cast<void*>(&hkRenderWorkspaceWindowsFullscreen))) {
-        notify("[hymission] failed to hook fullscreen workspace renderer", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
-    }
-
-    m_renderWorkspaceWindowsFullscreenOriginal = reinterpret_cast<RenderWorkspaceWindowsFn>(m_renderWorkspaceWindowsFullscreenHook->m_original);
     return true;
 }
 
@@ -516,24 +455,11 @@ bool OverviewController::activateHooks() {
     if (m_hooksActive)
         return true;
 
-    if (!m_renderWindowHook || !m_renderWorkspaceWindowsHook || !m_renderWorkspaceWindowsFullscreenHook)
+    if (!m_renderWindowHook)
         return false;
 
     if (!m_renderWindowHook->hook()) {
         notify("[hymission] renderWindow hook attach failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
-    }
-
-    if (!m_renderWorkspaceWindowsHook->hook()) {
-        m_renderWindowHook->unhook();
-        notify("[hymission] workspace hook attach failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
-    }
-
-    if (!m_renderWorkspaceWindowsFullscreenHook->hook()) {
-        m_renderWorkspaceWindowsHook->unhook();
-        m_renderWindowHook->unhook();
-        notify("[hymission] fullscreen workspace hook attach failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         return false;
     }
 
@@ -544,12 +470,6 @@ bool OverviewController::activateHooks() {
 void OverviewController::deactivateHooks() {
     if (!m_hooksActive)
         return;
-
-    if (m_renderWorkspaceWindowsFullscreenHook)
-        m_renderWorkspaceWindowsFullscreenHook->unhook();
-
-    if (m_renderWorkspaceWindowsHook)
-        m_renderWorkspaceWindowsHook->unhook();
 
     if (m_renderWindowHook)
         m_renderWindowHook->unhook();
@@ -902,34 +822,6 @@ void OverviewController::renderOutline(const Rect& rect, const CHyprColor& color
     g_pHyprOpenGL->renderRect(toBox(bottom), color, {});
     g_pHyprOpenGL->renderRect(toBox(left), color, {});
     g_pHyprOpenGL->renderRect(toBox(right), color, {});
-}
-
-void OverviewController::renderManagedWorkspace(void* rendererThisptr, const PHLMONITOR& monitor, const PHLWORKSPACE& workspace, const Time::steady_tp& now) {
-    if (!monitor || !workspace)
-        return;
-
-    const auto focused = Desktop::focusState()->window();
-
-    for (const auto& managed : m_state.windows) {
-        if (!managed.window || managed.isFloating || managed.isPinned || managed.window == focused)
-            continue;
-
-        renderWindowHook(rendererThisptr, managed.window, monitor, now, true, RENDER_PASS_MAIN, false, false);
-    }
-
-    for (const auto& managed : m_state.windows) {
-        if (!managed.window || managed.isFloating || managed.isPinned || managed.window != focused)
-            continue;
-
-        renderWindowHook(rendererThisptr, managed.window, monitor, now, true, RENDER_PASS_MAIN, false, false);
-    }
-
-    for (const auto& managed : m_state.windows) {
-        if (!managed.window || !managed.isFloating || managed.isPinned)
-            continue;
-
-        renderWindowHook(rendererThisptr, managed.window, monitor, now, true, RENDER_PASS_ALL, false, false);
-    }
 }
 
 OverviewController::State OverviewController::buildState(const PHLMONITOR& monitor) const {
