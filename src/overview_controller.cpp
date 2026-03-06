@@ -44,6 +44,11 @@ struct SurfacePassElementMirror {
     CSurfacePassElement::SRenderData  data;
 };
 
+struct BorderPassElementMirror {
+    void*                            vtable = nullptr;
+    CBorderPassElement::SBorderData  data;
+};
+
 long getConfigInt(HANDLE handle, const char* name, long fallback) {
     if (const auto* value = HyprlandAPI::getConfigValue(handle, name)) {
         try {
@@ -107,6 +112,13 @@ const CSurfacePassElement::SRenderData* surfaceRenderData(void* surfacePassThisp
     return &reinterpret_cast<SurfacePassElementMirror*>(surfacePassThisptr)->data;
 }
 
+CBorderPassElement::SBorderData* borderRenderData(void* borderPassThisptr) {
+    if (!borderPassThisptr)
+        return nullptr;
+
+    return &reinterpret_cast<BorderPassElementMirror*>(borderPassThisptr)->data;
+}
+
 CBox hkSurfaceTexBox(void* surfacePassThisptr) {
     if (!g_controller)
         return {};
@@ -135,6 +147,13 @@ CRegion hkSurfaceVisibleRegion(void* surfacePassThisptr, bool& cancel) {
     return g_controller->surfaceVisibleRegionHook(surfacePassThisptr, cancel);
 }
 
+void hkBorderDraw(void* borderPassThisptr, const CRegion& damage) {
+    if (!g_controller)
+        return;
+
+    g_controller->borderDrawHook(borderPassThisptr, damage);
+}
+
 } // namespace
 
 OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
@@ -152,6 +171,8 @@ OverviewController::~OverviewController() {
         HyprlandAPI::removeFunctionHook(m_handle, m_surfaceOpaqueRegionHook);
     if (m_surfaceVisibleRegionHook)
         HyprlandAPI::removeFunctionHook(m_handle, m_surfaceVisibleRegionHook);
+    if (m_borderDrawHook)
+        HyprlandAPI::removeFunctionHook(m_handle, m_borderDrawHook);
 
     g_controller = nullptr;
 }
@@ -375,6 +396,25 @@ void OverviewController::handleMonitorChange(PHLMONITOR monitor) {
         beginClose();
 }
 
+void OverviewController::borderDrawHook(void* borderPassThisptr, const CRegion& damage) {
+    if (!m_borderDrawOriginal) {
+        return;
+    }
+
+    auto* borderData = borderRenderData(borderPassThisptr);
+    const auto window = g_pHyprOpenGL->m_renderData.currentWindow.lock();
+    const auto monitor = g_pHyprOpenGL->m_renderData.pMonitor.lock();
+    if (!borderData || !window || !monitor || !isVisible() || !ownsMonitor(monitor) || !hasManagedWindow(window)) {
+        m_borderDrawOriginal(borderPassThisptr, damage);
+        return;
+    }
+
+    const auto savedBox = borderData->box;
+    (void)transformBoxForWindow(window, monitor, borderData->box, true);
+    m_borderDrawOriginal(borderPassThisptr, damage);
+    borderData->box = savedBox;
+}
+
 CBox OverviewController::surfaceTexBoxHook(void* surfacePassThisptr) {
     if (!m_surfaceTexBoxOriginal)
         return {};
@@ -434,18 +474,24 @@ CRegion OverviewController::surfaceVisibleRegionHook(void* surfacePassThisptr, b
     if (!m_surfaceVisibleRegionOriginal)
         return {};
 
-    CRegion region = m_surfaceVisibleRegionOriginal(surfacePassThisptr, cancel);
-    if (cancel)
-        return region;
-
     const auto* renderData = surfaceRenderData(surfacePassThisptr);
     if (!renderData || !renderData->pWindow || renderData->popup)
-        return region;
+        return m_surfaceVisibleRegionOriginal(surfacePassThisptr, cancel);
 
     const auto monitor = renderData->pMonitor.lock();
     if (!monitor)
-        return region;
+        return m_surfaceVisibleRegionOriginal(surfacePassThisptr, cancel);
 
+    if (isVisible() && ownsMonitor(monitor) && hasManagedWindow(renderData->pWindow)) {
+        cancel = false;
+        auto fullBox = surfaceTexBoxHook(surfacePassThisptr);
+        fullBox.scale(monitor->m_scale).round();
+        return CRegion(fullBox);
+    }
+
+    CRegion region = m_surfaceVisibleRegionOriginal(surfacePassThisptr, cancel);
+    if (cancel)
+        return region;
     return transformRegionForWindow(renderData->pWindow, monitor, region, true);
 }
 
@@ -538,10 +584,16 @@ bool OverviewController::installHooks() {
         return false;
     }
 
+    if (!hookFunction("draw", "CBorderPassElement::draw(", m_borderDrawHook, reinterpret_cast<void*>(&hkBorderDraw))) {
+        notify("[hymission] failed to hook border draw", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+        return false;
+    }
+
     m_surfaceTexBoxOriginal = nullptr;
     m_surfaceBoundingBoxOriginal = nullptr;
     m_surfaceOpaqueRegionOriginal = nullptr;
     m_surfaceVisibleRegionOriginal = nullptr;
+    m_borderDrawOriginal = nullptr;
     return true;
 }
 
@@ -549,10 +601,11 @@ bool OverviewController::activateHooks() {
     if (m_hooksActive)
         return true;
 
-    if (!m_surfaceTexBoxHook || !m_surfaceBoundingBoxHook || !m_surfaceOpaqueRegionHook || !m_surfaceVisibleRegionHook)
+    if (!m_surfaceTexBoxHook || !m_surfaceBoundingBoxHook || !m_surfaceOpaqueRegionHook || !m_surfaceVisibleRegionHook || !m_borderDrawHook)
         return false;
 
-    const bool hooked = m_surfaceTexBoxHook->hook() && m_surfaceBoundingBoxHook->hook() && m_surfaceOpaqueRegionHook->hook() && m_surfaceVisibleRegionHook->hook();
+    const bool hooked =
+        m_surfaceTexBoxHook->hook() && m_surfaceBoundingBoxHook->hook() && m_surfaceOpaqueRegionHook->hook() && m_surfaceVisibleRegionHook->hook() && m_borderDrawHook->hook();
     if (!hooked) {
         notify("[hymission] surface pass hook attach failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         if (m_surfaceTexBoxHook)
@@ -563,6 +616,8 @@ bool OverviewController::activateHooks() {
             m_surfaceOpaqueRegionHook->unhook();
         if (m_surfaceVisibleRegionHook)
             m_surfaceVisibleRegionHook->unhook();
+        if (m_borderDrawHook)
+            m_borderDrawHook->unhook();
         return false;
     }
 
@@ -570,6 +625,7 @@ bool OverviewController::activateHooks() {
     m_surfaceBoundingBoxOriginal = reinterpret_cast<SurfaceBoundingBoxFn>(m_surfaceBoundingBoxHook->m_original);
     m_surfaceOpaqueRegionOriginal = reinterpret_cast<SurfaceOpaqueRegionFn>(m_surfaceOpaqueRegionHook->m_original);
     m_surfaceVisibleRegionOriginal = reinterpret_cast<SurfaceVisibleRegionFn>(m_surfaceVisibleRegionHook->m_original);
+    m_borderDrawOriginal = reinterpret_cast<BorderDrawFn>(m_borderDrawHook->m_original);
     m_hooksActive = true;
     return true;
 }
@@ -586,11 +642,14 @@ void OverviewController::deactivateHooks() {
         m_surfaceOpaqueRegionHook->unhook();
     if (m_surfaceVisibleRegionHook)
         m_surfaceVisibleRegionHook->unhook();
+    if (m_borderDrawHook)
+        m_borderDrawHook->unhook();
 
     m_surfaceTexBoxOriginal = nullptr;
     m_surfaceBoundingBoxOriginal = nullptr;
     m_surfaceOpaqueRegionOriginal = nullptr;
     m_surfaceVisibleRegionOriginal = nullptr;
+    m_borderDrawOriginal = nullptr;
     m_hooksActive = false;
 }
 
@@ -656,7 +715,7 @@ bool OverviewController::shouldManageWindow(const PHLWINDOW& window, const PHLMO
     if (!window->m_workspace || window->m_workspace->m_isSpecialWorkspace)
         return false;
 
-    if (!window->m_isMapped || window->isHidden() || window->m_fadingOut)
+    if (!window->m_isMapped || window->m_fadingOut)
         return false;
 
     if (window->m_workspace != monitor->m_activeWorkspace)
@@ -1026,10 +1085,39 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     state.focusBeforeOpen = Desktop::focusState()->window();
     state.focusDuringOverview = state.focusBeforeOpen;
 
-    std::vector<WindowInput> inputs;
-    inputs.reserve(g_pCompositor->m_windows.size());
+    std::vector<PHLWINDOW> candidates;
+    candidates.reserve(g_pCompositor->m_windows.size());
 
-    for (const auto& window : g_pCompositor->m_windows) {
+    if (monitor->m_activeWorkspace->m_space) {
+        for (const auto& targetRef : monitor->m_activeWorkspace->m_space->targets()) {
+            const auto target = targetRef.lock();
+            if (!target)
+                continue;
+
+            const auto window = target->window();
+            if (!window)
+                continue;
+
+            candidates.push_back(window);
+        }
+    }
+
+    if (candidates.empty()) {
+        for (const auto& window : g_pCompositor->m_windows) {
+            if (!window)
+                continue;
+
+            candidates.push_back(window);
+        }
+    }
+
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+    std::vector<WindowInput> inputs;
+    inputs.reserve(candidates.size());
+
+    for (const auto& window : candidates) {
         if (!shouldManageWindow(window, monitor))
             continue;
 

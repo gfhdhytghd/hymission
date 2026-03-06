@@ -20,6 +20,7 @@
 #include <hyprland/src/plugins/HookSystem.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/render/pass/BorderPassElement.hpp>
 #include <hyprland/src/render/pass/SurfacePassElement.hpp>
 
 #include "mission_layout.hpp"
@@ -50,6 +51,7 @@ class OverviewController {
     void handleWindowSetChange(PHLWINDOW window);
     void handleWorkspaceChange();
     void handleMonitorChange(PHLMONITOR monitor);
+    void                   borderDrawHook(void* borderPassThisptr, const CRegion& damage);
     CBox                   surfaceTexBoxHook(void* surfacePassThisptr);
     std::optional<CBox>    surfaceBoundingBoxHook(void* surfacePassThisptr);
     CRegion                surfaceOpaqueRegionHook(void* surfacePassThisptr);
@@ -90,6 +92,7 @@ class OverviewController {
     using SurfaceBoundingBoxFn = std::optional<CBox> (*)(void*);
     using SurfaceOpaqueRegionFn = CRegion (*)(void*);
     using SurfaceVisibleRegionFn = CRegion (*)(void*, bool&);
+    using BorderDrawFn = void (*)(void*, const CRegion&);
     [[nodiscard]] LayoutConfig loadLayoutConfig() const;
     [[nodiscard]] bool         focusFollowsMouseEnabled() const;
     [[nodiscard]] bool         isScrollingWorkspace(const PHLWORKSPACE& workspace) const;
@@ -139,10 +142,12 @@ class OverviewController {
     CFunctionHook*            m_surfaceBoundingBoxHook = nullptr;
     CFunctionHook*            m_surfaceOpaqueRegionHook = nullptr;
     CFunctionHook*            m_surfaceVisibleRegionHook = nullptr;
+    CFunctionHook*            m_borderDrawHook = nullptr;
     SurfaceGetTexBoxFn        m_surfaceTexBoxOriginal = nullptr;
     SurfaceBoundingBoxFn      m_surfaceBoundingBoxOriginal = nullptr;
     SurfaceOpaqueRegionFn     m_surfaceOpaqueRegionOriginal = nullptr;
     SurfaceVisibleRegionFn    m_surfaceVisibleRegionOriginal = nullptr;
+    BorderDrawFn              m_borderDrawOriginal = nullptr;
     bool                      m_hooksActive = false;
     bool                      m_scrollingFollowFocusOverridden = false;
     long                      m_scrollingFollowFocusBackup = 1;
