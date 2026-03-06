@@ -80,6 +80,8 @@ class OverviewController {
         std::vector<WindowSlot>                slots;
         std::optional<std::size_t>             hoveredIndex;
         std::optional<std::size_t>             selectedIndex;
+        std::size_t                            renderHookCount = 0;
+        bool                                   renderHookSuppressed = false;
         double                                 animationProgress = 0.0;
         std::chrono::steady_clock::time_point  animationStart = {};
     };

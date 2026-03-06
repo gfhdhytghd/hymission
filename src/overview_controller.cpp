@@ -16,6 +16,7 @@
 #include <hyprland/src/devices/IKeyboard.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
+#include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/helpers/Monitor.hpp>
 #include <hyprland/src/helpers/math/Math.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
@@ -358,6 +359,18 @@ void OverviewController::renderWindowHook(void* rendererThisptr, PHLWINDOW windo
         current.y - actual.y * scale,
     };
 
+    m_state.renderHookCount++;
+    if (m_state.renderHookCount <= 8) {
+        Log::logger->log(Log::DEBUG,
+                         "[hymission] renderWindowHook #{} title='{}' pass={} ignorePos={} standalone={} scale={:.3f} actual=({},{} {}x{}) target=({},{} {}x{}) translate=({},{})",
+                         m_state.renderHookCount, window->m_title, static_cast<int>(passMode), ignorePosition, standalone, scale, static_cast<int>(actual.x),
+                         static_cast<int>(actual.y), static_cast<int>(actual.width), static_cast<int>(actual.height), static_cast<int>(current.x), static_cast<int>(current.y),
+                         static_cast<int>(current.width), static_cast<int>(current.height), static_cast<int>(translation.x), static_cast<int>(translation.y));
+    } else if (!m_state.renderHookSuppressed) {
+        Log::logger->log(Log::DEBUG, "[hymission] renderWindowHook logging suppressed after {} calls", m_state.renderHookCount);
+        m_state.renderHookSuppressed = true;
+    }
+
     auto& renderModif = g_pHyprOpenGL->m_renderData.renderModif;
     const auto oldModifs = renderModif.modifs;
     const bool oldEnabled = renderModif.enabled;
@@ -665,6 +678,17 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor) {
     m_state = std::move(next);
     setScrollingFollowFocusOverride(true);
 
+    Log::logger->log(Log::DEBUG, "[hymission] beginOpen monitor='{}' workspace='{}' windows={} focused='{}'", m_state.ownerMonitor ? m_state.ownerMonitor->m_name : "?",
+                     m_state.ownerWorkspace ? m_state.ownerWorkspace->m_name : "?", m_state.windows.size(), m_state.focusBeforeOpen ? m_state.focusBeforeOpen->m_title : "");
+    for (std::size_t i = 0; i < std::min<std::size_t>(m_state.windows.size(), 4); ++i) {
+        const auto& managed = m_state.windows[i];
+        const auto& rect = managed.targetGlobal;
+        Log::logger->log(Log::DEBUG, "[hymission] slot #{} title='{}' natural=({},{} {}x{}) target=({},{} {}x{})", i, managed.title,
+                         static_cast<int>(managed.naturalGlobal.x), static_cast<int>(managed.naturalGlobal.y), static_cast<int>(managed.naturalGlobal.width),
+                         static_cast<int>(managed.naturalGlobal.height), static_cast<int>(rect.x), static_cast<int>(rect.y), static_cast<int>(rect.width),
+                         static_cast<int>(rect.height));
+    }
+
     refreshScene(m_state.ownerMonitor, m_state.windows);
     g_pCompositor->scheduleFrameForMonitor(m_state.ownerMonitor);
 }
@@ -679,6 +703,7 @@ void OverviewController::beginClose() {
 void OverviewController::deactivate() {
     const auto monitor = m_state.ownerMonitor;
     const auto windows = m_state.windows;
+    Log::logger->log(Log::DEBUG, "[hymission] deactivate renderHookCount={}", m_state.renderHookCount);
     setScrollingFollowFocusOverride(false);
     deactivateHooks();
     m_state = {};
