@@ -118,4 +118,20 @@ double easeInCubic(double t) {
     return clamped * clamped * clamped;
 }
 
+bool shouldSyncOverviewLiveFocus(bool handlesInput, bool overviewFocusFollowsMouse, long inputFollowMouseBeforeOpen) {
+    return handlesInput && overviewFocusFollowsMouse && inputFollowMouseBeforeOpen != 0;
+}
+
+OverviewWorkspaceChangeAction resolveOverviewWorkspaceChangeAction(bool overviewVisible, bool applyingWorkspaceTransitionCommit, bool workspaceTransitionActive,
+                                                                   bool closing, bool liveFocusTriggeredWorkspaceChange,
+                                                                   bool allowsWorkspaceSwitchInOverview) {
+    if (!overviewVisible || applyingWorkspaceTransitionCommit || closing)
+        return OverviewWorkspaceChangeAction::Ignore;
+
+    if (workspaceTransitionActive || liveFocusTriggeredWorkspaceChange || allowsWorkspaceSwitchInOverview)
+        return OverviewWorkspaceChangeAction::Rebuild;
+
+    return OverviewWorkspaceChangeAction::Abort;
+}
+
 } // namespace hymission

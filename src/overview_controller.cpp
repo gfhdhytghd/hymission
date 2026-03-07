@@ -15,6 +15,10 @@
 #include <vector>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
+#define private public
+#include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
+#undef private
+
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/history/WorkspaceHistoryTracker.hpp>
@@ -27,8 +31,11 @@
 #include <hyprland/src/helpers/math/Math.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
+#include <hyprland/src/managers/animation/AnimationManager.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
 #include <hyprland/src/managers/EventManager.hpp>
+#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
+#include <hyprland/src/managers/eventLoop/EventLoopTimer.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/managers/input/trackpad/TrackpadGestures.hpp>
 #include <hyprland/src/managers/input/trackpad/gestures/ITrackpadGesture.hpp>
@@ -50,6 +57,7 @@ constexpr double CLOSE_DURATION_MS = 140.0;
 constexpr double RELAYOUT_DURATION_MS = 140.0;
 constexpr double WORKSPACE_TRANSITION_DURATION_MS = 180.0;
 constexpr double CLOSE_SETTLE_TIMEOUT_MS = 80.0;
+constexpr auto   NATIVE_ANIMATION_DISABLE_DURATION = std::chrono::milliseconds(320);
 constexpr double CLOSE_SETTLE_EPSILON = 0.75;
 constexpr std::size_t CLOSE_SETTLE_STABLE_FRAMES = 2;
 constexpr double BACKDROP_ALPHA = 0.42;
@@ -91,6 +99,99 @@ double getConfigFloat(HANDLE handle, const char* name, double fallback) {
     return fallback;
 }
 
+std::string getConfigString(HANDLE handle, const char* name, std::string fallback) {
+    if (const auto* value = HyprlandAPI::getConfigValue(handle, name)) {
+        try {
+            return std::string(std::any_cast<Hyprlang::STRING>(value->getValue()));
+        } catch (const std::bad_any_cast&) {
+        }
+    }
+
+    return fallback;
+}
+
+bool shouldWrapWorkspaceIds(const WORKSPACEID targetId, const WORKSPACEID currentId) {
+    static auto PWORKSPACEWRAPAROUND = CConfigValue<Hyprlang::INT>("animations:workspace_wraparound");
+
+    if (!*PWORKSPACEWRAPAROUND)
+        return false;
+
+    WORKSPACEID lowestID = INT64_MAX;
+    WORKSPACEID highestID = INT64_MIN;
+
+    for (const auto& workspace : g_pCompositor->getWorkspaces()) {
+        if (!workspace || workspace->m_id < 0 || workspace->m_isSpecialWorkspace)
+            continue;
+
+        lowestID = std::min(lowestID, workspace->m_id);
+        highestID = std::max(highestID, workspace->m_id);
+    }
+
+    return std::min(targetId, currentId) == lowestID && std::max(targetId, currentId) == highestID;
+}
+
+float animationMovePercent(std::string style) {
+    std::ranges::transform(style, style.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+    std::istringstream stream(style);
+    std::string        token;
+    float              movePercent = 100.F;
+    while (stream >> token) {
+        if (!token.empty() && token.back() == '%') {
+            try {
+                movePercent = std::stof(token.substr(0, token.size() - 1));
+            } catch (...) {
+            }
+        }
+    }
+
+    return movePercent;
+}
+
+Vector2D predictedWorkspaceAnimationOffset(HANDLE handle, const PHLMONITOR& monitor, const PHLWORKSPACE& workspace, bool left, bool incoming) {
+    if (!monitor || !workspace)
+        return {};
+
+    std::string style = workspace->m_renderOffset->getStyle();
+    std::ranges::transform(style, style.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+    bool vert = style.starts_with("slidevert") || style.starts_with("slidefadevert");
+    if (style.find(" top") != std::string::npos) {
+        left = false;
+        vert = true;
+    } else if (style.find(" bottom") != std::string::npos) {
+        left = true;
+        vert = true;
+    } else if (style.find(" left") != std::string::npos) {
+        left = false;
+        vert = false;
+    } else if (style.find(" right") != std::string::npos) {
+        left = true;
+        vert = false;
+    }
+
+    const float movePercent = animationMovePercent(style) / 100.F;
+
+    if (style == "fade")
+        return {};
+
+    if (style.starts_with("slidefade")) {
+        const double primaryDistance = incoming ? (left ? 1.0 : -1.0) : (left ? -1.0 : 1.0);
+        if (vert)
+            return Vector2D{0.0, primaryDistance * monitor->m_size.y * movePercent};
+
+        return Vector2D{primaryDistance * monitor->m_size.x * movePercent, 0.0};
+    }
+
+    if (vert) {
+        const double distance = (static_cast<double>(monitor->m_size.y) + static_cast<double>(getConfigInt(handle, "general:gaps_workspaces", 0))) * movePercent;
+        return Vector2D{0.0, incoming ? (left ? distance : -distance) : (left ? -distance : distance)};
+    }
+
+    const double distance = (static_cast<double>(monitor->m_size.x) + static_cast<double>(getConfigInt(handle, "general:gaps_workspaces", 0))) * movePercent;
+    return Vector2D{incoming ? (left ? distance : -distance) : (left ? -distance : distance), 0.0};
+}
+
 double clampUnit(double value) {
     return std::clamp(value, 0.0, 1.0);
 }
@@ -121,12 +222,32 @@ Vector2D renderedWindowPosition(const PHLWINDOW& window, bool goal = false) {
     if (!window)
         return {};
 
-    Vector2D position = goal ? window->m_realPosition->goal() : window->m_realPosition->value();
-    if (window->m_workspace && !window->m_pinned)
-        position += goal ? window->m_workspace->m_renderOffset->goal() : window->m_workspace->m_renderOffset->value();
+    // Hyprland's realPosition is already expressed in global compositor coordinates.
+    // Adding workspace render offsets or floating offsets here double-counts them and
+    // pushes overview open/close geometry toward off-screen workspace animation space.
+    return goal ? window->m_realPosition->goal() : window->m_realPosition->value();
+}
 
-    position += window->m_floatingOffset;
-    return position;
+Rect surfaceRenderGlobalRectForWindow(const PHLWINDOW& window) {
+    if (!window)
+        return {};
+
+    Vector2D position = window->m_realPosition->value();
+    if (window->m_workspace && !window->m_pinned)
+        position += window->m_workspace->m_renderOffset->value();
+
+    return makeRect(position.x, position.y, window->m_realSize->value().x, window->m_realSize->value().y);
+}
+
+Layout::Tiled::CScrollingAlgorithm* scrollingAlgorithmForWorkspace(const PHLWORKSPACE& workspace) {
+    if (!workspace || !workspace->m_space)
+        return nullptr;
+
+    const auto algorithm = workspace->m_space->algorithm();
+    if (!algorithm || !algorithm->tiledAlgo())
+        return nullptr;
+
+    return dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(algorithm->tiledAlgo().get());
 }
 
 std::string vectorToString(const Vector2D& value) {
@@ -138,6 +259,12 @@ std::string vectorToString(const Vector2D& value) {
 std::string boxToString(const CBox& box) {
     std::ostringstream out;
     out << box.x << ',' << box.y << ' ' << box.width << 'x' << box.height;
+    return out.str();
+}
+
+std::string rectToString(const Rect& rect) {
+    std::ostringstream out;
+    out << rect.x << ',' << rect.y << ' ' << rect.width << 'x' << rect.height;
     return out.str();
 }
 
@@ -333,16 +460,16 @@ std::optional<Vector2D> expectedSurfaceSizeForUV(const PHLWINDOW& window, const 
     return std::nullopt;
 }
 
-void focusWindowCompat(const PHLWINDOW& window, bool raw = false) {
+void focusWindowCompat(const PHLWINDOW& window, bool raw = false, Desktop::eFocusReason reason = Desktop::FOCUS_REASON_OTHER) {
     if (!window)
         return;
 
     if (raw) {
-        Desktop::focusState()->rawWindowFocus(window, Desktop::FOCUS_REASON_OTHER);
+        Desktop::focusState()->rawWindowFocus(window, reason);
         return;
     }
 
-    Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_OTHER);
+    Desktop::focusState()->fullWindowFocus(window, reason);
 }
 
 CSurfacePassElement::SRenderData* surfaceRenderDataMutable(void* surfacePassThisptr) {
@@ -502,6 +629,7 @@ OverviewController::~OverviewController() {
     setFullscreenRenderOverride(false);
     setInputFollowMouseOverride(false);
     setScrollingFollowFocusOverride(false);
+    setAnimationsEnabledOverride(false);
     deactivateHooks();
     if (m_changeWorkspaceHook)
         m_changeWorkspaceHook->unhook();
@@ -572,7 +700,7 @@ bool OverviewController::initialize() {
     m_windowDestroyListener = events.window.destroy.listen([this](PHLWINDOW window) { handleWindowSetChange(window); });
     m_windowCloseListener = events.window.close.listen([this](PHLWINDOW window) { handleWindowSetChange(window); });
     m_windowMoveWorkspaceListener = events.window.moveToWorkspace.listen([this](PHLWINDOW window, PHLWORKSPACE) { handleWindowSetChange(window); });
-    m_workspaceActiveListener = events.workspace.active.listen([this](PHLWORKSPACE) { handleWorkspaceChange(); });
+    m_workspaceActiveListener = events.workspace.active.listen([this](PHLWORKSPACE workspace) { handleWorkspaceChange(workspace); });
     m_monitorRemovedListener = events.monitor.removed.listen([this](PHLMONITOR monitor) { handleMonitorChange(monitor); });
     m_monitorFocusedListener = events.monitor.focused.listen([this](PHLMONITOR) {
         if (isVisible() && shouldHandleInput())
@@ -789,6 +917,8 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
 void OverviewController::handleWindowSetChange(PHLWINDOW window) {
     if (window && m_postCloseForcedFocusLatched && m_postCloseForcedFocus.lock() == window)
         clearPostCloseForcedFocus();
+    if (window && m_pendingLiveFocusWorkspaceChangeTarget.lock() == window)
+        m_pendingLiveFocusWorkspaceChangeTarget.reset();
 
     if (!isVisible() || !window)
         return;
@@ -811,28 +941,34 @@ void OverviewController::handleWindowSetChange(PHLWINDOW window) {
         beginClose(CloseMode::Abort);
 }
 
-void OverviewController::handleWorkspaceChange() {
-    if (!isVisible())
+void OverviewController::handleWorkspaceChange(PHLWORKSPACE workspace) {
+    const bool liveFocusWorkspaceChange = matchesPendingLiveFocusWorkspaceChange(workspace);
+    const auto action = resolveOverviewWorkspaceChangeAction(isVisible(), m_applyingWorkspaceTransitionCommit, m_workspaceTransition.active,
+                                                             m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle,
+                                                             liveFocusWorkspaceChange, allowsWorkspaceSwitchInOverview());
+
+    if (action == OverviewWorkspaceChangeAction::Ignore)
         return;
 
-    if (m_applyingWorkspaceTransitionCommit)
-        return;
+    if (liveFocusWorkspaceChange) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] keep overview open for live focus workspace change";
+            if (const auto target = m_pendingLiveFocusWorkspaceChangeTarget.lock())
+                out << " target=" << debugWindowLabel(target);
+            debugLog(out.str());
+        }
+        m_pendingLiveFocusWorkspaceChangeTarget.reset();
+    }
 
-    if (m_workspaceTransition.active) {
-        clearOverviewWorkspaceTransition();
+    if (action == OverviewWorkspaceChangeAction::Rebuild) {
+        if (m_workspaceTransition.active)
+            clearOverviewWorkspaceTransition();
         rebuildVisibleState();
         return;
     }
 
-    if (m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
-        return;
-
-    if (!allowsWorkspaceSwitchInOverview()) {
-        beginClose(CloseMode::Abort);
-        return;
-    }
-
-    rebuildVisibleState();
+    beginClose(CloseMode::Abort);
 }
 
 void OverviewController::handleMonitorChange(PHLMONITOR monitor) {
@@ -1624,8 +1760,7 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
             m_state.relayoutStart = {};
         }
 
-        for (auto& managed : m_state.windows)
-            managed.exitGlobal = liveGlobalRectForWindow(managed.window);
+        prepareGestureCloseExitGeometry();
     }
 
     m_gestureSession = {
@@ -1686,7 +1821,7 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
     }
 
     if (!gesture.opening && commit) {
-        beginClose();
+        beginClose(CloseMode::Normal, std::nullopt, true);
         m_gestureSession = {};
         return;
     }
@@ -1788,6 +1923,9 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
     State target = buildState(anchorMonitor, m_state.collectionPolicy.requestedScope, overrides, true);
     if (target.participatingMonitors.empty())
         return false;
+
+    if (workspace)
+        target.ownerWorkspace = workspace;
 
     target.phase = Phase::Active;
     target.focusBeforeOpen = m_state.focusBeforeOpen;
@@ -1962,7 +2100,7 @@ void OverviewController::updateOverviewWorkspaceTransition() {
 
     if (m_workspaceTransition.mode == WorkspaceTransitionMode::TimedRevert) {
         clearOverviewWorkspaceTransition();
-        updateHoveredFromPointer();
+        updateHoveredFromPointer(focusFollowsMouseEnabled(), false);
         refreshOwnedMonitors();
         return;
     }
@@ -1985,6 +2123,10 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         return;
     }
 
+    const bool temporarilyDisabledAnimations = !m_animationsEnabledOverridden;
+    if (temporarilyDisabledAnimations)
+        setAnimationsEnabledOverride(true);
+
     m_applyingWorkspaceTransitionCommit = true;
     if (oldWorkspace && oldWorkspace != targetWorkspace) {
         for (const auto& window : g_pCompositor->m_windows) {
@@ -1995,7 +2137,15 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         }
     }
     m_workspaceTransition.monitor->changeWorkspace(targetWorkspace, true, true, true);
+    // `internal=true` skips Hyprland's workspace IN animation, so the target
+    // workspace can retain its old off-screen renderOffset (e.g. +/- one
+    // monitor height). Normalize it immediately or the new active workspace
+    // remains visually shifted after the overview transition commits.
+    targetWorkspace->m_renderOffset->setValueAndWarp(Vector2D{});
+    targetWorkspace->m_alpha->setValueAndWarp(1.F);
     g_layoutManager->recalculateMonitor(m_workspaceTransition.monitor);
+    if (g_pAnimationManager)
+        g_pAnimationManager->frameTick();
 
     State next = std::move(m_workspaceTransition.targetState);
     next.phase = Phase::Active;
@@ -2009,6 +2159,14 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
     clearOverviewWorkspaceTransition();
     m_state = std::move(next);
     applyWorkspaceNameOverrides(m_state);
+    if (const auto focused = Desktop::focusState()->window()) {
+        const auto focusedIt =
+            std::find_if(m_state.windows.begin(), m_state.windows.end(), [&](const ManagedWindow& managed) { return managed.window == focused; });
+        if (focusedIt != m_state.windows.end()) {
+            m_state.selectedIndex = static_cast<std::size_t>(std::distance(m_state.windows.begin(), focusedIt));
+            m_state.focusDuringOverview = focused;
+        }
+    }
     if (g_pEventManager) {
         g_pEventManager->postEvent(SHyprIPCEvent{"workspace", targetWorkspace->m_name});
         g_pEventManager->postEvent(SHyprIPCEvent{"workspacev2", std::format("{},{}", targetWorkspace->m_id, targetWorkspace->m_name)});
@@ -2016,13 +2174,16 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
     Event::bus()->m_events.workspace.active.emit(targetWorkspace);
     m_applyingWorkspaceTransitionCommit = false;
 
+    if (temporarilyDisabledAnimations)
+        setAnimationsEnabledOverride(false);
+
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] overview workspace transition commit target=" << targetWorkspace->m_name << " followGesture=" << (followGesture ? 1 : 0);
         debugLog(out.str());
     }
 
-    updateHoveredFromPointer();
+    updateHoveredFromPointer(focusFollowsMouseEnabled(), true, false);
     refreshOwnedMonitors();
 }
 
@@ -2184,6 +2345,75 @@ void OverviewController::setScrollingFollowFocusOverride(bool disable) {
     }
 
     m_scrollingFollowFocusOverridden = false;
+}
+
+void OverviewController::setAnimationsEnabledOverride(bool disable, std::optional<std::chrono::milliseconds> restoreDelay) {
+    const auto* value = HyprlandAPI::getConfigValue(m_handle, "animations:enabled");
+    if (!value)
+        return;
+
+    const auto* data = reinterpret_cast<Hyprlang::INT* const*>(value->getDataStaticPtr());
+    if (!data || !*data)
+        return;
+
+    if (disable) {
+        if (!m_animationsEnabledOverridden) {
+            m_animationsEnabledBackup = static_cast<long>(**data);
+            if (m_animationsEnabledBackup == 0)
+                return;
+
+            const auto err = g_pConfigManager->parseKeyword("animations:enabled", "0");
+            if (!err.empty()) {
+                notify("[hymission] failed to disable animations:enabled", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+                return;
+            }
+
+            m_animationsEnabledOverridden = true;
+            if (debugLogsEnabled())
+                debugLog("[hymission] disabled animations:enabled");
+        }
+
+        if (m_animationsEnabledOverridden && restoreDelay) {
+            if (!m_animationsEnabledRestoreTimer) {
+                m_animationsEnabledRestoreTimer = makeShared<CEventLoopTimer>(
+                    *restoreDelay,
+                    [this](SP<CEventLoopTimer> self, void* data) { setAnimationsEnabledOverride(false); },
+                    nullptr);
+                g_pEventLoopManager->addTimer(m_animationsEnabledRestoreTimer);
+            } else {
+                m_animationsEnabledRestoreTimer->updateTimeout(*restoreDelay);
+            }
+
+            if (debugLogsEnabled()) {
+                std::ostringstream out;
+                out << "[hymission] animations restore scheduled in " << restoreDelay->count() << "ms";
+                debugLog(out.str());
+            }
+        }
+
+        return;
+    }
+
+    if (m_animationsEnabledRestoreTimer) {
+        g_pEventLoopManager->removeTimer(m_animationsEnabledRestoreTimer);
+        m_animationsEnabledRestoreTimer.reset();
+    }
+
+    if (!m_animationsEnabledOverridden)
+        return;
+
+    const auto err = g_pConfigManager->parseKeyword("animations:enabled", std::to_string(m_animationsEnabledBackup));
+    if (!err.empty()) {
+        notify("[hymission] failed to restore animations:enabled", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+        return;
+    }
+
+    m_animationsEnabledOverridden = false;
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] restored animations:enabled=" << m_animationsEnabledBackup;
+        debugLog(out.str());
+    }
 }
 
 bool OverviewController::installHooks() {
@@ -2488,7 +2718,7 @@ std::vector<PHLMONITOR> OverviewController::ownedMonitors() const {
 }
 
 bool OverviewController::shouldSyncRealFocusDuringOverview() const {
-    return shouldHandleInput() && focusFollowsMouseEnabled() && m_inputFollowMouseBackup != 0 && m_state.collectionPolicy.onlyActiveWorkspace;
+    return shouldSyncOverviewLiveFocus(shouldHandleInput(), focusFollowsMouseEnabled(), m_inputFollowMouseBackup);
 }
 
 bool OverviewController::ownsMonitor(const PHLMONITOR& monitor) const {
@@ -2784,6 +3014,143 @@ Rect OverviewController::goalGlobalRectForWindow(const PHLWINDOW& window) const 
     return makeRect(renderedPos.x, renderedPos.y, window->m_realSize->goal().x, window->m_realSize->goal().y);
 }
 
+bool OverviewController::shouldUseGoalGeometryForStateSnapshot(const PHLWINDOW& window) const {
+    return window && window->m_workspace && !window->m_workspace->isVisible();
+}
+
+void OverviewController::refreshWorkspaceLayoutSnapshot(const PHLWORKSPACE& workspace) const {
+    if (!workspace || !workspace->m_space)
+        return;
+
+    const bool shouldRefresh = !workspace->isVisible() || isScrollingWorkspace(workspace);
+    if (!shouldRefresh)
+        return;
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] refresh workspace layout snapshot workspace=" << debugWorkspaceLabel(workspace) << " visible=" << (workspace->isVisible() ? 1 : 0)
+            << " scrolling=" << (isScrollingWorkspace(workspace) ? 1 : 0);
+        debugLog(out.str());
+    }
+
+    // Preserve the current scrolling offset when snapshotting overview geometry.
+    // Re-centering a hidden workspace to some remembered focus mutates real layout
+    // state and makes overview workspace switches inherit a shifted spot.
+    workspace->m_space->recalculate();
+}
+
+std::optional<Vector2D> OverviewController::predictedScrollingExitTranslation(const PHLWINDOW& window) const {
+    if (!window || !window->m_isMapped || !window->m_workspace || !window->m_workspace->m_space || !isScrollingWorkspace(window->m_workspace))
+        return std::nullopt;
+
+    const auto target = window->layoutTarget();
+    if (!target || target->floating())
+        return Vector2D{};
+
+    auto direction = getConfigString(m_handle, "scrolling:direction", "right");
+    const auto workspaceRule = g_pConfigManager->getWorkspaceRuleFor(window->m_workspace);
+    if (workspaceRule.layoutopts.contains("direction") && !workspaceRule.layoutopts.at("direction").empty())
+        direction = workspaceRule.layoutopts.at("direction");
+
+    const bool vertical = direction == "down" || direction == "up";
+    const auto workArea = window->m_workspace->m_space->workArea();
+    const auto targetBox = target->position();
+
+    const double viewStart = vertical ? workArea.y : workArea.x;
+    const double viewEnd = vertical ? (workArea.y + workArea.h) : (workArea.x + workArea.w);
+    const double stripStart = vertical ? targetBox.y : targetBox.x;
+    const double stripEnd = vertical ? (targetBox.y + targetBox.h) : (targetBox.x + targetBox.w);
+
+    double deltaPrimary = 0.0;
+    const bool fullyVisible = stripStart >= viewStart && stripEnd <= viewEnd;
+    if (!fullyVisible) {
+        if (getConfigInt(m_handle, "scrolling:focus_fit_method", 0) == 1) {
+            if (stripStart < viewStart)
+                deltaPrimary = viewStart - stripStart;
+            else if (stripEnd > viewEnd)
+                deltaPrimary = viewEnd - stripEnd;
+        } else {
+            deltaPrimary = (viewStart + viewEnd) * 0.5 - (stripStart + stripEnd) * 0.5;
+        }
+    }
+
+    return vertical ? Vector2D{0.0, deltaPrimary} : Vector2D{deltaPrimary, 0.0};
+}
+
+void OverviewController::prepareGestureCloseExitGeometry() {
+    const auto predictedExitFocus = resolveExitFocus(CloseMode::Normal);
+    const auto predictedExitWorkspace = predictedExitFocus ? predictedExitFocus->m_workspace : PHLWORKSPACE{};
+    const auto predictedExitMonitor =
+        predictedExitWorkspace && predictedExitWorkspace->m_monitor.lock() ? predictedExitWorkspace->m_monitor.lock() :
+        (predictedExitFocus ? predictedExitFocus->m_monitor.lock() : PHLMONITOR{});
+    const auto currentWorkspaceOnTargetMonitor = predictedExitMonitor ? predictedExitMonitor->m_activeWorkspace : PHLWORKSPACE{};
+    const auto scrollingTranslation = predictedScrollingExitTranslation(predictedExitFocus);
+    const bool preferGoalGeometry = isScrollingWorkspace(predictedExitWorkspace);
+    const bool workspaceSwitchOnExit =
+        predictedExitWorkspace && predictedExitMonitor && !predictedExitWorkspace->m_isSpecialWorkspace && currentWorkspaceOnTargetMonitor &&
+        predictedExitWorkspace != currentWorkspaceOnTargetMonitor;
+
+    Vector2D incomingWorkspaceOffset;
+    Vector2D outgoingWorkspaceOffset;
+    if (workspaceSwitchOnExit) {
+        const bool animToLeft =
+            shouldWrapWorkspaceIds(predictedExitWorkspace->m_id, currentWorkspaceOnTargetMonitor->m_id) ^ (predictedExitWorkspace->m_id > currentWorkspaceOnTargetMonitor->m_id);
+        incomingWorkspaceOffset = predictedWorkspaceAnimationOffset(m_handle, predictedExitMonitor, predictedExitWorkspace, animToLeft, true);
+        outgoingWorkspaceOffset = predictedWorkspaceAnimationOffset(m_handle, predictedExitMonitor, currentWorkspaceOnTargetMonitor, animToLeft, false);
+    }
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] prepare gesture close exit";
+        if (predictedExitFocus)
+            out << " target=" << debugWindowLabel(predictedExitFocus);
+        else
+            out << " target=<null>";
+        out << " workspaceSwitch=" << (workspaceSwitchOnExit ? 1 : 0);
+        if (currentWorkspaceOnTargetMonitor)
+            out << " currentWorkspace=" << currentWorkspaceOnTargetMonitor->m_id;
+        if (predictedExitWorkspace)
+            out << " targetWorkspace=" << predictedExitWorkspace->m_id;
+        if (scrollingTranslation)
+            out << " scrollingDelta=" << vectorToString(*scrollingTranslation);
+        else
+            out << " scrollingDelta=<none>";
+        if (workspaceSwitchOnExit)
+            out << " incomingWsDelta=" << vectorToString(incomingWorkspaceOffset) << " outgoingWsDelta=" << vectorToString(outgoingWorkspaceOffset);
+        debugLog(out.str());
+    }
+
+    for (auto& managed : m_state.windows) {
+        managed.exitGlobal = liveGlobalRectForWindow(managed.window);
+
+        if (workspaceSwitchOnExit && managed.window && managed.window->m_workspace) {
+            if (managed.window->m_workspace == predictedExitWorkspace) {
+                const auto currentOffset = managed.window->m_workspace->m_renderOffset->value();
+                const auto targetOffset = preferGoalGeometry ? Vector2D{} : incomingWorkspaceOffset;
+                managed.exitGlobal = translateRect(managed.exitGlobal, targetOffset.x - currentOffset.x, targetOffset.y - currentOffset.y);
+            } else if (managed.window->m_workspace == currentWorkspaceOnTargetMonitor) {
+                if (preferGoalGeometry) {
+                    const auto currentOffset = managed.window->m_workspace->m_renderOffset->value();
+                    managed.exitGlobal =
+                        translateRect(managed.exitGlobal, outgoingWorkspaceOffset.x - currentOffset.x, outgoingWorkspaceOffset.y - currentOffset.y);
+                }
+            }
+        }
+
+        if (!scrollingTranslation || !predictedExitFocus || !managed.window || !managed.window->m_isMapped)
+            continue;
+
+        if (managed.window->m_workspace != predictedExitFocus->m_workspace)
+            continue;
+
+        const auto layoutTarget = managed.window->layoutTarget();
+        if (!layoutTarget || layoutTarget->floating())
+            continue;
+
+        managed.exitGlobal = translateRect(managed.exitGlobal, scrollingTranslation->x, scrollingTranslation->y);
+    }
+}
+
 std::optional<OverviewController::WindowTransform> OverviewController::windowTransformFor(const PHLWINDOW& window, const PHLMONITOR& monitor) const {
     if (!window || !monitor || !isVisible() || !ownsMonitor(monitor))
         return std::nullopt;
@@ -2793,7 +3160,7 @@ std::optional<OverviewController::WindowTransform> OverviewController::windowTra
         return std::nullopt;
 
     const Rect current = workspaceTransitionRectForWindow(window).value_or(currentPreviewRect(*managed));
-    const Rect actual = liveGlobalRectForWindow(window);
+    const Rect actual = surfaceRenderGlobalRectForWindow(window);
     const double actualWidth = std::max(1.0, actual.width);
     const double actualHeight = std::max(1.0, actual.height);
     return WindowTransform{
@@ -3014,6 +3381,9 @@ PHLWINDOW OverviewController::resolveExitFocus(CloseMode mode) const {
         const auto selected = selectedWindow();
         if (selected)
             return selected;
+
+        if (m_state.focusDuringOverview && hasManagedWindow(m_state.focusDuringOverview))
+            return m_state.focusDuringOverview;
     }
 
     if (focusFollowsMouseEnabled()) {
@@ -3026,6 +3396,20 @@ PHLWINDOW OverviewController::resolveExitFocus(CloseMode mode) const {
     }
 
     return m_state.focusBeforeOpen;
+}
+
+bool OverviewController::exitFocusChangedWorkspace(const PHLWINDOW& window) const {
+    if (!window || !window->m_workspace || window->m_workspace->m_isSpecialWorkspace)
+        return false;
+
+    if (!m_state.focusBeforeOpen || !m_state.focusBeforeOpen->m_workspace || m_state.focusBeforeOpen->m_workspace->m_isSpecialWorkspace)
+        return false;
+
+    return window->m_workspace != m_state.focusBeforeOpen->m_workspace;
+}
+
+bool OverviewController::shouldPreferGoalExitGeometry(const PHLWINDOW& window) const {
+    return window && window->m_workspace && (isScrollingWorkspace(window->m_workspace) || exitFocusChangedWorkspace(window));
 }
 
 std::optional<Vector2D> OverviewController::visiblePointForWindowOnMonitor(const PHLWINDOW& window, const PHLMONITOR& monitor, bool preferGoal) const {
@@ -3041,16 +3425,38 @@ std::optional<Vector2D> OverviewController::visiblePointForWindowOnMonitor(const
     return visiblePointForRectOnMonitor(liveGlobalRectForWindow(window), monitor);
 }
 
-bool OverviewController::clearWorkspaceFullscreenForExitTarget(const PHLWINDOW& window) {
+bool OverviewController::shouldClearWorkspaceFullscreenForExitTarget(const PHLWINDOW& window) const {
     if (!window || !window->m_isMapped)
+        return false;
+
+    const auto* backup = fullscreenBackupForWorkspace(window->m_workspace);
+    if (!backup || !backup->workspace || !backup->hadFullscreenWindow)
+        return false;
+
+    if (window->m_workspace != backup->workspace || window->m_fullscreenState.internal != FSMODE_NONE)
+        return false;
+
+    PHLWINDOW fullscreenWindow;
+    for (const auto& candidate : g_pCompositor->m_windows) {
+        if (!candidate || !candidate->m_isMapped || candidate->m_workspace != backup->workspace)
+            continue;
+
+        if (candidate->m_fullscreenState.internal != FSMODE_NONE) {
+            fullscreenWindow = candidate;
+            break;
+        }
+    }
+
+    return fullscreenWindow && fullscreenWindow != window;
+}
+
+bool OverviewController::clearWorkspaceFullscreenForExitTarget(const PHLWINDOW& window) {
+    if (!shouldClearWorkspaceFullscreenForExitTarget(window))
         return false;
 
     auto backupIt = std::find_if(m_state.fullscreenBackups.begin(), m_state.fullscreenBackups.end(),
                                  [&](const FullscreenWorkspaceBackup& backup) { return backup.workspace == window->m_workspace; });
-    if (backupIt == m_state.fullscreenBackups.end() || !backupIt->workspace || !backupIt->hadFullscreenWindow)
-        return false;
-
-    if (window->m_workspace != backupIt->workspace || window->m_fullscreenState.internal != FSMODE_NONE)
+    if (backupIt == m_state.fullscreenBackups.end() || !backupIt->workspace)
         return false;
 
     PHLWINDOW fullscreenWindow;
@@ -3092,8 +3498,7 @@ void OverviewController::commitOverviewExitFocus(const PHLWINDOW& window) {
     if (!window || !window->m_isMapped)
         return;
 
-    if (Desktop::focusState()->window() == window)
-        return;
+    const bool alreadyFocused = Desktop::focusState()->window() == window;
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
@@ -3103,10 +3508,23 @@ void OverviewController::commitOverviewExitFocus(const PHLWINDOW& window) {
             out << " activeBefore=" << debugWindowLabel(activeBefore);
         else
             out << " activeBefore=<null>";
+        out << " alreadyFocused=" << (alreadyFocused ? 1 : 0);
         debugLog(out.str());
     }
 
-    focusWindowCompat(window);
+    if (!alreadyFocused)
+        focusWindowCompat(window, false, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+
+    (void)syncScrollingWorkspaceSpotOnWindow(window);
+
+    if (m_animationsEnabledOverridden && g_pAnimationManager) {
+        // Live focus can switch the real workspace before close starts. Even when the
+        // target is already active, force one animation tick so Hyprland flushes the
+        // workspace scene that overview was previously masking.
+        g_pAnimationManager->frameTick();
+        if (debugLogsEnabled())
+            debugLog("[hymission] commit exit focus forced animation frameTick");
+    }
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
@@ -3118,6 +3536,67 @@ void OverviewController::commitOverviewExitFocus(const PHLWINDOW& window) {
             out << "<null>";
         debugLog(out.str());
     }
+}
+
+bool OverviewController::syncScrollingWorkspaceSpotOnWindow(const PHLWINDOW& window) const {
+    if (!window || !window->m_isMapped || !window->m_workspace || !isScrollingWorkspace(window->m_workspace))
+        return false;
+
+    const auto target = window->layoutTarget();
+    if (!target || target->floating())
+        return false;
+
+    auto* scrolling = scrollingAlgorithmForWorkspace(window->m_workspace);
+    if (!scrolling || !scrolling->m_scrollingData || !scrolling->m_scrollingData->controller)
+        return false;
+
+    const auto targetData = scrolling->dataFor(target);
+    if (!targetData)
+        return false;
+
+    const auto column = targetData->column.lock();
+    if (!column)
+        return false;
+
+    const auto controller = scrolling->m_scrollingData->controller.get();
+    const auto columnIndex = scrolling->m_scrollingData->idx(column);
+    const auto offsetBefore = controller->getOffset();
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] sync scrolling workspace spot target=" << debugWindowLabel(window)
+            << " workspace=" << debugWorkspaceLabel(window->m_workspace)
+            << " live=" << rectToString(liveGlobalRectForWindow(window))
+            << " goal=" << rectToString(goalGlobalRectForWindow(window))
+            << " col=" << columnIndex
+            << " offsetBefore=" << offsetBefore;
+        debugLog(out.str());
+    }
+
+    column->lastFocusedTarget = targetData;
+    scrolling->m_scrollingData->centerOrFitCol(column);
+    scrolling->m_scrollingData->recalculate(true);
+
+    if (const auto monitor = window->m_workspace->m_monitor.lock())
+        g_layoutManager->recalculateMonitor(monitor);
+
+    if (g_pAnimationManager)
+        g_pAnimationManager->frameTick();
+
+    const auto offsetAfter = controller->getOffset();
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] sync scrolling workspace spot result=" << debugWindowLabel(window)
+            << " workspace=" << debugWorkspaceLabel(window->m_workspace)
+            << " live=" << rectToString(liveGlobalRectForWindow(window))
+            << " goal=" << rectToString(goalGlobalRectForWindow(window))
+            << " col=" << columnIndex
+            << " offsetAfter=" << offsetAfter;
+        debugLog(out.str());
+    }
+
+    return true;
 }
 
 void OverviewController::refreshExitLayoutForFocus(const PHLWINDOW& window) const {
@@ -3151,16 +3630,21 @@ void OverviewController::refreshExitLayoutForFocus(const PHLWINDOW& window) cons
         debugLog(out.str());
     }
 
+    (void)syncScrollingWorkspaceSpotOnWindow(window);
+
     for (const auto& monitor : monitors)
         g_layoutManager->recalculateMonitor(monitor);
 }
 
-void OverviewController::syncRealFocusDuringOverview(const PHLWINDOW& window) {
+void OverviewController::syncRealFocusDuringOverview(const PHLWINDOW& window, bool syncScrollingSpot) {
     if (!shouldSyncRealFocusDuringOverview() || !window || !window->m_isMapped || !hasManagedWindow(window))
         return;
 
-    if (Desktop::focusState()->window() == window)
+    if (Desktop::focusState()->window() == window) {
+        if (syncScrollingSpot)
+            (void)syncScrollingWorkspaceSpotOnWindow(window);
         return;
+    }
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
@@ -3170,10 +3654,28 @@ void OverviewController::syncRealFocusDuringOverview(const PHLWINDOW& window) {
             out << " activeBefore=" << debugWindowLabel(activeBefore);
         else
             out << " activeBefore=<null>";
+        if (window->m_workspace)
+            out << " targetWorkspace=" << debugWorkspaceLabel(window->m_workspace);
+        if (activeBefore && activeBefore->m_workspace)
+            out << " activeWorkspaceBefore=" << debugWorkspaceLabel(activeBefore->m_workspace);
         debugLog(out.str());
     }
 
-    focusWindowCompat(window);
+    const bool temporarilyDisabledAnimations = !m_animationsEnabledOverridden;
+    if (temporarilyDisabledAnimations)
+        setAnimationsEnabledOverride(true);
+
+    m_pendingLiveFocusWorkspaceChangeTarget = window;
+    focusWindowCompat(window, false, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+    if (syncScrollingSpot)
+        (void)syncScrollingWorkspaceSpotOnWindow(window);
+    if (g_pAnimationManager)
+        g_pAnimationManager->frameTick();
+    if (m_pendingLiveFocusWorkspaceChangeTarget.lock() == window)
+        m_pendingLiveFocusWorkspaceChangeTarget.reset();
+
+    if (temporarilyDisabledAnimations)
+        setAnimationsEnabledOverride(false);
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
@@ -3183,25 +3685,35 @@ void OverviewController::syncRealFocusDuringOverview(const PHLWINDOW& window) {
             out << debugWindowLabel(activeAfter);
         else
             out << "<null>";
+        if (activeAfter && activeAfter->m_workspace)
+            out << " workspace=" << debugWorkspaceLabel(activeAfter->m_workspace);
+        if (const auto monitor = Desktop::focusState()->monitor(); monitor)
+            out << " activeWorkspaceOnFocusMonitor=" << debugWorkspaceLabel(monitor->m_activeWorkspace);
         debugLog(out.str());
     }
 }
 
-void OverviewController::syncFocusDuringOverviewFromSelection() {
+void OverviewController::syncFocusDuringOverviewFromSelection(bool syncScrollingSpot) {
     const auto selected = selectedWindow();
     if (!selected)
         return;
 
-    if (m_state.focusDuringOverview == selected)
-        return;
-
-    if (debugLogsEnabled()) {
+    if (m_state.focusDuringOverview != selected && debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] overview target " << debugWindowLabel(selected);
         debugLog(out.str());
     }
 
     m_state.focusDuringOverview = selected;
+    syncRealFocusDuringOverview(selected, syncScrollingSpot);
+}
+
+bool OverviewController::matchesPendingLiveFocusWorkspaceChange(const PHLWORKSPACE& workspace) const {
+    if (!workspace)
+        return false;
+
+    const auto pendingTarget = m_pendingLiveFocusWorkspaceChangeTarget.lock();
+    return pendingTarget && pendingTarget->m_workspace && pendingTarget->m_workspace == workspace;
 }
 
 void OverviewController::clearPostCloseForcedFocus() {
@@ -3339,6 +3851,8 @@ CRegion OverviewController::transformRegionForWindow(const PHLWINDOW& window, co
 }
 
 void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope) {
+    setAnimationsEnabledOverride(false);
+
     const auto buildStart = std::chrono::steady_clock::now();
     const double fromVisual = isVisible() ? visualProgress() : 0.0;
     clearOverviewWorkspaceTransition();
@@ -3354,6 +3868,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
 
     clearPostCloseForcedFocus();
     clearPostCloseDispatcher();
+    m_pendingLiveFocusWorkspaceChangeTarget.reset();
     next.phase = Phase::Opening;
     next.animationProgress = 0.0;
     next.animationFromVisual = fromVisual;
@@ -3394,7 +3909,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     refreshOwnedMonitors();
 }
 
-void OverviewController::beginClose(CloseMode mode) {
+void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVisualOverride, bool deferFullscreenMutations) {
     if (!isVisible())
         return;
 
@@ -3417,13 +3932,15 @@ void OverviewController::beginClose(CloseMode mode) {
         m_state.relayoutStart = {};
     }
 
-    const double fromVisual = visualProgress();
+    const double fromVisual = fromVisualOverride.value_or(visualProgress());
     m_state.pendingExitFocus = resolveExitFocus(mode);
     m_state.closeMode = mode;
     m_state.settleStableFrames = 0;
     m_state.settleHasSample = false;
     m_state.settleStart = {};
     m_state.exitFullscreenReapplied = false;
+    m_state.deferredFullscreenWorkspaceClear = false;
+    m_state.deferredHiddenFullscreenReapply = false;
     m_deactivatePending = false;
 
     if (debugLogsEnabled()) {
@@ -3465,14 +3982,36 @@ void OverviewController::beginClose(CloseMode mode) {
             out << " activeBeforeClose=" << debugWindowLabel(activeWindow);
         else
             out << " activeBeforeClose=<null>";
+        if (m_state.pendingExitFocus && m_state.pendingExitFocus->m_workspace)
+            out << " pendingExitWorkspace=" << debugWorkspaceLabel(m_state.pendingExitFocus->m_workspace);
+        else
+            out << " pendingExitWorkspace=<null>";
+        if (m_state.focusBeforeOpen && m_state.focusBeforeOpen->m_workspace)
+            out << " focusBeforeOpenWorkspace=" << debugWorkspaceLabel(m_state.focusBeforeOpen->m_workspace);
+        else
+            out << " focusBeforeOpenWorkspace=<null>";
+        out << " ownerWorkspace=" << debugWorkspaceLabel(m_state.ownerWorkspace);
         debugLog(out.str());
     }
 
-    const bool clearedFullscreen = mode != CloseMode::Abort && clearWorkspaceFullscreenForExitTarget(m_state.pendingExitFocus);
+    if (mode != CloseMode::Abort)
+        setAnimationsEnabledOverride(true);
+    else
+        setAnimationsEnabledOverride(false);
+
+    const bool needsDeferredFullscreenClear =
+        mode != CloseMode::Abort && deferFullscreenMutations && shouldClearWorkspaceFullscreenForExitTarget(m_state.pendingExitFocus);
+    const bool clearedFullscreen =
+        mode != CloseMode::Abort && !deferFullscreenMutations && clearWorkspaceFullscreenForExitTarget(m_state.pendingExitFocus);
     const auto* pendingFullscreenBackup = fullscreenBackupForWindow(m_state.pendingExitFocus);
     const bool shouldReapplyOriginalFullscreen = mode != CloseMode::Abort && m_state.pendingExitFocus && pendingFullscreenBackup &&
         m_state.pendingExitFocus == pendingFullscreenBackup->originalFullscreenWindow && pendingFullscreenBackup->originalFullscreenMode != FSMODE_NONE;
-    if (shouldReapplyOriginalFullscreen) {
+    const bool needsDeferredFullscreenReapply = shouldReapplyOriginalFullscreen && deferFullscreenMutations;
+    if (needsDeferredFullscreenClear)
+        m_state.deferredFullscreenWorkspaceClear = true;
+    if (needsDeferredFullscreenReapply)
+        m_state.deferredHiddenFullscreenReapply = true;
+    if (shouldReapplyOriginalFullscreen && !deferFullscreenMutations) {
         commitOverviewExitFocus(m_state.pendingExitFocus);
         if (debugLogsEnabled()) {
             std::ostringstream out;
@@ -3484,16 +4023,53 @@ void OverviewController::beginClose(CloseMode mode) {
             g_pCompositor->setWindowFullscreenInternal(m_state.pendingExitFocus, FSMODE_NONE);
         g_pCompositor->setWindowFullscreenInternal(m_state.pendingExitFocus, pendingFullscreenBackup->originalFullscreenMode);
         m_state.exitFullscreenReapplied = true;
+    } else if ((needsDeferredFullscreenClear || needsDeferredFullscreenReapply) && debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] beginClose defer fullscreen mutation clear=" << (needsDeferredFullscreenClear ? 1 : 0)
+            << " reapply=" << (needsDeferredFullscreenReapply ? 1 : 0);
+        debugLog(out.str());
     }
-    const bool shouldSettle =
-        mode != CloseMode::Abort && m_state.pendingExitFocus &&
-        (isScrollingWorkspace(m_state.pendingExitFocus ? m_state.pendingExitFocus->m_workspace : m_state.ownerWorkspace) || clearedFullscreen || m_state.exitFullscreenReapplied);
+    const bool preferGoalGeometry = shouldPreferGoalExitGeometry(m_state.pendingExitFocus);
+    const bool shouldSettle = mode != CloseMode::Abort && m_state.pendingExitFocus &&
+        (preferGoalGeometry || clearedFullscreen || m_state.exitFullscreenReapplied || m_state.deferredFullscreenWorkspaceClear ||
+         m_state.deferredHiddenFullscreenReapply);
+    if (debugLogsEnabled() && m_state.pendingExitFocus) {
+        std::ostringstream out;
+        out << "[hymission] beginClose geometry preferGoal=" << (preferGoalGeometry ? 1 : 0) << " shouldSettle=" << (shouldSettle ? 1 : 0)
+            << " exitFocusChangedWorkspace=" << (exitFocusChangedWorkspace(m_state.pendingExitFocus) ? 1 : 0);
+        if (const auto exitMonitor = m_state.pendingExitFocus->m_monitor.lock(); exitMonitor) {
+            out << " exitMonitor=" << exitMonitor->m_name;
+            out << " activeWorkspaceOnExitMonitor=" << debugWorkspaceLabel(exitMonitor->m_activeWorkspace);
+        } else {
+            out << " exitMonitor=<null>";
+        }
+        out << " live=" << rectToString(liveGlobalRectForWindow(m_state.pendingExitFocus));
+        out << " goal=" << rectToString(goalGlobalRectForWindow(m_state.pendingExitFocus));
+        if (const auto* pendingManaged = managedWindowFor(m_state.pendingExitFocus); pendingManaged)
+            out << " preview=" << rectToString(currentPreviewRect(*pendingManaged));
+        debugLog(out.str());
+    }
     if (shouldSettle) {
         setScrollingFollowFocusOverride(false);
         if (!m_state.exitFullscreenReapplied)
             commitOverviewExitFocus(m_state.pendingExitFocus);
-        if (isScrollingWorkspace(m_state.pendingExitFocus ? m_state.pendingExitFocus->m_workspace : m_state.ownerWorkspace))
+        if (preferGoalGeometry)
             refreshExitLayoutForFocus(m_state.pendingExitFocus);
+        for (auto& managed : m_state.windows) {
+            if (!managed.window || !managed.window->m_isMapped)
+                continue;
+
+            managed.exitGlobal = preferGoalGeometry ? goalGlobalRectForWindow(managed.window) : liveGlobalRectForWindow(managed.window);
+        }
+        if (debugLogsEnabled() && m_state.pendingExitFocus) {
+            if (const auto* pendingManaged = managedWindowFor(m_state.pendingExitFocus)) {
+                std::ostringstream out;
+                out << "[hymission] beginClose settle target=" << debugWindowLabel(m_state.pendingExitFocus)
+                    << " exitGlobal=" << rectToString(pendingManaged->exitGlobal)
+                    << " preview=" << rectToString(currentPreviewRect(*pendingManaged));
+                debugLog(out.str());
+            }
+        }
         m_state.phase = Phase::ClosingSettle;
         m_state.animationProgress = 0.0;
         m_state.animationFromVisual = fromVisual;
@@ -3511,6 +4087,15 @@ void OverviewController::beginClose(CloseMode mode) {
         m_state.animationStart = {};
         for (auto& managed : m_state.windows)
             managed.exitGlobal = liveGlobalRectForWindow(managed.window);
+        if (debugLogsEnabled() && m_state.pendingExitFocus) {
+            if (const auto* pendingManaged = managedWindowFor(m_state.pendingExitFocus)) {
+                std::ostringstream out;
+                out << "[hymission] beginClose immediate target=" << debugWindowLabel(m_state.pendingExitFocus)
+                    << " exitGlobal=" << rectToString(pendingManaged->exitGlobal)
+                    << " preview=" << rectToString(currentPreviewRect(*pendingManaged));
+                debugLog(out.str());
+            }
+        }
     }
 
     refreshOwnedMonitors();
@@ -3527,8 +4112,9 @@ void OverviewController::deactivate() {
     const auto desiredFocus = m_state.closeMode != CloseMode::Abort && m_state.pendingExitFocus && m_state.pendingExitFocus->m_isMapped ? m_state.pendingExitFocus : PHLWINDOW{};
     const auto postCloseDispatcher = desiredFocus ? m_postCloseDispatcher : PostCloseDispatcher::None;
     const auto postCloseDispatcherArgs = desiredFocus ? m_postCloseDispatcherArgs : std::string{};
+    const bool shouldDelayRestoreNativeAnimations = m_animationsEnabledOverridden && m_state.closeMode != CloseMode::Abort;
     const bool shouldPreserveExitFocus = desiredFocus && m_inputFollowMouseOverridden && m_inputFollowMouseBackup != 0;
-    const bool preferGoalVisiblePoint = shouldPreserveExitFocus && isScrollingWorkspace(desiredFocus ? desiredFocus->m_workspace : m_state.ownerWorkspace);
+    const bool preferGoalVisiblePoint = shouldPreserveExitFocus && shouldPreferGoalExitGeometry(desiredFocus);
     const auto focusMonitor = desiredFocus ? (previewMonitorForWindow(desiredFocus) ? previewMonitorForWindow(desiredFocus) : desiredFocus->m_monitor.lock()) : PHLMONITOR{};
     const auto visiblePoint = shouldPreserveExitFocus ? visiblePointForWindowOnMonitor(desiredFocus, focusMonitor, preferGoalVisiblePoint) : std::nullopt;
     const bool shouldWarpCursorForExitFocus = visiblePoint && desiredFocus != m_state.focusBeforeOpen;
@@ -3555,6 +4141,10 @@ void OverviewController::deactivate() {
             out << " desiredFocus=" << debugWindowLabel(desiredFocus);
         else
             out << " desiredFocus=<null>";
+        if (desiredFocus && desiredFocus->m_workspace)
+            out << " desiredWorkspace=" << debugWorkspaceLabel(desiredFocus->m_workspace);
+        else
+            out << " desiredWorkspace=<null>";
         if (originalFullscreenWindow)
             out << " originalFullscreen=" << debugWindowLabel(originalFullscreenWindow) << " mode=" << static_cast<int>(originalFullscreenMode);
         else
@@ -3563,6 +4153,10 @@ void OverviewController::deactivate() {
         out << " shouldPreserveFocus=" << (shouldPreserveExitFocus ? 1 : 0);
         out << " preferGoalVisiblePoint=" << (preferGoalVisiblePoint ? 1 : 0);
         out << " shouldWarpCursor=" << (shouldWarpCursorForExitFocus ? 1 : 0);
+        if (desiredFocus) {
+            out << " desiredLive=" << rectToString(liveGlobalRectForWindow(desiredFocus));
+            out << " desiredGoal=" << rectToString(goalGlobalRectForWindow(desiredFocus));
+        }
         const auto activeBefore = Desktop::focusState()->window();
         if (activeBefore)
             out << " activeBeforeDeactivate=" << debugWindowLabel(activeBefore);
@@ -3572,6 +4166,7 @@ void OverviewController::deactivate() {
     }
 
     clearPostCloseForcedFocus();
+    m_pendingLiveFocusWorkspaceChangeTarget.reset();
     deactivateHooks();
     setFullscreenRenderOverride(false);
     restoreWorkspaceNameOverrides();
@@ -3654,6 +4249,11 @@ void OverviewController::deactivate() {
         case PostCloseDispatcher::None:
             break;
     }
+
+    if (shouldDelayRestoreNativeAnimations)
+        setAnimationsEnabledOverride(true, NATIVE_ANIMATION_DISABLE_DURATION);
+    else
+        setAnimationsEnabledOverride(false);
 }
 
 void OverviewController::refreshScene(const PHLMONITOR& monitor) const {
@@ -3688,7 +4288,47 @@ void OverviewController::updateAnimation() {
                 debugLog("[hymission] close settle start");
         }
 
-        const bool preferGoalGeometry = m_state.pendingExitFocus && isScrollingWorkspace(m_state.pendingExitFocus->m_workspace);
+        if (m_state.deferredFullscreenWorkspaceClear || m_state.deferredHiddenFullscreenReapply) {
+            bool appliedDeferredFullscreenMutation = false;
+
+            if (m_state.deferredFullscreenWorkspaceClear) {
+                m_state.deferredFullscreenWorkspaceClear = false;
+                if (clearWorkspaceFullscreenForExitTarget(m_state.pendingExitFocus)) {
+                    appliedDeferredFullscreenMutation = true;
+                    if (debugLogsEnabled())
+                        debugLog("[hymission] close settle applied deferred fullscreen clear");
+                }
+            }
+
+            if (m_state.deferredHiddenFullscreenReapply) {
+                m_state.deferredHiddenFullscreenReapply = false;
+                const auto* pendingFullscreenBackup = fullscreenBackupForWindow(m_state.pendingExitFocus);
+                const bool shouldReapplyOriginalFullscreen = m_state.pendingExitFocus && m_state.pendingExitFocus->m_isMapped && pendingFullscreenBackup &&
+                    m_state.pendingExitFocus == pendingFullscreenBackup->originalFullscreenWindow && pendingFullscreenBackup->originalFullscreenMode != FSMODE_NONE;
+                if (shouldReapplyOriginalFullscreen) {
+                    if (debugLogsEnabled()) {
+                        std::ostringstream out;
+                        out << "[hymission] close settle apply deferred fullscreen reapply " << debugWindowLabel(m_state.pendingExitFocus) << " mode="
+                            << static_cast<int>(pendingFullscreenBackup->originalFullscreenMode);
+                        debugLog(out.str());
+                    }
+                    if (m_state.pendingExitFocus->m_fullscreenState.internal != FSMODE_NONE)
+                        g_pCompositor->setWindowFullscreenInternal(m_state.pendingExitFocus, FSMODE_NONE);
+                    g_pCompositor->setWindowFullscreenInternal(m_state.pendingExitFocus, pendingFullscreenBackup->originalFullscreenMode);
+                    m_state.exitFullscreenReapplied = true;
+                    appliedDeferredFullscreenMutation = true;
+                }
+            }
+
+            if (appliedDeferredFullscreenMutation) {
+                m_state.settleHasSample = false;
+                m_state.settleStableFrames = 0;
+                refreshOwnedMonitors();
+                return;
+            }
+        }
+
+        const bool preferGoalGeometry = shouldPreferGoalExitGeometry(m_state.pendingExitFocus);
         bool stable = m_state.settleHasSample;
         for (auto& managed : m_state.windows) {
             if (!managed.window || !managed.window->m_isMapped) {
@@ -3700,6 +4340,27 @@ void OverviewController::updateAnimation() {
             if (m_state.settleHasSample && !rectApproxEqual(managed.exitGlobal, sampledGlobal, CLOSE_SETTLE_EPSILON))
                 stable = false;
             managed.exitGlobal = sampledGlobal;
+        }
+
+        if (debugLogsEnabled() && m_state.pendingExitFocus) {
+            const auto* pendingManaged = managedWindowFor(m_state.pendingExitFocus);
+            std::ostringstream out;
+            out << "[hymission] close settle sample preferGoal=" << (preferGoalGeometry ? 1 : 0);
+            if (pendingManaged) {
+                const Rect sampledGlobal = preferGoalGeometry ? goalGlobalRectForWindow(m_state.pendingExitFocus) : liveGlobalRectForWindow(m_state.pendingExitFocus);
+                out << " target=" << debugWindowLabel(m_state.pendingExitFocus)
+                    << " storedExit=" << rectToString(pendingManaged->exitGlobal)
+                    << " sampled=" << rectToString(sampledGlobal)
+                    << " preview=" << rectToString(currentPreviewRect(*pendingManaged));
+            }
+            if (m_state.pendingExitFocus->m_workspace) {
+                out << " pendingWorkspace=" << debugWorkspaceLabel(m_state.pendingExitFocus->m_workspace)
+                    << " wsRender=" << vectorToString(m_state.pendingExitFocus->m_workspace->m_renderOffset->value())
+                    << " wsGoal=" << vectorToString(m_state.pendingExitFocus->m_workspace->m_renderOffset->goal());
+            }
+            if (const auto monitor = m_state.pendingExitFocus->m_monitor.lock(); monitor)
+                out << " activeWorkspaceOnMonitor=" << debugWorkspaceLabel(monitor->m_activeWorkspace);
+            debugLog(out.str());
         }
 
         if (!m_state.settleHasSample) {
@@ -3811,7 +4472,7 @@ void OverviewController::updateAnimation() {
     }
 }
 
-void OverviewController::updateHoveredFromPointer() {
+void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncRealFocus, bool syncScrollingSpot) {
     if (!isVisible())
         return;
 
@@ -3821,13 +4482,16 @@ void OverviewController::updateHoveredFromPointer() {
     const auto previousFocus = m_state.focusDuringOverview;
 
     m_state.hoveredIndex = hitTestTarget(pointer.x, pointer.y);
-    if (m_state.hoveredIndex && (focusFollowsMouseEnabled() || shouldSyncRealFocusDuringOverview())) {
+    // Passive refreshes (workspace rebuild/commit) should still align overview
+    // selection with the stationary pointer, but can skip the real-focus sync
+    // that would otherwise mutate scrolling spot state.
+    if (syncSelection && m_state.hoveredIndex && focusFollowsMouseEnabled()) {
         m_state.selectedIndex = m_state.hoveredIndex;
-        syncFocusDuringOverviewFromSelection();
+        if (syncRealFocus)
+            syncFocusDuringOverviewFromSelection(syncScrollingSpot);
+        else
+            m_state.focusDuringOverview = m_state.windows[*m_state.hoveredIndex].window;
     }
-
-    if (m_state.hoveredIndex && *m_state.hoveredIndex < m_state.windows.size())
-        syncRealFocusDuringOverview(m_state.windows[*m_state.hoveredIndex].window);
 
     if (previousHovered != m_state.hoveredIndex || previousSelected != m_state.selectedIndex || previousFocus != m_state.focusDuringOverview) {
         if (debugLogsEnabled()) {
@@ -4040,7 +4704,7 @@ void OverviewController::rebuildVisibleState() {
 
     m_state = std::move(next);
     applyWorkspaceNameOverrides(m_state);
-    updateHoveredFromPointer();
+    updateHoveredFromPointer(focusFollowsMouseEnabled(), false);
     refreshOwnedMonitors();
 }
 
@@ -4101,6 +4765,21 @@ void OverviewController::debugSurfaceLog(const std::string& message) const {
         return;
 
     out << message << '\n';
+}
+
+std::string OverviewController::debugWorkspaceLabel(const PHLWORKSPACE& workspace) const {
+    if (!workspace)
+        return "<null-workspace>";
+
+    std::ostringstream out;
+    out << workspace->m_id << ':' << workspace->m_name;
+    if (workspace->m_isSpecialWorkspace)
+        out << " special";
+    if (const auto monitor = workspace->m_monitor.lock())
+        out << "@" << monitor->m_name;
+    else
+        out << "@<no-monitor>";
+    return out.str();
 }
 
 std::string OverviewController::debugWindowLabel(const PHLWINDOW& window) const {
@@ -4357,6 +5036,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         return state.managedWorkspaces.size();
     };
 
+    for (const auto& workspace : state.managedWorkspaces)
+        refreshWorkspaceLayoutSnapshot(workspace);
+
     for (const auto& window : candidates) {
         if (!shouldManageWindow(window, state))
             continue;
@@ -4365,8 +5047,10 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         if (!targetMonitor)
             continue;
 
-        const auto renderedPos = renderedWindowPosition(window);
-        const Rect naturalGlobal = makeRect(renderedPos.x, renderedPos.y, window->m_realSize->value().x, window->m_realSize->value().y);
+        const bool useGoalGeometry = shouldUseGoalGeometryForStateSnapshot(window);
+        const auto renderedPos = renderedWindowPosition(window, useGoalGeometry);
+        const auto renderedSize = useGoalGeometry ? window->m_realSize->goal() : window->m_realSize->value();
+        const Rect naturalGlobal = makeRect(renderedPos.x, renderedPos.y, renderedSize.x, renderedSize.y);
         const std::size_t windowIndex = state.windows.size();
 
         inputsByMonitor[targetMonitor->m_id].push_back({

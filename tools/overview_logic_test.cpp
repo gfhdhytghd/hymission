@@ -46,6 +46,18 @@ int main() {
 
     ok &= expect(easeOutCubic(0.0) == 0.0, "easeOutCubic(0) should be 0");
     ok &= expect(easeInCubic(1.0) == 1.0, "easeInCubic(1) should be 1");
+    ok &= expect(shouldSyncOverviewLiveFocus(true, true, 1), "live focus should sync when overview and Hyprland follow-mouse are enabled");
+    ok &= expect(!shouldSyncOverviewLiveFocus(true, true, 0), "live focus should not sync when Hyprland follow-mouse was disabled before opening overview");
+    ok &= expect(!shouldSyncOverviewLiveFocus(false, true, 1), "live focus should not sync when overview input handling is inactive");
+
+    ok &= expect(resolveOverviewWorkspaceChangeAction(true, false, false, false, true, false) == OverviewWorkspaceChangeAction::Rebuild,
+                 "live focus workspace changes should rebuild overview instead of aborting");
+    ok &= expect(resolveOverviewWorkspaceChangeAction(true, false, false, false, false, false) == OverviewWorkspaceChangeAction::Abort,
+                 "external workspace changes without overview transitions should abort multi-workspace overview");
+    ok &= expect(resolveOverviewWorkspaceChangeAction(true, false, true, false, false, false) == OverviewWorkspaceChangeAction::Rebuild,
+                 "overview workspace transitions should continue rebuilding state");
+    ok &= expect(resolveOverviewWorkspaceChangeAction(true, false, false, true, true, true) == OverviewWorkspaceChangeAction::Ignore,
+                 "closing overview should ignore workspace changes");
 
     return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

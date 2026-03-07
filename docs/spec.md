@@ -195,18 +195,26 @@ v1 dispatcher 名称固定为：
 - 如果 `overview_focus_follows_mouse = 1`，鼠标移动到 preview 上时，overview 内部当前选中项也随之切换
 - 左键点击 preview：激活对应窗口并退出 overview
 - 点击 overview 空白区域：退出 overview；当 `overview_focus_follows_mouse = 0` 时不切换窗口，当 `overview_focus_follows_mouse = 1` 时提交当前选中的 preview
-- overview 激活期间可以临时关闭真实窗口侧的 `input:follow_mouse`，避免 compositor 的真实 focus 被光标移动带着变化；退出 overview 后必须恢复原值
-- 即使 `overview_focus_follows_mouse = 1`，overview 打开期间也不持续改真实活动窗口；真实 focus 只在点击 preview、按 `Return`，或退出 overview 时一次性提交
+- overview 激活期间可以临时关闭真实窗口侧的 `input:follow_mouse`，避免 compositor 继续按真实窗口命中区域驱动 focus；退出 overview 后必须恢复原值
+- 当 `overview_focus_follows_mouse = 1` 且 overview 打开前 `input:follow_mouse != 0` 时，鼠标 hover 到 preview 上必须实时同步真实活动窗口；如果 hover 目标位于其他 workspace，overview 必须在真实 workspace 切换后重建并继续保持打开
 - 对 scrolling 工作区，如果退出 overview 会改变真实 focus，则必须先等真实 layout 收敛到目标 focus 对应的位置，再开始 close 动画；close 动画不得先飞回 overview 打开前的旧几何
 
 ### 6.3 键盘
 
 - `Esc`：退出 overview；当 `overview_focus_follows_mouse = 0` 时不改变当前活动窗口，当 `overview_focus_follows_mouse = 1` 时提交到当前选中的 preview
 - `Left/Right/Up/Down`：在 preview 间移动选择
+- 当 `overview_focus_follows_mouse = 1` 且 overview 打开前 `input:follow_mouse != 0` 时，方向键改变选中项也必须实时同步真实活动窗口
 - 方向选择规则：按 preview box 几何关系选择对应方向的最近邻
 - `Return`：激活当前选中窗口并退出 overview
 
 `hjkl` 是否支持不作为 v1 强制项；若实现，应与方向键语义一致。
+
+### 6.4 overview 打开期间的集合变化
+
+- 如果 overview 打开期间有窗口关闭、打开、移动 workspace 或 monitor，且该变化会影响当前 scope，overview 应重建当前可见状态
+- 重建时应尽量保留仍然存在的窗口 preview 顺序与 monitor 归属，避免因瞬时 scrolling / focus 抖动把 preview 洗牌
+- 如果重建后 scope 内已经没有可参与窗口，overview 应自动退出
+- 如果当前处于 overview-to-overview workspace 过渡中，窗口集变化应先取消这次过渡，再按最新窗口集重建
 
 ## 7. 多显示器与工作区语义
 
@@ -275,7 +283,7 @@ workspace 切换补充语义：
 
 - 旧配置 `outer_padding` 允许继续作为统一回退值存在，但新的方向配置优先级更高
 - `outer_padding*`、`row_spacing`、`column_spacing`、`min_window_length`、`small_window_boost`、`max_preview_scale`、`min_slot_scale`、`layout_scale_weight`、`layout_space_weight` 当前只控制布局算法
-- `overview_focus_follows_mouse` 只控制 overview 内部选中项是否跟随鼠标，以及退出 overview 时是否提交当前选中窗口；它不要求 overview 打开期间持续改真实 focus
+- `overview_focus_follows_mouse` 控制 overview 内部选中项是否跟随鼠标，以及在允许时是否把当前选中项实时同步到真实 focus；当 overview 打开前 `input:follow_mouse = 0` 时，它退化为“只改 overview 内部选中项 + 退出时提交”
 - `gesture_invert_vertical` 只影响被插件接管的 vertical overview gesture；它不改变普通 dispatcher、键盘输入或 Hyprland 其他 gesture 的方向
 - 如果退出 overview 时提交的真实目标窗口仍不在屏内，允许临时保持该窗口为真实 focus，直到下一次真实鼠标事件；只有当目标窗口在当前 monitor 上存在可见区域时，才允许顺带移动光标去对齐真实 focus
 - `only_active_workspace`、`only_active_monitor`、`show_special` 只影响默认 scope；`onlycurrentworkspace` 和 `forceall` dispatcher 参数优先级更高

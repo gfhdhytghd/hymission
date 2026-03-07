@@ -1,15 +1,16 @@
 # Hymission 架构说明
 
-本文档定义 `hymission` 的实现边界和首版技术路线，避免后续实现时在 hook、transformer、layout 之间来回摇摆。
+本文档描述当前实现，而不是早期预期路线。重点是说明 `hymission` 已经如何接进 Hyprland、状态如何组织，以及哪些行为仍然故意后置。
 
 ## 1. 设计原则
 
-- overview 是独立渲染层，不是对真实窗口状态的重排
-- 布局计算必须可脱离 Hyprland 渲染链单独测试
-- 输入命中必须针对 preview box，而不是直接复用真实窗口命中区域
-- 首版优先做最小闭环，不同时引入 workspace 条带、拖拽、搜索等复杂行为
+- overview 是 compositor-side preview 层，不是对真实窗口 geometry 的重排
+- 布局计算、命中测试和部分状态判断必须能脱离 Hyprland renderer 单独验证
+- 输入命中以 preview box 为准，不能复用真实窗口命中区域
+- runtime 可以临时覆盖 Hyprland 配置或 workspace 名字，但 overview 退出后必须恢复
+- 多 monitor / 多 workspace 的语义放在 controller 层处理，不污染布局引擎接口
 
-## 2. 当前模块
+## 2. 当前模块划分
 
 ### 2.1 布局引擎
 
@@ -20,9 +21,10 @@
 
 职责：
 
-- 输入窗口自然矩形
-- 输出 preview 目标矩形
-- 不依赖 Hyprland renderer 内部状态
+- 输入 `WindowInput::natural`
+- 输出 `WindowSlot::target` 和 `WindowSlot::scale`
+- 支持默认 row-based 布局和 `one_workspace_per_row`
+- 不依赖 renderer hook、输入事件或 Hyprland 状态机
 
 稳定接口：
 
@@ -32,135 +34,213 @@
 - `WindowSlot`
 - `LayoutConfig`
 
-### 2.2 插件入口
+### 2.2 纯逻辑辅助
+
+位置：
+
+- [`src/overview_logic.hpp`](../src/overview_logic.hpp)
+- [`src/overview_logic.cpp`](../src/overview_logic.cpp)
+
+职责：
+
+- preview hit test
+- 方向键最近邻选择
+- easing
+- overview 期间 live focus / workspace change 的纯逻辑判定
+
+这部分故意保持无 Hyprland 依赖，便于直接做单测。
+
+### 2.3 Overview Controller
+
+位置：
+
+- [`src/overview_controller.hpp`](../src/overview_controller.hpp)
+- [`src/overview_controller.cpp`](../src/overview_controller.cpp)
+
+这是当前 runtime 的核心编排层，职责包括：
+
+- 解析 dispatcher 参数和默认 scope 配置
+- 收集 participating monitor / workspace / window
+- 为每个窗口维护 natural rect、preview target、exit geometry 和 monitor 归属
+- 管理 overview 打开、关闭、relayout、settle、workspace 过渡和 gesture session
+- 接管 render / input / dispatcher / gesture hook
+- 在 overview 期间临时覆盖 `input:follow_mouse`、`scrolling:follow_focus`、`animations:enabled`
+- 对多 workspace overview 临时改名为 `Mission Control`
+- 处理 fullscreen backup / restore 以及 scrolling workspace 的退出收尾
+
+### 2.4 插件入口
 
 位置：
 
 - [`src/main.cpp`](../src/main.cpp)
 
-当前职责：
+职责：
 
 - 注册配置项
-- 注册 `hymission:debug_current_layout`
-- 从当前 monitor / workspace 收集窗口自然几何
-- 调用布局引擎生成 slots
+- 注册 dispatcher：
+  - `hymission:toggle`
+  - `hymission:open`
+  - `hymission:close`
+  - `hymission:debug_current_layout`
+- 创建并持有 `OverviewController`
 
-### 2.3 独立 demo
+### 2.5 验证工具
 
 位置：
 
 - [`tools/layout_demo.cpp`](../tools/layout_demo.cpp)
+- [`tools/overview_logic_test.cpp`](../tools/overview_logic_test.cpp)
 
 职责：
 
-- 不依赖 Hyprland runtime
-- 直接验证布局引擎输出是否合理
+- `hymission-layout-demo`：快速验证布局结果
+- `hymission-overview-logic-test`：验证 hit test、方向导航、easing、workspace change 决策等纯逻辑
 
-## 3. v1 技术路线选择
+## 3. 当前 hook 面
 
-### 结论
+当前实现已经不是“只做一个 debug dispatcher”，而是完整接进以下路径：
 
-v1 首选 `renderWindow` / render hook 路线，不以 `IWindowTransformer` 作为 overview 主路径。
+- render hook：
+  - `shouldRenderWindow`
+  - border / shadow draw
+  - surface draw / tex box / bounding box / visible region / opaque region
+  - `calculateUVForSurface`
+- 输入与事件：
+  - 鼠标移动
+  - 鼠标左键点击
+  - 键盘方向键、`Esc`、`Return`
+  - window open / close / destroy / moveToWorkspace
+  - workspace change
+  - monitor change
+- dispatcher hook：
+  - `fullscreen`
+  - `fullscreenstate`
+  - `changeworkspace`
+  - `focusWorkspaceOnCurrentMonitor`
+- trackpad gesture hook：
+  - 官方 `gesture = ..., dispatcher, hymission:*`
+  - overview 内部对 workspace swipe 的接管与复用
 
-### 原因
+结论仍然不变：`hymission` 以 render hook 为主路径，而不是 `IWindowTransformer`。
 
-`IWindowTransformer` 更适合：
+## 4. 运行时状态模型
 
-- 单窗口后处理
-- 对某个窗口内容做缩放、旋转或 shader 变换
+### 4.1 主状态 `State`
 
-但 Mission Control 风格 overview 需要：
+`OverviewController::State` 当前至少承载这些信息：
 
-- 同一画面里同时组织多个窗口 preview
-- 统一控制 overview 开关、层级和动画
-- 自己维护 preview 命中区域
-- 未来扩展到 workspace 级 UI
-
-因此，overview 首版更适合采用 render hook：
-
-- 从 Hyprland 渲染链中读取窗口绘制时机
-- 在 overview 激活时改为绘制 preview 投影
-- 在 overview 未激活时完全不接管正常绘制
-
-## 4. 目标数据流
-
-首版 overview 数据流固定如下：
-
-1. overview 打开
-2. 选择当前光标所在 monitor
-3. 收集该 monitor 的活动 workspace 中可参与 overview 的窗口
-4. 为每个窗口生成自然矩形 `natural`
-5. 调用布局引擎生成 `WindowSlot::target`
-6. renderer 按 `target` 把窗口内容投影为 preview
-7. 输入模块基于 `target` 做 hover / click / keyboard selection
-8. 用户选择目标窗口或退出 overview
-9. overview 关闭，恢复正常渲染路径
-
-注意：
-
-- overview 生命周期里，真实窗口状态不应被 overview 逻辑重写
-- preview 是渲染产物，不是窗口真实 geometry
-
-## 5. 状态模型
-
-后续实现需要一个明确的 overview 状态对象，至少包含：
-
-- `active`
-- `ownerMonitor`
-- `windows`
+- `phase`：`Inactive` / `Opening` / `Active` / `ClosingSettle` / `Closing`
+- `ownerMonitor`、`ownerWorkspace`
+- `collectionPolicy`
+- `participatingMonitors`
+- `managedWorkspaces`
+- `windows`、`transientClosingWindows`
 - `slots`
-- `hoveredIndex`
-- `selectedIndex`
+- `hoveredIndex`、`selectedIndex`
+- `focusBeforeOpen`、`focusDuringOverview`、`pendingExitFocus`
+- `animationProgress`、`relayoutProgress`
+- `fullscreenBackups`
 
 约束：
 
-- `slots` 只在 overview 打开期间有效
-- monitor 切换或 workspace 切换时，overview 应直接关闭或重新计算，不允许悬空复用旧 slots
-- overview 不应依赖“恢复旧 layout”来退出
+- `slots` 只在 overview 可见时有效
+- `windows` 保存 preview 语义需要的附加信息，不能只存裸 `PHLWINDOW`
+- rebuild 时优先保留仍存在窗口的 slot 顺序，减少 scrolling / live focus 抖动
 
-## 6. 输入命中模型
+### 4.2 手势与 workspace 过渡状态
 
-overview 激活后，输入不能继续以真实窗口 box 为准。
+为了把“overview 开关手势”和“overview 内切 workspace”拆开，当前 runtime 单独维护：
 
-必须使用 preview hit testing：
+- `GestureSession`：控制 overview 自身的 opening / closing openness 和速度提交
+- `WorkspaceTransition`：控制 overview-to-overview 的 source/target state、轴向、距离、动画模式
+- `WorkspaceSwipeGestureContext`：记录当前是否接管了 Hyprland 原生 workspace swipe
 
-- 鼠标 hover：检查指针是否落在任一 `target` 内
-- 鼠标 click：命中则激活对应窗口
-- 键盘方向切换：根据 `target` 的几何关系选最近邻
+这三层拆分的目的，是避免把 workspace 切换逻辑硬塞进普通开关动画里。
 
-这也是首版不选 transformer 作为主路径的核心原因之一：transformer 只能变内容，不能天然给出 overview 自己的命中体系。
+## 5. 主要数据流
 
-## 7. 演进顺序
+### 5.1 打开 overview
 
-实现顺序固定如下：
+1. dispatcher 或 gesture 进入 `beginOpen(...)`
+2. 按默认配置和 scope override 生成 `CollectionPolicy`
+3. 收集 participating monitor / workspace / window
+4. 构造 `State`
+5. 计算每个 monitor 上的 preview slots
+6. 激活 render / input 相关 hook
+7. 暂时关闭 `input:follow_mouse` 与 `scrolling:follow_focus`
+8. 必要时改 workspace 名字、阻止 direct scanout
+9. 开始 opening 动画
 
-1. 保持布局引擎接口稳定
-2. 增加 overview 状态管理
-3. 接入 render hook，绘制 preview
-4. 增加 hover / click hit testing
-5. 增加键盘选择和激活
-6. 增加开关 dispatcher
-7. 最后再做动画
+如果当前 scope 下没有可参与窗口，则只通知摘要，不进入 overview。
 
-以下内容必须后置：
+### 5.2 overview 期间
 
-- 多 workspace 条带
+overview 可见期间，controller 持续做三件事：
+
+- 把真实窗口绘制变成 preview 投影
+- 用 preview box 做 hover / click / keyboard selection
+- 在窗口集、workspace、monitor 变化时重建 state
+
+补充约束：
+
+- 若 `overview_focus_follows_mouse = 1` 且打开前 `input:follow_mouse != 0`，hover 和方向键选中会实时同步真实 focus
+- 若上述实时 focus 导致切到其他 workspace，overview 不退出，而是重建到新的可见状态
+- 若重建后 scope 内没有窗口，则 overview 自动退出
+
+### 5.3 关闭 overview
+
+关闭分两段：
+
+1. 解析目标焦点窗口和退出几何
+2. 对 scrolling / fullscreen 等需要额外收尾的情况先 settle，再做 closing 动画
+
+关闭时仍坚持一个边界：overview 不依赖“恢复 overview 前窗口 layout”来退场，而是让真实窗口始终由 Hyprland 正常维护。
+
+## 6. 多 monitor / 多 workspace 处理策略
+
+当前 controller 已经支持：
+
+- 多 participating monitor 同时 overview
+- 默认 scope、`onlycurrentworkspace` 和 `forceall`
+- 可选 `show_special`
+- `workspace_change_keeps_overview = 1` 时的 overview-to-overview 切 workspace
+
+策略上分两类：
+
+- scope 只展示活动 workspace：
+  - 允许在 overview 内继续切 workspace
+  - 可接管原生 workspace swipe
+- scope 同时展示多个 workspace：
+  - 禁止 workspace 切换
+  - 临时把参与 monitor 上活动 workspace 名字改成 `Mission Control`
+
+## 7. 当前测试边界
+
+已经纳入仓库、适合持续跑的有：
+
+- `hymission-layout-demo`
+- `hymission-overview-logic-test`
+- `ctest --test-dir build --output-on-failure`
+
+还没有自动化覆盖的主要部分：
+
+- render hook 与 surface hook 的兼容性
+- 多 monitor / scrolling / fullscreen 的真实运行时收尾
+- trackpad gesture 与 workspace swipe 的组合路径
+
+这些仍然主要依赖手工回归。
+
+## 8. 仍然后置的内容
+
+当前实现故意没有把这些提前做掉：
+
+- 右键关闭窗口
+- Alt-release / Alt-Tab 模式
+- 独立 `movefocus` dispatcher
+- `forceallinone`
+- workspace 条带
 - 拖拽
 - 搜索
-- popup 跟随语义
-- 复杂过渡动画
+- popup / subsurface 的完整 preview 语义
 
-## 8. 兼容与边界
-
-首版实现默认假设：
-
-- 目标环境是当前仓库对应的 Hyprland headers
-- overview 仅关心当前活动 workspace 的主窗口集合
-- popup 和 subsurface 不作为独立 overview 实体
-
-如果后续 Hyprland 内部渲染接口变化：
-
-- 优先调整 render hook 层
-- 尽量不改布局引擎接口
-
-这保证 layout 算法仍然可复用、可独立验证。
+如果后续 Hyprland 内部渲染接口变化，优先调整 hook 层和 controller 层，尽量不改布局引擎与纯逻辑接口。

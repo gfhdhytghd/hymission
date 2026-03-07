@@ -27,6 +27,8 @@
 #include "mission_layout.hpp"
 #include "overview_logic.hpp"
 
+class CEventLoopTimer;
+
 namespace hymission {
 
 class OverviewController {
@@ -60,7 +62,7 @@ class OverviewController {
     void handleMouseButton(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info);
     void handleKeyboard(const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info);
     void handleWindowSetChange(PHLWINDOW window);
-    void handleWorkspaceChange();
+    void handleWorkspaceChange(PHLWORKSPACE workspace);
     void handleMonitorChange(PHLMONITOR monitor);
     bool                shouldRenderWindowHook(const PHLWINDOW& window, const PHLMONITOR& monitor);
     void                borderDrawHook(void* borderDecorationThisptr, const PHLMONITOR& monitor, const float& alpha);
@@ -162,6 +164,8 @@ class OverviewController {
         std::size_t                            settleStableFrames = 0;
         bool                                   settleHasSample = false;
         bool                                   exitFullscreenReapplied = false;
+        bool                                   deferredFullscreenWorkspaceClear = false;
+        bool                                   deferredHiddenFullscreenReapply = false;
         std::chrono::steady_clock::time_point  animationStart = {};
         std::chrono::steady_clock::time_point  relayoutStart = {};
         std::chrono::steady_clock::time_point  settleStart = {};
@@ -297,6 +301,7 @@ class OverviewController {
     [[nodiscard]] double       gestureSwipeDirectionLockThreshold() const;
     void                       setInputFollowMouseOverride(bool disable);
     void                       setScrollingFollowFocusOverride(bool disable);
+    void                       setAnimationsEnabledOverride(bool disable, std::optional<std::chrono::milliseconds> restoreDelay = std::nullopt);
     void                       applyWorkspaceNameOverrides(const State& state);
     void                       restoreWorkspaceNameOverrides();
     void                       clearRegisteredTrackpadGestures();
@@ -328,6 +333,10 @@ class OverviewController {
     [[nodiscard]] const FullscreenWorkspaceBackup* fullscreenBackupForWindow(const PHLWINDOW& window) const;
     [[nodiscard]] Rect         liveGlobalRectForWindow(const PHLWINDOW& window) const;
     [[nodiscard]] Rect         goalGlobalRectForWindow(const PHLWINDOW& window) const;
+    [[nodiscard]] bool         shouldUseGoalGeometryForStateSnapshot(const PHLWINDOW& window) const;
+    void                       refreshWorkspaceLayoutSnapshot(const PHLWORKSPACE& workspace) const;
+    [[nodiscard]] std::optional<Vector2D> predictedScrollingExitTranslation(const PHLWINDOW& window) const;
+    void                       prepareGestureCloseExitGeometry();
     [[nodiscard]] bool         workspaceSwipeUsesVerticalAxis(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] double       workspaceSwipeViewportDistance(const PHLMONITOR& monitor, WorkspaceTransitionAxis axis) const;
     [[nodiscard]] std::optional<Rect> workspaceTransitionRectForWindow(const PHLWINDOW& window) const;
@@ -354,12 +363,17 @@ class OverviewController {
     [[nodiscard]] bool         transformBoxForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, CBox& box, bool scaled) const;
     [[nodiscard]] CRegion      transformRegionForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, const CRegion& region, bool scaled) const;
     [[nodiscard]] PHLWINDOW    resolveExitFocus(CloseMode mode) const;
+    [[nodiscard]] bool         exitFocusChangedWorkspace(const PHLWINDOW& window) const;
+    [[nodiscard]] bool         shouldPreferGoalExitGeometry(const PHLWINDOW& window) const;
     [[nodiscard]] std::optional<Vector2D> visiblePointForWindowOnMonitor(const PHLWINDOW& window, const PHLMONITOR& monitor, bool preferGoal = false) const;
     [[nodiscard]] bool         clearWorkspaceFullscreenForExitTarget(const PHLWINDOW& window);
+    [[nodiscard]] bool         shouldClearWorkspaceFullscreenForExitTarget(const PHLWINDOW& window) const;
     void                       commitOverviewExitFocus(const PHLWINDOW& window);
+    [[nodiscard]] bool         syncScrollingWorkspaceSpotOnWindow(const PHLWINDOW& window) const;
     void                       refreshExitLayoutForFocus(const PHLWINDOW& window) const;
-    void                       syncRealFocusDuringOverview(const PHLWINDOW& window);
-    void                       syncFocusDuringOverviewFromSelection();
+    void                       syncRealFocusDuringOverview(const PHLWINDOW& window, bool syncScrollingSpot = true);
+    void                       syncFocusDuringOverviewFromSelection(bool syncScrollingSpot = true);
+    [[nodiscard]] bool         matchesPendingLiveFocusWorkspaceChange(const PHLWORKSPACE& workspace) const;
     void                       clearPostCloseForcedFocus();
     void                       clearPostCloseDispatcher();
     void                       queuePostCloseDispatcher(PostCloseDispatcher dispatcher, std::string args);
@@ -367,19 +381,20 @@ class OverviewController {
     void                       setFullscreenRenderOverride(bool suppress);
 
     void beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope);
-    void beginClose(CloseMode mode = CloseMode::Normal);
+    void beginClose(CloseMode mode = CloseMode::Normal, std::optional<double> fromVisualOverride = std::nullopt, bool deferFullscreenMutations = false);
     void deactivate();
     void refreshScene(const PHLMONITOR& monitor) const;
     void refreshOwnedMonitors() const;
     void damageOwnedMonitor() const;
     void updateAnimation();
-    void updateHoveredFromPointer();
+    void updateHoveredFromPointer(bool syncSelection = true, bool syncRealFocus = true, bool syncScrollingSpot = true);
     void rebuildVisibleState();
     void moveSelection(Direction direction);
     void activateSelection();
     void notify(const std::string& message, const CHyprColor& color, float durationMs) const;
     void debugLog(const std::string& message) const;
     void debugSurfaceLog(const std::string& message) const;
+    [[nodiscard]] std::string debugWorkspaceLabel(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] std::string debugWindowLabel(const PHLWINDOW& window) const;
     void renderBackdrop() const;
     void renderSelectionChrome() const;
@@ -433,8 +448,12 @@ class OverviewController {
     bool                      m_restoreInputFollowMouseAfterPostClose = false;
     bool                      m_scrollingFollowFocusOverridden = false;
     long                      m_scrollingFollowFocusBackup = 1;
+    bool                      m_animationsEnabledOverridden = false;
+    long                      m_animationsEnabledBackup = 1;
+    SP<CEventLoopTimer>       m_animationsEnabledRestoreTimer;
     bool                      m_deactivatePending = false;
     std::size_t               m_surfaceRenderDataTransformDepth = 0;
+    PHLWINDOWREF              m_pendingLiveFocusWorkspaceChangeTarget;
     PHLWINDOWREF              m_postCloseForcedFocus;
     bool                      m_postCloseForcedFocusLatched = false;
     std::size_t               m_ignorePostCloseMouseMoveCount = 0;

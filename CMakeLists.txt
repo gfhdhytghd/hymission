@@ -4,6 +4,8 @@ project(hymission VERSION "0.1.0")
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+include(CTest)
+
 add_compile_definitions(WLR_USE_UNSTABLE)
 add_compile_options(
   -g
@@ -49,5 +51,9 @@ add_executable(hymission-overview-logic-test
 )
 
 target_include_directories(hymission-overview-logic-test PRIVATE src)
+
+if(BUILD_TESTING)
+  add_test(NAME hymission-overview-logic-test COMMAND hymission-overview-logic-test)
+endif()
 
 install(TARGETS hymission LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})

@@ -24,6 +24,7 @@
 - preview 对屏幕外窗口、Wayland/Xwayland 缩放和 pinned 浮窗的基础支持
 - scope-aware overview 收集：支持按当前 workspace、按配置默认范围或 `forceall` 跨 monitor / 跨 workspace 收集
 - overview 打开后的同窗口集重建会尽量保持 preview slot 顺序稳定，避免 scrolling focus 波动把 preview 洗牌
+- overview 打开期间窗口集变化会重建当前场景；如果 scope 内已无可参与窗口，则自动退出 overview
 - 官方 trackpad gesture 接入：可用 `dispatcher, hymission:toggle,...` 做跟手、可打断的 overview 开关
 - 鼠标命中测试、点击激活、方向键导航、`Esc` / `Return`
 - dispatcher：`hymission:toggle`、`hymission:open`、`hymission:close`、`hymission:debug_current_layout`
@@ -134,7 +135,7 @@ plugin {
 - `min_slot_scale`: 布局最小缩放下限
 - `layout_scale_weight`: 行数候选评分中对缩放大小的权重
 - `layout_space_weight`: 行数候选评分中对空间利用率的权重
-- `overview_focus_follows_mouse`: 是否让 overview 内部当前选中项跟随鼠标 hover；开启后退出 overview 会提交到当前选中的 preview，但 overview 打开期间不会持续改真实窗口 focus。对 scrolling 工作区，退出动画会先等待真实布局收敛到目标 focus，再朝该最终位置收尾
+- `overview_focus_follows_mouse`: 是否让 overview 内部当前选中项跟随鼠标 hover；开启后，若 overview 打开前全局 `input:follow_mouse != 0`，则鼠标 hover 和键盘方向选中的 preview 都会实时同步真实窗口 focus，退出 overview 时也会提交到当前选中的 preview。对 scrolling 工作区，退出动画会先等待真实布局收敛到目标 focus，再朝该最终位置收尾
 - `gesture_invert_vertical`: 反转 vertical overview 手势方向；默认是 overview 关闭时上滑打开、overview 打开时下滑关闭
 - `only_active_workspace`: 默认 scope 下是否只纳入参与 monitor 的当前活动普通 workspace
 - `only_active_monitor`: 默认 scope 下是否只纳入光标所在 monitor
@@ -150,9 +151,10 @@ plugin {
 
 当前 runtime 还会临时接管两项现有 Hyprland 行为：
 
-- overview 激活时会暂时关闭全局 `input:follow_mouse`，避免光标移动时 Hyprland 的真实窗口 focus 被动变化；overview 关闭后恢复原值
+- overview 激活时会暂时关闭全局 `input:follow_mouse`，避免真实窗口命中区域和 preview 命中区域混在一起；如果 overview 打开前该值非 0，插件会在 preview hover / selection 时手动同步真实 focus，overview 关闭后恢复原值
 - scrolling 工作区下会暂时关闭 `scrolling:follow_focus`，避免 layout 自己跟着真实 focus 跳动；overview 关闭后恢复原值
 - 如果退出 overview 时目标窗口已经在当前显示器上有可见区域，插件会把光标挪到该可见区域中心；如果目标窗口在 scrolling 下仍然不在屏内，则会临时保持该窗口为真实 focus，直到下一次真实鼠标事件
+- 多 workspace overview 下，如果 preview hover / selection 导致真实 workspace 切换，overview 会重建并继续保持打开；但原生 `changeworkspace` / `focusWorkspaceOnCurrentMonitor` / workspace swipe 的拦截规则不变
 - 如果当前 overview scope 只展示活动 workspace，且 `workspace_change_keeps_overview = 1`，则键盘 / dispatcher / 原生 workspace swipe 切 workspace 后会在 overview 内直接滑到新 workspace；这一过渡会复用 Hyprland 原生 workspace swipe 的距离、反向、锁方向、速度阈值等配置，但会屏蔽原生普通窗口动画
 - 如果当前 overview scope 展示了多个 workspace，则 overview 内禁止切 workspace，并把参与 monitor 上活动 workspace 的名字临时改成 `Mission Control`；退出 overview 后恢复原名
 
@@ -229,12 +231,14 @@ plugin {
 ```sh
 cmake -DCMAKE_BUILD_TYPE=Release -B build
 cmake --build build -j"$(nproc)"
+ctest --test-dir build --output-on-failure
 ```
 
 产物：
 
 - 插件：`build/libhymission.so`
 - demo：`build/hymission-layout-demo`
+- 逻辑单测：`build/hymission-overview-logic-test`
 
 ### Meson
 
@@ -257,22 +261,22 @@ meson compile -C build-meson
 - 打开 overview 后用触控板 workspace swipe 切换工作区：
   - `workspace_change_keeps_overview = 1` 且当前 scope 只展示活动 workspace 时，确认 overview 会直接滑到相邻 workspace，且过程中不出现原生普通窗口动画
   - 其他 scope 下，确认 workspace 切换仍按既有规则被阻止或退出 overview
+- `overview_focus_follows_mouse = 1` 且 `input:follow_mouse != 0` 时，确认鼠标 hover 和方向键选中的 preview 都会实时同步真实 focus；hover 到其他 workspace 的 preview 时 overview 不会退出
 
 如果只想验证布局算法而不启动 Hyprland 插件，可以直接运行：
 
 ```sh
 ./build/hymission-layout-demo
+./build/hymission-overview-logic-test
 ```
 
 ## 近期路线
 
-近期实现顺序已经在文档中定死：
+当前主线路已经从“把 overview 跑起来”转到“补交互缺口和高级行为”：
 
-1. 保持当前布局引擎接口稳定
-2. 用 render hook 接 overview 渲染
-3. 加入打开/关闭状态机
-4. 加入命中测试和点击激活
-5. 加入键盘导航
-6. 最后再做动画、多 workspace 条带和高级交互
+1. overview 右键关闭窗口等直接操作
+2. Alt-release / Alt-Tab 风格的按住主键进入、松开退出模式
+3. 独立 `movefocus` dispatcher 和跨显示器 focus 切换
+4. `forceallinone`、workspace 条带、拖拽、搜索等扩展能力
 
 原因见 [`docs/architecture.md`](docs/architecture.md)。
