@@ -160,8 +160,8 @@ plugin {
         workspace_strip_anchor = top
         workspace_strip_thickness = 144
         workspace_strip_gap = 24
-        hide_bar_when_strip = 0
-        show_focus_indicator = 1
+        hide_bar_when_strip = 1
+        show_focus_indicator = 0
 
         debug_logs = 0
         debug_surface_logs = 0
