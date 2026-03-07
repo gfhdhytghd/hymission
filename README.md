@@ -8,6 +8,9 @@
 > [!WARNING]
 > Hyprland plugins run inside the compositor process. Install plugins only from sources you trust.
 
+**Inspired By Apple Mission Control**
+
+**Referenced [hyprexpo](https://github.com/hyprwm/hyprland-plugins/tree/main/hyprexpo), [hycov](https://github.com/ernestoCruz05/hycov), and [hyprscrolling (Hyprspace)](https://github.com/KZDKM/Hyprspace).**
 ## Features
 
 - Mission Control-style overview with animated window previews
