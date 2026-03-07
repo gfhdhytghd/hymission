@@ -2095,12 +2095,11 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
     if (m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
         return false;
 
-    if (isVisible() && allowsWorkspaceSwitchInOverview())
-        return false;
-
     if (openOnly && isVisible())
         return false;
 
+    // Keeping overview open across workspace changes only affects native workspace swipes.
+    // The plugin's own toggle gesture must still be able to close the visible overview.
     const bool opening = !isVisible() || openOnly || m_state.phase == Phase::Opening;
     const double initialDelta = normalizedGestureDelta(event, direction, deltaScale, gestureInvertVerticalEnabled());
     if ((opening && initialDelta <= 0.0) || (!opening && initialDelta >= 0.0)) {
@@ -3373,7 +3372,7 @@ std::vector<Rect> OverviewController::stripRects() const {
     rects.reserve(m_state.stripEntries.size());
 
     for (const auto& entry : m_state.stripEntries)
-        rects.push_back(entry.rect);
+        rects.push_back(animatedWorkspaceStripRect(entry.rect, entry.monitor));
 
     return rects;
 }
@@ -3869,6 +3868,43 @@ double OverviewController::visualProgress() const {
     }
 
     return 0.0;
+}
+
+double OverviewController::workspaceStripEnterProgress() const {
+    if (m_gestureSession.active)
+        return m_gestureSession.opening ? clampUnit(m_gestureSession.openness) : 1.0;
+
+    return m_state.phase == Phase::Opening ? visualProgress() : 1.0;
+}
+
+Vector2D OverviewController::workspaceStripEnterOffset(const PHLMONITOR& monitor) const {
+    if (!monitor || !workspaceStripEnabled(m_state))
+        return {};
+
+    const double progress = workspaceStripEnterProgress();
+    if (progress >= 1.0)
+        return {};
+
+    const Rect band = workspaceStripBandRectForMonitor(monitor, m_state);
+    const double hiddenFraction = 1.0 - progress;
+
+    switch (parseWorkspaceStripAnchor(workspaceStripAnchor())) {
+        case WorkspaceStripAnchor::Left:
+            return Vector2D{-band.width * hiddenFraction, 0.0};
+        case WorkspaceStripAnchor::Right:
+            return Vector2D{band.width * hiddenFraction, 0.0};
+        case WorkspaceStripAnchor::Top:
+        default:
+            return Vector2D{0.0, -band.height * hiddenFraction};
+    }
+}
+
+Rect OverviewController::animatedWorkspaceStripRect(const Rect& rect, const PHLMONITOR& monitor) const {
+    const auto offset = workspaceStripEnterOffset(monitor);
+    if (offset.x == 0.0 && offset.y == 0.0)
+        return rect;
+
+    return translateRect(rect, offset.x, offset.y);
 }
 
 double OverviewController::relayoutVisualProgress() const {
@@ -5777,7 +5813,7 @@ void OverviewController::renderWorkspaceStrip() const {
 
     const Rect bandGlobal = workspaceStripBandRectForMonitor(renderMonitor, m_state);
     if (bandGlobal.width > 0.0 && bandGlobal.height > 0.0) {
-        const Rect band = rectToMonitorRenderLocal(bandGlobal, renderMonitor);
+        const Rect band = rectToMonitorRenderLocal(animatedWorkspaceStripRect(bandGlobal, renderMonitor), renderMonitor);
         g_pHyprOpenGL->renderRect(toBox(band), CHyprColor(0.03, 0.07, 0.14, 0.24 * progress), {.blur = true, .blurA = 1.0F});
     }
 
@@ -5787,12 +5823,12 @@ void OverviewController::renderWorkspaceStrip() const {
             continue;
 
         const bool hovered = m_state.hoveredStripIndex && *m_state.hoveredStripIndex == index;
-        const Rect outerGlobal = entry.rect;
+        const Rect outerGlobal = animatedWorkspaceStripRect(entry.rect, renderMonitor);
         const Rect outer = rectToMonitorLocal(outerGlobal, renderMonitor);
         if (outer.width <= 0.0 || outer.height <= 0.0)
             continue;
 
-        const Rect thumb = workspaceStripThumbRect(entry, renderMonitor);
+        const Rect thumb = rectToMonitorLocal(outerGlobal, renderMonitor);
         const Rect thumbRender = scaleRectForRender(thumb, renderMonitor);
 
         const CHyprColor cardColor = entry.newWorkspaceSlot ? CHyprColor(0.08, 0.12, 0.18, 0.22 * progress) :
