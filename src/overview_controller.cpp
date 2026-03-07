@@ -819,8 +819,11 @@ bool OverviewController::initialize() {
     m_mouseMoveListener = events.input.mouse.move.listen([this](const Vector2D&, Event::SCallbackInfo&) {
         handleMouseMove();
     });
-    m_mouseButtonListener = events.input.mouse.button.listen([this](IPointer::SButtonEvent event, Event::SCallbackInfo& info) {
-        if (handleMouseButton(event))
+    m_mouseButtonListener = events.input.mouse.button.listen([this](const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
+        // Copy the signal payload immediately; forwarding the raw listener arg
+        // has produced corrupted button/state values on current Hyprland builds.
+        const auto copiedEvent = event;
+        if (handleMouseButton(copiedEvent))
             info.cancelled = true;
     });
     m_keyboardListener = events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) { handleKeyboard(event, info); });
@@ -990,7 +993,7 @@ void OverviewController::handleMouseMove() {
     updateHoveredFromPointer();
 }
 
-bool OverviewController::handleMouseButton(IPointer::SButtonEvent event) {
+bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) {
     if (m_postCloseForcedFocusLatched && !isVisible()) {
         clearPostCloseForcedFocus();
         if (m_restoreInputFollowMouseAfterPostClose) {
@@ -3319,7 +3322,11 @@ Vector2D OverviewController::stripThumbnailPreviewOffset(const PHLMONITOR& monit
         return {};
 
     const Rect previewArea = overviewContentRectForMonitor(monitor, state);
-    return Vector2D{previewArea.x, previewArea.y};
+    const Rect fullArea = makeRect(0.0, 0.0, monitor->m_size.x, monitor->m_size.y);
+    return Vector2D{
+        (previewArea.x + previewArea.width * 0.5) - (fullArea.x + fullArea.width * 0.5),
+        (previewArea.y + previewArea.height * 0.5) - (fullArea.y + fullArea.height * 0.5),
+    };
 }
 
 std::vector<Rect> OverviewController::stripRects() const {
@@ -3619,7 +3626,20 @@ bool OverviewController::transformSurfaceRenderDataForWindow(const PHLWINDOW& wi
     renderData.w = std::max(1.0, renderData.w * transform->scaleX);
     renderData.h = std::max(1.0, renderData.h * transform->scaleY);
     if (!renderData.dontRound && renderData.rounding > 0) {
-        const double scale = std::max(0.0, std::min(std::abs(transform->scaleX), std::abs(transform->scaleY)));
+        double scale = std::max(0.0, std::min(std::abs(transform->scaleX), std::abs(transform->scaleY)));
+
+        // Strip snapshots render the workspace into a smaller framebuffer first.
+        // Match window rounding to that extra downscale so mini previews do not
+        // keep the full-size corner radius.
+        if (m_stripPreviewContext.active) {
+            const auto   fbSize = m_stripPreviewContext.framebufferSize;
+            const double monitorPixelWidth = std::max(1.0, static_cast<double>(monitor->m_size.x) * renderScaleForMonitor(monitor));
+            const double monitorPixelHeight = std::max(1.0, static_cast<double>(monitor->m_size.y) * renderScaleForMonitor(monitor));
+            const double fbScale =
+                std::clamp(std::min(fbSize.x / monitorPixelWidth, fbSize.y / monitorPixelHeight), 0.0, 1.0);
+            scale *= fbScale;
+        }
+
         renderData.rounding = std::max(0, static_cast<int>(std::lround(static_cast<double>(renderData.rounding) * scale)));
         renderData.dontRound = renderData.rounding <= 0;
     }
@@ -5539,7 +5559,8 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             managed.targetGlobal = translateRect(managed.targetGlobal, -previewOffset.x, -previewOffset.y);
             managed.relayoutFromGlobal = translateRect(managed.relayoutFromGlobal, -previewOffset.x, -previewOffset.y);
             managed.exitGlobal = translateRect(managed.exitGlobal, -previewOffset.x, -previewOffset.y);
-            managed.slot.target = makeRect(managed.slot.target.x - previewOffset.x, managed.slot.target.y - previewOffset.y, managed.slot.target.width, managed.slot.target.height);
+            managed.slot.target =
+                makeRect(managed.slot.target.x - previewOffset.x, managed.slot.target.y - previewOffset.y, managed.slot.target.width, managed.slot.target.height);
         }
     }
 
@@ -5598,6 +5619,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     m_stripPreviewContext.active = true;
     m_stripPreviewContext.monitor = monitor;
     m_stripPreviewContext.state = std::move(previewState);
+    m_stripPreviewContext.framebufferSize = Vector2D{static_cast<double>(fbWidth), static_cast<double>(fbHeight)};
     applyFullscreenOverrideForState(m_stripPreviewContext.state, true);
 
     if (previousWorkspace && targetWorkspace != previousWorkspace && previousWorkspace->m_visible) {
@@ -5630,6 +5652,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     g_pHyprOpenGL->m_renderData.blockScreenShader = previousBlockScreenShader;
     applyFullscreenOverrideForState(m_stripPreviewContext.state, false);
     m_stripPreviewContext.state = {};
+    m_stripPreviewContext.framebufferSize = {};
     m_stripPreviewContext.monitor.reset();
     m_stripPreviewContext.active = false;
 

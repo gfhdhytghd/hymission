@@ -63,7 +63,7 @@ class OverviewController {
 
     void renderStage(eRenderStage stage);
     void handleMouseMove();
-    bool handleMouseButton(IPointer::SButtonEvent event);
+    bool handleMouseButton(const IPointer::SButtonEvent& event);
     void handleKeyboard(const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info);
     void handleWindowSetChange(PHLWINDOW window);
     void handleWorkspaceChange(PHLWORKSPACE workspace);
@@ -302,6 +302,7 @@ class OverviewController {
         bool       active = false;
         PHLMONITOR monitor;
         State      state;
+        Vector2D   framebufferSize;
     };
 
     using SurfaceGetTexBoxFn = CBox (*)(void*);
