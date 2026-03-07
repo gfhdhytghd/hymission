@@ -6,6 +6,7 @@
 
 | 功能 | hymission 当前状态 | 处理结论 |
 | --- | --- | --- |
+| 多 workspace overview 条带 + 跨 workspace 拖拽 | 已实现首版：strip 显示、点击切换、overview 内拖拽 drop；原生 `bindm ... movewindow` 集成和高保真缩略图未完成 | `In Progress`，见 [`workspace_strip_plan.md`](workspace_strip_plan.md) |
 | overview 中右键关闭窗口 | 未实现；当前只有左键激活 | `TODO` |
 | 触控板手势进入 overview / 在 overview 中手势切换 workspace | 已实现；支持官方 `gesture = ..., dispatcher, hymission:*` 和 overview-to-overview workspace swipe | `Done` |
 | Alt-release / Alt-Tab 风格的“按住主键进入，松开主键退出”模式 | 未实现 | `TODO` |
@@ -21,6 +22,8 @@
 ## 建议实现顺序
 
 overview 右键关闭窗口
+
+多 workspace overview 条带剩余收尾
 
 Alt-release 退出模式
 独立 `movefocus` dispatcher

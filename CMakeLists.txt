@@ -45,14 +45,13 @@ add_executable(hymission-layout-demo
 
 target_include_directories(hymission-layout-demo PRIVATE src)
 
-add_executable(hymission-overview-logic-test
-  tools/overview_logic_test.cpp
-  src/overview_logic.cpp
-)
-
-target_include_directories(hymission-overview-logic-test PRIVATE src)
-
 if(BUILD_TESTING)
+  add_executable(hymission-overview-logic-test
+    tools/overview_logic_test.cpp
+    src/overview_logic.cpp
+  )
+
+  target_include_directories(hymission-overview-logic-test PRIVATE src)
   add_test(NAME hymission-overview-logic-test COMMAND hymission-overview-logic-test)
 endif()
 

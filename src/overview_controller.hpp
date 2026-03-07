@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -21,6 +22,7 @@
 #include <hyprland/src/managers/input/trackpad/gestures/ITrackpadGesture.hpp>
 #include <hyprland/src/plugins/HookSystem.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
+#include <hyprland/src/render/Framebuffer.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/pass/SurfacePassElement.hpp>
 
@@ -30,6 +32,8 @@
 class CEventLoopTimer;
 
 namespace hymission {
+
+class OverviewOverlayPassElement;
 
 class OverviewController {
   public:
@@ -59,7 +63,7 @@ class OverviewController {
 
     void renderStage(eRenderStage stage);
     void handleMouseMove();
-    void handleMouseButton(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info);
+    bool handleMouseButton(IPointer::SButtonEvent event);
     void handleKeyboard(const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info);
     void handleWindowSetChange(PHLWINDOW window);
     void handleWorkspaceChange(PHLWORKSPACE workspace);
@@ -69,6 +73,7 @@ class OverviewController {
     void                shadowDrawHook(void* shadowDecorationThisptr, const PHLMONITOR& monitor, const float& alpha);
     void                calculateUVForSurfaceHook(const PHLWINDOW& window, SP<CWLSurfaceResource> surface, const PHLMONITOR& monitor, bool main, const Vector2D& projSize,
                                                   const Vector2D& projSizeUnscaled, bool fixMisalignedFSV1);
+    void                renderLayerHook(void* rendererThisptr, PHLLS layer, PHLMONITOR monitor, const Time::steady_tp& now, bool popups, bool lockscreen);
     [[nodiscard]] SDispatchResult fullscreenDispatcherHook(std::string args);
     [[nodiscard]] SDispatchResult fullscreenStateDispatcherHook(std::string args);
     [[nodiscard]] SDispatchResult changeWorkspaceDispatcherHook(std::string args);
@@ -89,6 +94,8 @@ class OverviewController {
     void                       workspaceSwipeUpdateHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e);
     void                       workspaceSwipeEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e);
   private:
+    friend class OverviewOverlayPassElement;
+
     enum class Phase {
         Inactive,
         Opening,
@@ -138,13 +145,39 @@ class OverviewController {
         bool         isPinned = false;
     };
 
+    struct WorkspaceStripEntry {
+        struct Snapshot {
+            CFramebuffer framebuffer;
+        };
+
+        struct WindowPreview {
+            Rect  naturalGlobal;
+            float alpha = 1.0F;
+            bool  focused = false;
+        };
+
+        PHLMONITOR               monitor;
+        PHLWORKSPACE             workspace;
+        WORKSPACEID              workspaceId = WORKSPACE_INVALID;
+        std::string              workspaceName;
+        Rect                     rect;
+        std::shared_ptr<Snapshot> snapshot;
+        std::vector<WindowPreview> windows;
+        bool                     syntheticEmpty = false;
+        bool                     newWorkspaceSlot = false;
+        bool                     specialWorkspace = false;
+        bool                     active = false;
+    };
+
     struct State {
         Phase                                  phase = Phase::Inactive;
         PHLMONITOR                             ownerMonitor;
         PHLWORKSPACE                           ownerWorkspace;
         CollectionPolicy                       collectionPolicy;
+        bool                                   suppressWorkspaceStrip = false;
         std::vector<PHLMONITOR>                participatingMonitors;
         std::vector<PHLWORKSPACE>              managedWorkspaces;
+        std::vector<WorkspaceStripEntry>       stripEntries;
         std::vector<FullscreenWorkspaceBackup> fullscreenBackups;
         PHLWINDOW                              focusBeforeOpen;
         PHLWINDOW                              focusDuringOverview;
@@ -154,6 +187,7 @@ class OverviewController {
         std::vector<ManagedWindow>             windows;
         std::vector<ManagedWindow>             transientClosingWindows;
         std::vector<WindowSlot>                slots;
+        std::optional<std::size_t>             hoveredStripIndex;
         std::optional<std::size_t>             hoveredIndex;
         std::optional<std::size_t>             selectedIndex;
         double                                 animationProgress = 0.0;
@@ -176,6 +210,9 @@ class OverviewController {
         Vector2D localPos;
         double   w = 0.0;
         double   h = 0.0;
+        int      rounding = 0;
+        bool     dontRound = true;
+        float    roundingPower = 2.0F;
         float    alpha = 1.0F;
         float    fadeAlpha = 1.0F;
         bool     blur = false;
@@ -261,6 +298,12 @@ class OverviewController {
         eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_NONE;
     };
 
+    struct StripPreviewContext {
+        bool       active = false;
+        PHLMONITOR monitor;
+        State      state;
+    };
+
     using SurfaceGetTexBoxFn = CBox (*)(void*);
     using SurfaceBoundingBoxFn = std::optional<CBox> (*)(void*);
     using SurfaceOpaqueRegionFn = CRegion (*)(void*);
@@ -268,6 +311,7 @@ class OverviewController {
     using SurfaceDrawFn = void (*)(void*, const CRegion&);
     using SurfaceBlurNeedsFn = bool (*)(void*);
     using ShouldRenderWindowFn = bool (*)(void*, PHLWINDOW, PHLMONITOR);
+    using RenderLayerFn = void (*)(void*, PHLLS, PHLMONITOR, const Time::steady_tp&, bool, bool);
     using BorderDrawFn = void (*)(void*, PHLMONITOR, const float&);
     using CalculateUVForSurfaceFn = void (*)(void*, PHLWINDOW, SP<CWLSurfaceResource>, PHLMONITOR, bool, const Vector2D&, const Vector2D&, bool);
     using DispatcherFn = SDispatchResult (*)(std::string);
@@ -282,6 +326,8 @@ class OverviewController {
     [[nodiscard]] bool         gestureInvertVerticalEnabled() const;
     [[nodiscard]] bool         workspaceSwipeInvertEnabled() const;
     [[nodiscard]] bool         workspaceChangeKeepsOverviewEnabled() const;
+    [[nodiscard]] bool         hideBarsWhenStripShownEnabled() const;
+    [[nodiscard]] bool         showFocusIndicatorEnabled() const;
     [[nodiscard]] bool         debugLogsEnabled() const;
     [[nodiscard]] bool         debugSurfaceLogsEnabled() const;
     [[nodiscard]] bool         isScrollingWorkspace(const PHLWORKSPACE& workspace) const;
@@ -290,6 +336,10 @@ class OverviewController {
     [[nodiscard]] bool         allowsWorkspaceSwitchInOverview() const;
     [[nodiscard]] bool         shouldBlockWorkspaceSwitchInOverview() const;
     [[nodiscard]] bool         shouldOverrideWorkspaceNames(const State& state) const;
+    [[nodiscard]] std::string  workspaceStripAnchor() const;
+    [[nodiscard]] double       workspaceStripThickness(const PHLMONITOR& monitor) const;
+    [[nodiscard]] double       workspaceStripGap() const;
+    [[nodiscard]] bool         workspaceStripEnabled(const State& state) const;
     [[nodiscard]] int          resolveOverviewWorkspaceSwipeStep(eTrackpadGestureDirection direction, double totalDelta, double lastDelta) const;
     [[nodiscard]] bool         switchOverviewWorkspaceByStep(int step);
     [[nodiscard]] double       gestureSwipeDistance() const;
@@ -323,6 +373,10 @@ class OverviewController {
     [[nodiscard]] bool         shouldManageWindow(const PHLWINDOW& window, const State& state) const;
     [[nodiscard]] std::string  collectionSummary(const PHLMONITOR& monitor) const;
     [[nodiscard]] std::vector<Rect> targetRects() const;
+    [[nodiscard]] Rect         workspaceStripBandRectForMonitor(const PHLMONITOR& monitor, const State& state) const;
+    [[nodiscard]] Rect         overviewContentRectForMonitor(const PHLMONITOR& monitor, const State& state) const;
+    [[nodiscard]] Vector2D     stripThumbnailPreviewOffset(const PHLMONITOR& monitor, const State& state) const;
+    [[nodiscard]] std::vector<Rect> stripRects() const;
     [[nodiscard]] const ManagedWindow* managedWindowFor(const State& state, const PHLWINDOW& window, bool includeTransient = false) const;
     [[nodiscard]] const ManagedWindow* managedWindowFor(const PHLWINDOW& window) const;
     [[nodiscard]] PHLWINDOW     selectedWindow() const;
@@ -356,6 +410,7 @@ class OverviewController {
     [[nodiscard]] bool                          prepareSurfaceRenderData(void* surfacePassThisptr, const char* context, CSurfacePassElement::SRenderData*& renderData,
                                                                          PHLMONITOR& monitor, SurfaceRenderDataSnapshot& snapshot) const;
     void                                        restoreSurfaceRenderData(CSurfacePassElement::SRenderData* renderData, const SurfaceRenderDataSnapshot& snapshot) const;
+    [[nodiscard]] std::optional<std::size_t> hitTestStripTarget(double x, double y) const;
     [[nodiscard]] std::optional<std::size_t> hitTestTarget(double x, double y) const;
     [[nodiscard]] Rect         currentPreviewRect(const ManagedWindow& window) const;
     [[nodiscard]] double       visualProgress() const;
@@ -383,6 +438,7 @@ class OverviewController {
     void beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope);
     void beginClose(CloseMode mode = CloseMode::Normal, std::optional<double> fromVisualOverride = std::nullopt, bool deferFullscreenMutations = false);
     void deactivate();
+    void scheduleDeactivate();
     void refreshScene(const PHLMONITOR& monitor) const;
     void refreshOwnedMonitors() const;
     void damageOwnedMonitor() const;
@@ -396,11 +452,22 @@ class OverviewController {
     void debugSurfaceLog(const std::string& message) const;
     [[nodiscard]] std::string debugWorkspaceLabel(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] std::string debugWindowLabel(const PHLWINDOW& window) const;
+    void renderWorkspaceStrip() const;
+    [[nodiscard]] Rect workspaceStripThumbRect(const WorkspaceStripEntry& entry, const PHLMONITOR& monitor) const;
+    void refreshWorkspaceStripSnapshots();
+    void scheduleWorkspaceStripSnapshotRefresh();
+    void renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry);
+    [[nodiscard]] bool shouldHideLayerSurface(const PHLLS& layer, const PHLMONITOR& monitor) const;
     void renderBackdrop() const;
     void renderSelectionChrome() const;
     void renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const;
+    void activateStripTarget(std::size_t index);
+    void clearStripWindowDragState();
+    void clearPendingStripWorkspaceChange();
+    [[nodiscard]] bool matchesPendingStripWorkspaceChange(const PHLWORKSPACE& workspace) const;
+    void buildWorkspaceStripEntries(State& state) const;
     State  buildState(const PHLMONITOR& monitor, ScopeOverride requestedScope, const std::vector<WorkspaceOverride>& workspaceOverrides = {},
-                      bool keepEmptyParticipatingMonitors = false) const;
+                      bool keepEmptyParticipatingMonitors = false, bool suppressWorkspaceStrip = false) const;
     State  m_state;
     HANDLE m_handle = nullptr;
 
@@ -412,6 +479,7 @@ class OverviewController {
     CFunctionHook*            m_surfaceNeedsLiveBlurHook = nullptr;
     CFunctionHook*            m_surfaceNeedsPrecomputeBlurHook = nullptr;
     CFunctionHook*            m_shouldRenderWindowHook = nullptr;
+    CFunctionHook*            m_renderLayerHook = nullptr;
     CFunctionHook*            m_borderDrawHook = nullptr;
     CFunctionHook*            m_shadowDrawHook = nullptr;
     CFunctionHook*            m_calculateUVForSurfaceHook = nullptr;
@@ -431,6 +499,7 @@ class OverviewController {
     SurfaceBlurNeedsFn        m_surfaceNeedsLiveBlurOriginal = nullptr;
     SurfaceBlurNeedsFn        m_surfaceNeedsPrecomputeBlurOriginal = nullptr;
     ShouldRenderWindowFn      m_shouldRenderWindowOriginal = nullptr;
+    RenderLayerFn             m_renderLayerOriginal = nullptr;
     BorderDrawFn              m_borderDrawOriginal = nullptr;
     BorderDrawFn              m_shadowDrawOriginal = nullptr;
     CalculateUVForSurfaceFn   m_calculateUVForSurfaceOriginal = nullptr;
@@ -452,8 +521,10 @@ class OverviewController {
     long                      m_animationsEnabledBackup = 1;
     SP<CEventLoopTimer>       m_animationsEnabledRestoreTimer;
     bool                      m_deactivatePending = false;
+    bool                      m_deactivateScheduled = false;
     std::size_t               m_surfaceRenderDataTransformDepth = 0;
     PHLWINDOWREF              m_pendingLiveFocusWorkspaceChangeTarget;
+    PHLWORKSPACEREF           m_pendingStripWorkspaceChangeTarget;
     PHLWINDOWREF              m_postCloseForcedFocus;
     bool                      m_postCloseForcedFocusLatched = false;
     std::size_t               m_ignorePostCloseMouseMoveCount = 0;
@@ -464,7 +535,18 @@ class OverviewController {
     GestureSession            m_gestureSession;
     WorkspaceSwipeGestureContext m_workspaceSwipeGesture;
     WorkspaceTransition      m_workspaceTransition;
+    StripPreviewContext      m_stripPreviewContext;
     bool                     m_applyingWorkspaceTransitionCommit = false;
+    bool                     m_rebuildVisibleStateAfterWorkspaceTransitionCommit = false;
+    bool                     m_beginCloseInProgress = false;
+    std::size_t              m_stripSnapshotRenderDepth = 0;
+    bool                     m_stripSnapshotsDirty = false;
+    bool                     m_stripSnapshotRefreshScheduled = false;
+    std::optional<std::size_t> m_pressedStripIndex;
+    std::optional<std::size_t> m_pressedWindowIndex;
+    std::optional<std::size_t> m_draggedWindowIndex;
+    Vector2D                 m_pressedWindowPointer;
+    Vector2D                 m_draggedWindowPointerOffset;
     bool                      m_suppressInitialHoverUpdate = false;
     std::size_t               m_postOpenRefreshFrames = 0;
 

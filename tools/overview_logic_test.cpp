@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <cmath>
 #include <iostream>
 #include <optional>
 #include <vector>
@@ -9,6 +10,8 @@ namespace {
 
 using hymission::Direction;
 using hymission::Rect;
+using hymission::WorkspaceStripAnchor;
+using hymission::WorkspaceStripReservation;
 
 bool expect(bool condition, const char* message) {
     if (condition)
@@ -16,6 +19,20 @@ bool expect(bool condition, const char* message) {
 
     std::cerr << "FAIL: " << message << '\n';
     return false;
+}
+
+bool closeEnough(double actual, double expected, double epsilon = 1e-9) {
+    return std::abs(actual - expected) <= epsilon;
+}
+
+bool expectRect(const Rect& actual, const Rect& expected, const char* message) {
+    return expect(closeEnough(actual.x, expected.x) && closeEnough(actual.y, expected.y) && closeEnough(actual.width, expected.width) &&
+                      closeEnough(actual.height, expected.height),
+                  message);
+}
+
+bool expectReservation(const WorkspaceStripReservation& actual, const WorkspaceStripReservation& expected, const char* message) {
+    return expectRect(actual.band, expected.band, message) && expectRect(actual.content, expected.content, message);
 }
 
 } // namespace
@@ -58,6 +75,62 @@ int main() {
                  "overview workspace transitions should continue rebuilding state");
     ok &= expect(resolveOverviewWorkspaceChangeAction(true, false, false, true, true, true) == OverviewWorkspaceChangeAction::Ignore,
                  "closing overview should ignore workspace changes");
+
+    ok &= expect(parseWorkspaceStripAnchor("top") == WorkspaceStripAnchor::Top, "top anchor should parse");
+    ok &= expect(parseWorkspaceStripAnchor(" LEFT ") == WorkspaceStripAnchor::Left, "left anchor parsing should ignore case and whitespace");
+    ok &= expect(parseWorkspaceStripAnchor("Right") == WorkspaceStripAnchor::Right, "right anchor should parse");
+    ok &= expect(parseWorkspaceStripAnchor("unexpected") == WorkspaceStripAnchor::Top, "invalid anchors should fall back to top");
+
+    ok &= expect(isWorkspaceStripHorizontal(WorkspaceStripAnchor::Top), "top strip should be horizontal");
+    ok &= expect(!isWorkspaceStripHorizontal(WorkspaceStripAnchor::Left), "left strip should be vertical");
+    ok &= expect(!isWorkspaceStripHorizontal(WorkspaceStripAnchor::Right), "right strip should be vertical");
+
+    ok &= expectReservation(reserveWorkspaceStripBand({10, 20, 300, 200}, WorkspaceStripAnchor::Top, 40, 12),
+                            {
+                                {10, 20, 300, 40},
+                                {10, 72, 300, 148},
+                            },
+                            "top strip reservation should reserve band from top edge");
+    ok &= expectReservation(reserveWorkspaceStripBand({10, 20, 300, 200}, WorkspaceStripAnchor::Left, 40, 12),
+                            {
+                                {10, 20, 40, 200},
+                                {62, 20, 248, 200},
+                            },
+                            "left strip reservation should reserve band from left edge");
+    ok &= expectReservation(reserveWorkspaceStripBand({10, 20, 300, 200}, WorkspaceStripAnchor::Right, 40, 12),
+                            {
+                                {270, 20, 40, 200},
+                                {10, 20, 248, 200},
+                            },
+                            "right strip reservation should reserve band from right edge");
+    ok &= expectReservation(reserveWorkspaceStripBand({10, 20, 300, 200}, WorkspaceStripAnchor::Top, 0, 24),
+                            {
+                                {10, 20, 300, 0},
+                                {10, 20, 300, 200},
+                            },
+                            "zero-thickness strips should not reserve content space");
+    ok &= expectReservation(reserveWorkspaceStripBand({10, 20, 300, 80}, WorkspaceStripAnchor::Top, 120, 40),
+                            {
+                                {10, 20, 300, 80},
+                                {10, 100, 300, 0},
+                            },
+                            "strip thickness should clamp to monitor size");
+
+    const auto topSlots = layoutWorkspaceStripSlots({0, 0, 300, 36}, WorkspaceStripAnchor::Top, 3, 15);
+    ok &= expect(topSlots.size() == 3, "top strip layout should return one rect per slot");
+    ok &= expectRect(topSlots[0], {0, 0, 90, 36}, "top strip first slot should start at left edge");
+    ok &= expectRect(topSlots[1], {105, 0, 90, 36}, "top strip second slot should advance along x");
+    ok &= expectRect(topSlots[2], {210, 0, 90, 36}, "top strip third slot should end at right edge");
+
+    const auto sideSlots = layoutWorkspaceStripSlots({12, 24, 48, 300}, WorkspaceStripAnchor::Left, 3, 15);
+    ok &= expect(sideSlots.size() == 3, "side strip layout should return one rect per slot");
+    ok &= expectRect(sideSlots[0], {12, 24, 48, 90}, "side strip first slot should start at top edge");
+    ok &= expectRect(sideSlots[1], {12, 129, 48, 90}, "side strip second slot should advance along y");
+    ok &= expectRect(sideSlots[2], {12, 234, 48, 90}, "side strip third slot should end at bottom edge");
+    ok &= expect(layoutWorkspaceStripSlots({0, 0, 120, 20}, WorkspaceStripAnchor::Top, 0, 10).empty(), "zero-slot strip layout should be empty");
+
+    ok &= expect(hitTestWorkspaceStrip(topSlots, 120, 10) == std::optional<std::size_t>{1}, "strip hit-test should find the matching slot");
+    ok &= expect(!hitTestWorkspaceStrip(topSlots, 100, 10).has_value(), "strip hit-test should miss strip gaps");
 
     return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

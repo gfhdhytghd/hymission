@@ -12,6 +12,7 @@
 - [`docs/spec.md`](docs/spec.md)
 - [`docs/architecture.md`](docs/architecture.md)
 - [`docs/research.md`](docs/research.md)
+- [`docs/workspace_strip_plan.md`](docs/workspace_strip_plan.md)
 - [`docs/todo.md`](docs/todo.md)
 
 ## 当前状态
@@ -27,14 +28,19 @@
 - overview 打开期间窗口集变化会重建当前场景；如果 scope 内已无可参与窗口，则自动退出 overview
 - 官方 trackpad gesture 接入：可用 `dispatcher, hymission:toggle,...` 做跟手、可打断的 overview 开关
 - 鼠标命中测试、点击激活、方向键导航、`Esc` / `Return`
+- workspace strip 首版：`only_active_workspace = 1` 时显示 workspace 条带，支持 `top` / `left` / `right` 锚点
+- 主 overview 仍只显示当前活动 workspace；strip 负责补全全 workspace 缩略图、切换和拖拽目标
+- strip click 切换 workspace 并保持 overview 打开；支持 empty gap / trailing new-workspace 槽位
+- overview 内基础跨 workspace 拖拽：按下窗口后拖到 strip 目标可 move window，不自动切换到目标 workspace
 - dispatcher：`hymission:toggle`、`hymission:open`、`hymission:close`、`hymission:debug_current_layout`
 - 一组 overview / 布局配置项
 - 独立 demo 程序 `hymission-layout-demo`
 
 尚未实现：
 
-- 多 workspace overview 条带
-- 拖拽、搜索、窗口分组
+- 与 Hyprland 原生 `bindm ... movewindow` 的 drag controller 集成
+- strip 内高保真 surface / layer-surface 缩略图
+- 搜索、窗口分组
 
 README 只描述仓库现状和最小使用方式；行为定义以 [`docs/spec.md`](docs/spec.md) 为准。
 
@@ -117,6 +123,9 @@ plugin {
         show_special = 0
         workspace_change_keeps_overview = 0
         one_workspace_per_row = 0
+        workspace_strip_anchor = top
+        workspace_strip_thickness = 144
+        workspace_strip_gap = 24
     }
 }
 ```
@@ -142,6 +151,9 @@ plugin {
 - `show_special`: 默认 scope 下是否额外纳入参与 monitor 上当前可见的 special workspace 窗口
 - `workspace_change_keeps_overview`: 当前 overview scope 只展示活动 workspace 时，是否允许切 workspace 后继续留在 overview；开启后键盘、dispatcher 和原生 `gesture = ..., workspace` 都会走 overview-to-overview 过渡，关闭时切 workspace 会直接退出 overview
 - `one_workspace_per_row`: 布局解算时是否按 workspace 分行；开启后同一 monitor 上每个 workspace 占一整行，行顺序按 workspace 从上到下排列，行内仍尽量跟随真实窗口左右排布
+- `workspace_strip_anchor`: `only_active_workspace = 1` 时 strip 的锚点；支持 `top`、`left`、`right`
+- `workspace_strip_thickness`: strip 厚度
+- `workspace_strip_gap`: strip 和主 overview 内容之间的间距
 
 兼容性说明：
 
@@ -157,6 +169,8 @@ plugin {
 - 多 workspace overview 下，如果 preview hover / selection 导致真实 workspace 切换，overview 会重建并继续保持打开；但原生 `changeworkspace` / `focusWorkspaceOnCurrentMonitor` / workspace swipe 的拦截规则不变
 - 如果当前 overview scope 只展示活动 workspace，且 `workspace_change_keeps_overview = 1`，则键盘 / dispatcher / 原生 workspace swipe 切 workspace 后会在 overview 内直接滑到新 workspace；这一过渡会复用 Hyprland 原生 workspace swipe 的距离、反向、锁方向、速度阈值等配置，但会屏蔽原生普通窗口动画
 - 如果当前 overview scope 展示了多个 workspace，则 overview 内禁止切 workspace，并把参与 monitor 上活动 workspace 的名字临时改成 `Mission Control`；退出 overview 后恢复原名
+- 如果当前 overview scope 只展示活动 workspace，则会显示 workspace strip；当前 strip 缩略图是轻量 window-box minimap，不是完整 surface 重绘
+- 当前跨 workspace 拖拽是 overview 内的本地拖拽实现，不依赖 Hyprland 原生 `bindm ... movewindow`
 
 示例：开启 overview 内部选中项跟随鼠标，并在退出 overview 时提交到当前选中窗口
 
@@ -174,6 +188,19 @@ plugin {
 plugin {
     hymission {
         one_workspace_per_row = 1
+    }
+}
+```
+
+示例：在只展示当前 workspace 的 overview 下把 strip 固定到左侧
+
+```conf
+plugin {
+    hymission {
+        only_active_workspace = 1
+        workspace_strip_anchor = left
+        workspace_strip_thickness = 160
+        workspace_strip_gap = 24
     }
 }
 ```

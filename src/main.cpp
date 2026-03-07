@@ -54,9 +54,14 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("only_active_monitor", 0L);
     CONF("show_special", 0L);
     CONF("workspace_change_keeps_overview", 0L);
+    CONF("workspace_strip_thickness", 144L);
+    CONF("workspace_strip_gap", 24L);
+    CONF("hide_bar_when_strip", 0L);
+    CONF("show_focus_indicator", 1L);
     CONF("debug_logs", 0L);
     CONF("debug_surface_logs", 0L);
 #undef CONF
+    HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:workspace_strip_anchor", Hyprlang::STRING{"top"});
 
     g_overviewController = std::make_unique<hymission::OverviewController>(g_pluginHandle);
     if (!g_overviewController->initialize()) {

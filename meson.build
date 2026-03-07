@@ -46,8 +46,10 @@ executable('hymission-layout-demo',
   install: false,
 )
 
-executable('hymission-overview-logic-test',
+overview_logic_test = executable('hymission-overview-logic-test',
   ['tools/overview_logic_test.cpp', 'src/overview_logic.cpp'],
   include_directories: include_directories('src'),
   install: false,
 )
+
+test('hymission-overview-logic-test', overview_logic_test)
