@@ -69,8 +69,8 @@ class OverviewOverlayPassElement final : public IPassElement {
         if (!expectedMonitor || renderMonitor != expectedMonitor)
             return;
 
-        m_controller->renderWorkspaceStrip();
         m_controller->renderSelectionChrome();
+        m_controller->renderWorkspaceStrip();
     }
 
     bool needsLiveBlur() override {
@@ -2492,6 +2492,20 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         if (g_pAnimationManager)
             g_pAnimationManager->frameTick();
 
+        if (targetWorkspaceSyntheticEmpty || !containsHandle(next.managedWorkspaces, targetWorkspace) || next.ownerWorkspace != targetWorkspace) {
+            const auto rebuildMonitor = m_state.ownerMonitor ? m_state.ownerMonitor : transitionMonitor;
+            const std::vector<WorkspaceOverride> overrides = {{
+                .monitorId = transitionMonitor->m_id,
+                .workspace = targetWorkspace,
+                .workspaceId = targetWorkspaceId,
+                .workspaceName = targetWorkspaceName,
+                .syntheticEmpty = false,
+            }};
+
+            if (State rebuilt = buildState(rebuildMonitor, m_state.collectionPolicy.requestedScope, overrides, true); !rebuilt.participatingMonitors.empty())
+                next = std::move(rebuilt);
+        }
+
         next.phase = Phase::Active;
         next.focusBeforeOpen = m_state.focusBeforeOpen;
         next.pendingExitFocus = m_state.pendingExitFocus;
@@ -2501,6 +2515,7 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         next.relayoutStart = {};
 
         clearOverviewWorkspaceTransition();
+        carryOverWorkspaceStripSnapshots(next, m_state);
         m_state = std::move(next);
         applyWorkspaceNameOverrides(m_state);
         refreshWorkspaceStripSnapshots();
@@ -4320,6 +4335,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     next.animationToVisual = 1.0;
     next.animationStart = {};
     m_deactivatePending = false;
+    carryOverWorkspaceStripSnapshots(next, m_state);
     m_state = std::move(next);
     applyWorkspaceNameOverrides(m_state);
     setInputFollowMouseOverride(true);
@@ -5199,6 +5215,7 @@ void OverviewController::rebuildVisibleState() {
     }
 
     clearStripWindowDragState();
+    carryOverWorkspaceStripSnapshots(next, m_state);
     m_state = std::move(next);
     applyWorkspaceNameOverrides(m_state);
     refreshWorkspaceStripSnapshots();
@@ -5340,6 +5357,45 @@ std::string OverviewController::debugWindowLabel(const PHLWINDOW& window) const 
     return out.str();
 }
 
+bool OverviewController::workspaceStripEntriesMatchForSnapshot(const WorkspaceStripEntry& lhs, const WorkspaceStripEntry& rhs) const {
+    const auto lhsMonitorId = lhs.monitor ? lhs.monitor->m_id : MONITOR_INVALID;
+    const auto rhsMonitorId = rhs.monitor ? rhs.monitor->m_id : MONITOR_INVALID;
+    if (lhsMonitorId != rhsMonitorId)
+        return false;
+
+    if (lhs.newWorkspaceSlot != rhs.newWorkspaceSlot || lhs.syntheticEmpty != rhs.syntheticEmpty)
+        return false;
+
+    if (lhs.newWorkspaceSlot || lhs.syntheticEmpty)
+        return lhs.workspaceId == rhs.workspaceId;
+
+    if (lhs.workspace && rhs.workspace)
+        return lhs.workspace == rhs.workspace;
+
+    return lhs.workspaceId == rhs.workspaceId;
+}
+
+void OverviewController::carryOverWorkspaceStripSnapshots(State& next, const State& previous) const {
+    if (next.stripEntries.empty() || previous.stripEntries.empty())
+        return;
+
+    // Keep the previous strip textures alive until the async refresh repaints
+    // the new state. Otherwise workspace commits briefly render only the card
+    // background because the replacement snapshot is deferred to doLater().
+    for (auto& nextEntry : next.stripEntries) {
+        if (nextEntry.snapshot || nextEntry.newWorkspaceSlot || nextEntry.syntheticEmpty)
+            continue;
+
+        const auto previousIt = std::find_if(previous.stripEntries.begin(), previous.stripEntries.end(), [&](const WorkspaceStripEntry& previousEntry) {
+            return previousEntry.snapshot && workspaceStripEntriesMatchForSnapshot(nextEntry, previousEntry);
+        });
+        if (previousIt == previous.stripEntries.end())
+            continue;
+
+        nextEntry.snapshot = previousIt->snapshot;
+    }
+}
+
 void OverviewController::renderBackdrop() const {
     const double alpha = BACKDROP_ALPHA * visualProgress();
     if (alpha <= 0.0)
@@ -5369,11 +5425,14 @@ void OverviewController::renderSelectionChrome() const {
     if (!renderMonitor)
         return;
 
-    if (m_state.hoveredIndex && *m_state.hoveredIndex < m_state.windows.size() && m_state.windows[*m_state.hoveredIndex].targetMonitor == renderMonitor) {
+    const bool showFocusIndicator = showFocusIndicatorEnabled();
+
+    if (showFocusIndicator && m_state.hoveredIndex && *m_state.hoveredIndex < m_state.windows.size() &&
+        m_state.windows[*m_state.hoveredIndex].targetMonitor == renderMonitor) {
         renderOutline(currentPreviewRect(m_state.windows[*m_state.hoveredIndex]), CHyprColor(0.95, 0.97, 1.0, 0.55 * progress), HOVER_THICKNESS);
     }
 
-    if (showFocusIndicatorEnabled() && m_state.selectedIndex && *m_state.selectedIndex < m_state.windows.size() &&
+    if (showFocusIndicator && m_state.selectedIndex && *m_state.selectedIndex < m_state.windows.size() &&
         m_state.windows[*m_state.selectedIndex].targetMonitor == renderMonitor) {
         const auto& window = m_state.windows[*m_state.selectedIndex];
         const Rect  rectGlobal = currentPreviewRect(window);

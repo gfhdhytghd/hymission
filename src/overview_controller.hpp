@@ -452,6 +452,8 @@ class OverviewController {
     void debugSurfaceLog(const std::string& message) const;
     [[nodiscard]] std::string debugWorkspaceLabel(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] std::string debugWindowLabel(const PHLWINDOW& window) const;
+    [[nodiscard]] bool workspaceStripEntriesMatchForSnapshot(const WorkspaceStripEntry& lhs, const WorkspaceStripEntry& rhs) const;
+    void carryOverWorkspaceStripSnapshots(State& next, const State& previous) const;
     void renderWorkspaceStrip() const;
     [[nodiscard]] Rect workspaceStripThumbRect(const WorkspaceStripEntry& entry, const PHLMONITOR& monitor) const;
     void refreshWorkspaceStripSnapshots();
