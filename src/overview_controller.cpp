@@ -124,6 +124,7 @@ constexpr double STRIP_CARD_PADDING = 0.0;
 constexpr double STRIP_THUMB_PADDING = 0.0;
 constexpr double STRIP_LABEL_HEIGHT = 0.0;
 constexpr double STRIP_MIN_THUMB_LENGTH = 12.0;
+constexpr double RECOMMAND_STAGE_TRANSFER = 0.18;
 constexpr auto   MISSION_CONTROL_WORKSPACE_NAME = "Mission Control";
 OverviewController* g_controller = nullptr;
 
@@ -183,6 +184,18 @@ std::string getConfigString(HANDLE handle, const char* name, std::string fallbac
     }
 
     return fallback;
+}
+
+int recommandScopeSign(OverviewController::ScopeOverride scope) {
+    return scope == OverviewController::ScopeOverride::ForceAll ? 1 : -1;
+}
+
+int signedUnit(double value) {
+    if (value > 0.0001)
+        return 1;
+    if (value < -0.0001)
+        return -1;
+    return 0;
 }
 
 bool shouldWrapWorkspaceIds(const WORKSPACEID targetId, const WORKSPACEID currentId) {
@@ -346,15 +359,38 @@ Vector2D renderedWindowPosition(const PHLWINDOW& window, bool goal = false) {
     return goal ? window->m_realPosition->goal() : window->m_realPosition->value();
 }
 
+Rect stateSnapshotGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
+    if (!window)
+        return {};
+
+    Vector2D position = renderedWindowPosition(window, goal);
+    if (window->m_workspace && !window->m_pinned && !window->m_workspace->isVisible()) {
+        // For hidden workspaces, keep the workspace render offset in the opening snapshot
+        // so forceall windows originate from their off-screen workspace position.
+        position += goal ? window->m_workspace->m_renderOffset->goal() : window->m_workspace->m_renderOffset->value();
+    }
+
+    const Vector2D size = goal ? window->m_realSize->goal() : window->m_realSize->value();
+    return makeRect(position.x, position.y, size.x, size.y);
+}
+
+Rect sceneGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
+    if (!window)
+        return {};
+
+    Vector2D position = renderedWindowPosition(window, goal);
+    if (window->m_workspace && !window->m_pinned)
+        position += goal ? window->m_workspace->m_renderOffset->goal() : window->m_workspace->m_renderOffset->value();
+
+    const Vector2D size = goal ? window->m_realSize->goal() : window->m_realSize->value();
+    return makeRect(position.x, position.y, size.x, size.y);
+}
+
 Rect surfaceRenderGlobalRectForWindow(const PHLWINDOW& window) {
     if (!window)
         return {};
 
-    Vector2D position = window->m_realPosition->value();
-    if (window->m_workspace && !window->m_pinned)
-        position += window->m_workspace->m_renderOffset->value();
-
-    return makeRect(position.x, position.y, window->m_realSize->value().x, window->m_realSize->value().y);
+    return sceneGlobalRectForWindow(window);
 }
 
 Layout::Tiled::CScrollingAlgorithm* scrollingAlgorithmForWorkspace(const PHLWORKSPACE& workspace) {
@@ -420,14 +456,15 @@ double normalizedGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpa
 
 class CHymissionTrackpadGesture final : public ITrackpadGesture {
   public:
-    CHymissionTrackpadGesture(GestureDispatcherKind dispatcher, OverviewController::ScopeOverride scope, eTrackpadGestureDirection direction, float deltaScale)
-        : m_dispatcher(dispatcher), m_scope(scope), m_direction(direction), m_deltaScale(deltaScale) {
+    CHymissionTrackpadGesture(GestureDispatcherKind dispatcher, OverviewController::ScopeOverride scope, bool recommand, eTrackpadGestureDirection direction,
+                              float deltaScale)
+        : m_dispatcher(dispatcher), m_scope(scope), m_recommand(recommand), m_direction(direction), m_deltaScale(deltaScale) {
     }
 
     void begin(const STrackpadGestureBegin& e) override {
         m_tracking = false;
         if (!g_controller || !e.swipe ||
-            !g_controller->beginTrackpadGesture(m_dispatcher == GestureDispatcherKind::Open, m_scope, m_direction, *e.swipe, m_deltaScale))
+            !g_controller->beginTrackpadGesture(m_dispatcher == GestureDispatcherKind::Open, m_scope, m_recommand, m_direction, *e.swipe, m_deltaScale))
             return;
 
         m_tracking = true;
@@ -451,6 +488,7 @@ class CHymissionTrackpadGesture final : public ITrackpadGesture {
   private:
     GestureDispatcherKind             m_dispatcher;
     OverviewController::ScopeOverride m_scope = OverviewController::ScopeOverride::Default;
+    bool                              m_recommand = false;
     eTrackpadGestureDirection         m_direction = TRACKPAD_GESTURE_DIR_VERTICAL;
     float                             m_deltaScale = 1.0F;
     bool                              m_tracking = false;
@@ -2059,15 +2097,28 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
         return m_handleGestureOriginal(g_pConfigManager.get(), keyword, value);
     }
 
-    std::string scopeError;
-    const auto  requestedScope = parseScopeOverride(dispatcherArgs, scopeError);
-    if (!requestedScope)
-        return scopeError;
+    bool         recommand = false;
+    ScopeOverride requestedScopeValue = ScopeOverride::Default;
+    const auto   trimmedDispatcherArgs = trimCopy(dispatcherArgs);
+    if (trimmedDispatcherArgs == "recommand" || trimmedDispatcherArgs == "recommend") {
+        if (dispatcherKind != GestureDispatcherKind::Toggle)
+            return "gesture recommand is only supported with hymission:toggle";
+
+        recommand = true;
+    } else {
+        std::string scopeError;
+        const auto  requestedScope = parseScopeOverride(dispatcherArgs, scopeError);
+        if (!requestedScope)
+            return scopeError;
+
+        requestedScopeValue = *requestedScope;
+    }
 
     const bool disableInhibit = flags.contains('p');
     g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
     const auto addResult =
-        g_pTrackpadGestures->addGesture(makeUnique<CHymissionTrackpadGesture>(dispatcherKind, *requestedScope, direction, deltaScale), fingerCount, direction, modMask, deltaScale, disableInhibit);
+        g_pTrackpadGestures->addGesture(makeUnique<CHymissionTrackpadGesture>(dispatcherKind, requestedScopeValue, recommand, direction, deltaScale), fingerCount, direction,
+                                        modMask, deltaScale, disableInhibit);
     if (!addResult.has_value())
         return addResult.error();
 
@@ -2083,6 +2134,7 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
         std::ostringstream out;
         out << "[hymission] register gesture fingers=" << fingerCount << " dir=" << (direction == TRACKPAD_GESTURE_DIR_HORIZONTAL ? "horizontal" : "vertical")
             << " dispatcher=" << dispatcher << " args=" << dispatcherArgs
+            << " recommand=" << (recommand ? 1 : 0)
             << " scale=" << deltaScale << " modMask=" << modMask << " disableInhibit=" << (disableInhibit ? 1 : 0);
         debugLog(out.str());
     }
@@ -2090,18 +2142,101 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
     return {};
 }
 
-bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride requestedScope, eTrackpadGestureDirection direction, const IPointer::SSwipeUpdateEvent& event,
-                                              float deltaScale) {
+bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride requestedScope, bool recommand, eTrackpadGestureDirection direction,
+                                              const IPointer::SSwipeUpdateEvent& event, float deltaScale) {
     if (m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
         return false;
+
+    const bool opening = !isVisible() || openOnly || m_state.phase == Phase::Opening;
+    const double initialDelta = normalizedGestureDelta(event, direction, deltaScale, gestureInvertVerticalEnabled());
+
+    if (recommand) {
+        if (openOnly || std::abs(initialDelta) < 0.0001)
+            return false;
+
+        const bool currentlyVisible = isVisible();
+        ScopeOverride compactScope = ScopeOverride::OnlyCurrentWorkspace;
+        ScopeOverride initialScope = ScopeOverride::Default;
+        double       initialSignedProgress = 0.0;
+        bool         gestureOpening = true;
+
+        if (currentlyVisible) {
+            initialScope = m_state.collectionPolicy.requestedScope;
+            // `recommand` always uses `onlycurrentworkspace` as its compact side,
+            // regardless of the config-driven default scope.
+            initialSignedProgress = visualProgress() * (initialScope == ScopeOverride::ForceAll ? 1.0 : -1.0);
+
+            if ((initialScope == ScopeOverride::ForceAll && initialDelta >= 0.0) || (initialScope != ScopeOverride::ForceAll && initialDelta <= 0.0)) {
+                if (debugLogsEnabled()) {
+                    std::ostringstream out;
+                    out << "[hymission] recommand gesture ignored delta=" << initialDelta
+                        << " scope=" << (initialScope == ScopeOverride::ForceAll ? "forceall" : "compact");
+                    debugLog(out.str());
+                }
+                return false;
+            }
+
+            gestureOpening = false;
+
+            if (m_state.phase == Phase::Active && m_state.relayoutActive) {
+                for (auto& managed : m_state.windows) {
+                    managed.targetGlobal = currentPreviewRect(managed);
+                    managed.relayoutFromGlobal = managed.targetGlobal;
+                }
+                m_state.relayoutActive = false;
+                m_state.relayoutProgress = 1.0;
+                m_state.relayoutStart = {};
+            }
+
+            prepareGestureCloseExitGeometry();
+        } else {
+            const auto monitor = g_pCompositor->getMonitorFromCursor();
+            if (!monitor)
+                return false;
+
+            const auto initialScopeTarget = initialDelta > 0.0 ? ScopeOverride::ForceAll : compactScope;
+            initialScope = initialScopeTarget;
+            requestedScope = initialScopeTarget;
+
+            m_suppressInitialHoverUpdate = true;
+            beginOpen(monitor, initialScopeTarget);
+            m_suppressInitialHoverUpdate = false;
+            if (!isVisible())
+                return false;
+        }
+
+        m_gestureSession = {
+            .active = true,
+            .recommand = true,
+            .startedVisible = currentlyVisible,
+            .opening = gestureOpening,
+            .requestedScope = currentlyVisible ? initialScope : requestedScope,
+            .initialScope = initialScope,
+            .compactScope = compactScope,
+            .direction = direction,
+            .openness = currentlyVisible ? std::abs(initialSignedProgress) : visualProgress(),
+            .signedProgress = initialSignedProgress,
+            .lastSignedSpeed = 0.0,
+            .deltaScale = deltaScale,
+        };
+
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] recommand gesture begin openness=" << m_gestureSession.openness << " signed=" << m_gestureSession.signedProgress
+                << " scale=" << deltaScale << " dir=" << (direction == TRACKPAD_GESTURE_DIR_HORIZONTAL ? "horizontal" : "vertical");
+            debugLog(out.str());
+        }
+
+        updateTrackpadGesture(event);
+        refreshOwnedMonitors();
+        return true;
+    }
 
     if (openOnly && isVisible())
         return false;
 
     // Keeping overview open across workspace changes only affects native workspace swipes.
     // The plugin's own toggle gesture must still be able to close the visible overview.
-    const bool opening = !isVisible() || openOnly || m_state.phase == Phase::Opening;
-    const double initialDelta = normalizedGestureDelta(event, direction, deltaScale, gestureInvertVerticalEnabled());
     if ((opening && initialDelta <= 0.0) || (!opening && initialDelta >= 0.0)) {
         if (debugLogsEnabled()) {
             std::ostringstream out;
@@ -2166,6 +2301,106 @@ void OverviewController::updateTrackpadGesture(const IPointer::SSwipeUpdateEvent
 
     const double delta = normalizedGestureDelta(event, m_gestureSession.direction, m_gestureSession.deltaScale, gestureInvertVerticalEnabled());
 
+    if (m_gestureSession.recommand) {
+        m_gestureSession.lastSignedSpeed = delta;
+        const double deltaProgress = delta / gestureSwipeDistance();
+        constexpr double MAX_STAGE_PROGRESS = 1.0 + RECOMMAND_STAGE_TRANSFER;
+
+        const auto syncCurrentScopeProgress = [&] {
+            m_gestureSession.openness = clampUnit(std::abs(m_gestureSession.signedProgress));
+            m_gestureSession.opening = !(m_gestureSession.startedVisible && m_gestureSession.requestedScope == m_gestureSession.initialScope);
+        };
+
+        const auto enterScope = [&](ScopeOverride requestedScope, int sign, double openness) -> bool {
+            if (m_state.collectionPolicy.requestedScope != requestedScope) {
+                if (!retargetGestureScope(requestedScope))
+                    return false;
+
+                m_gestureSession.startedVisible = false;
+            }
+
+            m_gestureSession.requestedScope = requestedScope;
+            m_gestureSession.hiddenGapProgress = 0.0;
+            m_gestureSession.signedProgress = static_cast<double>(sign) * clampUnit(openness);
+            m_gestureSession.openness = clampUnit(openness);
+            m_gestureSession.opening = true;
+            return true;
+        };
+
+        const int currentSign = recommandScopeSign(m_gestureSession.requestedScope);
+
+        // Crossing through the hidden workspace should leave a small transfer
+        // gap before the opposite scope starts opening.
+        if (std::abs(m_gestureSession.hiddenGapProgress) > 0.0001) {
+            const double projectedGap = std::clamp(m_gestureSession.hiddenGapProgress + deltaProgress, -MAX_STAGE_PROGRESS, MAX_STAGE_PROGRESS);
+            const int    projectedGapSign = signedUnit(projectedGap);
+
+            if (projectedGapSign == 0) {
+                m_gestureSession.hiddenGapProgress = 0.0;
+                m_gestureSession.signedProgress = 0.0;
+                m_gestureSession.openness = 0.0;
+            } else if (projectedGapSign == currentSign) {
+                m_gestureSession.hiddenGapProgress = 0.0;
+                m_gestureSession.signedProgress = static_cast<double>(currentSign) * clampUnit(std::abs(projectedGap));
+                syncCurrentScopeProgress();
+            } else if (std::abs(projectedGap) < RECOMMAND_STAGE_TRANSFER) {
+                m_gestureSession.hiddenGapProgress = projectedGap;
+                m_gestureSession.signedProgress = 0.0;
+                m_gestureSession.openness = 0.0;
+            } else {
+                const auto targetScope = projectedGapSign > 0 ? ScopeOverride::ForceAll : m_gestureSession.compactScope;
+                const double targetOpenness = std::abs(projectedGap) - RECOMMAND_STAGE_TRANSFER;
+                if (!enterScope(targetScope, projectedGapSign, targetOpenness))
+                    return;
+            }
+        } else {
+            const double projectedProgress = std::clamp(m_gestureSession.signedProgress + deltaProgress, -MAX_STAGE_PROGRESS, MAX_STAGE_PROGRESS);
+            const int    projectedSign = signedUnit(projectedProgress);
+
+            if (projectedSign == 0) {
+                m_gestureSession.signedProgress = 0.0;
+                m_gestureSession.openness = 0.0;
+            } else if (projectedSign == currentSign) {
+                m_gestureSession.signedProgress = static_cast<double>(currentSign) * clampUnit(std::abs(projectedProgress));
+                syncCurrentScopeProgress();
+            } else {
+                const double overflow = std::abs(projectedProgress);
+                if (overflow < RECOMMAND_STAGE_TRANSFER) {
+                    m_gestureSession.signedProgress = 0.0;
+                    m_gestureSession.hiddenGapProgress = static_cast<double>(projectedSign) * overflow;
+                    m_gestureSession.openness = 0.0;
+                } else {
+                    const auto targetScope = projectedSign > 0 ? ScopeOverride::ForceAll : m_gestureSession.compactScope;
+                    const double targetOpenness = overflow - RECOMMAND_STAGE_TRANSFER;
+                    if (!enterScope(targetScope, projectedSign, targetOpenness))
+                        return;
+                }
+            }
+        }
+
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] recommand gesture update openness=" << m_gestureSession.openness << " signed=" << m_gestureSession.signedProgress
+                << " gap=" << m_gestureSession.hiddenGapProgress << " delta=" << delta << " scope=";
+            switch (m_gestureSession.requestedScope) {
+                case ScopeOverride::ForceAll:
+                    out << "forceall";
+                    break;
+                case ScopeOverride::OnlyCurrentWorkspace:
+                    out << "onlycurrentworkspace";
+                    break;
+                case ScopeOverride::Default:
+                default:
+                    out << "default";
+                    break;
+            }
+            debugLog(out.str());
+        }
+
+        refreshOwnedMonitors();
+        return;
+    }
+
     m_gestureSession.lastSignedSpeed = delta;
     m_gestureSession.openness = clampUnit(m_gestureSession.openness + delta / gestureSwipeDistance());
 
@@ -2183,6 +2418,57 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
         return;
 
     const GestureSession gesture = m_gestureSession;
+
+    if (gesture.recommand) {
+        const double speedThreshold = gestureForceSpeedThreshold();
+        const int    commitDirection = resolveRecommandGestureCommitDirection(gesture.signedProgress, gesture.lastSignedSpeed, speedThreshold, cancelled);
+
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] recommand gesture end cancelled=" << (cancelled ? 1 : 0) << " target=" << commitDirection << " openness=" << gesture.openness
+                << " signed=" << gesture.signedProgress << " lastSpeed=" << gesture.lastSignedSpeed;
+            debugLog(out.str());
+        }
+
+        if (commitDirection == 0) {
+            if (!gesture.opening) {
+                m_gestureSession = {};
+                beginClose(CloseMode::Normal, gesture.openness, true);
+                return;
+            }
+
+            m_gestureSession = {};
+            clearPostCloseDispatcher();
+            m_state.pendingExitFocus = m_state.focusBeforeOpen;
+            m_state.closeMode = m_state.focusBeforeOpen ? CloseMode::Normal : CloseMode::Abort;
+            if (m_state.focusBeforeOpen && m_state.focusBeforeOpen->m_isMapped)
+                commitOverviewExitFocus(m_state.focusBeforeOpen);
+            m_state.phase = Phase::Closing;
+            m_state.animationProgress = 0.0;
+            m_state.animationFromVisual = gesture.openness;
+            m_state.animationToVisual = 0.0;
+            m_state.animationStart = {};
+            refreshOwnedMonitors();
+            return;
+        }
+
+        const auto targetScope = commitDirection > 0 ? ScopeOverride::ForceAll : gesture.compactScope;
+        if (m_state.collectionPolicy.requestedScope != targetScope && !retargetGestureScope(targetScope)) {
+            m_gestureSession = {};
+            return;
+        }
+
+        m_gestureSession = {};
+        m_deactivatePending = false;
+        m_state.phase = Phase::Opening;
+        m_state.animationProgress = 0.0;
+        m_state.animationFromVisual = gesture.openness;
+        m_state.animationToVisual = 1.0;
+        m_state.animationStart = {};
+        refreshOwnedMonitors();
+        return;
+    }
+
     const double         speedThreshold = gestureForceSpeedThreshold();
     const bool           speedCommit = speedThreshold > 0.0 &&
         (gesture.opening ? (gesture.lastSignedSpeed >= speedThreshold) : (gesture.lastSignedSpeed <= -speedThreshold));
@@ -3478,16 +3764,14 @@ Rect OverviewController::liveGlobalRectForWindow(const PHLWINDOW& window) const 
     if (!window)
         return {};
 
-    const auto renderedPos = renderedWindowPosition(window);
-    return makeRect(renderedPos.x, renderedPos.y, window->m_realSize->value().x, window->m_realSize->value().y);
+    return sceneGlobalRectForWindow(window);
 }
 
 Rect OverviewController::goalGlobalRectForWindow(const PHLWINDOW& window) const {
     if (!window)
         return {};
 
-    const auto renderedPos = renderedWindowPosition(window, true);
-    return makeRect(renderedPos.x, renderedPos.y, window->m_realSize->goal().x, window->m_realSize->goal().y);
+    return sceneGlobalRectForWindow(window, true);
 }
 
 bool OverviewController::shouldUseGoalGeometryForStateSnapshot(const PHLWINDOW& window) const {
@@ -3871,10 +4155,7 @@ double OverviewController::visualProgress() const {
 }
 
 double OverviewController::workspaceStripEnterProgress() const {
-    if (m_gestureSession.active)
-        return m_gestureSession.opening ? clampUnit(m_gestureSession.openness) : 1.0;
-
-    return m_state.phase == Phase::Opening ? visualProgress() : 1.0;
+    return visualProgress();
 }
 
 Vector2D OverviewController::workspaceStripEnterOffset(const PHLMONITOR& monitor) const {
@@ -4465,6 +4746,17 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     }
 
     refreshOwnedMonitors();
+}
+
+bool OverviewController::retargetGestureScope(ScopeOverride requestedScope) {
+    PHLMONITOR monitor = m_state.ownerMonitor;
+    if (!monitor)
+        monitor = g_pCompositor->getMonitorFromCursor();
+    if (!monitor)
+        return false;
+
+    beginOpen(monitor, requestedScope);
+    return isVisible() && m_state.collectionPolicy.requestedScope == requestedScope;
 }
 
 void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVisualOverride, bool deferFullscreenMutations) {
@@ -6014,9 +6306,7 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
             continue;
 
         const bool useGoalGeometry = shouldUseGoalGeometryForStateSnapshot(window);
-        const auto renderedPos = renderedWindowPosition(window, useGoalGeometry);
-        const auto renderedSize = useGoalGeometry ? window->m_realSize->goal() : window->m_realSize->value();
-        const auto naturalGlobal = makeRect(renderedPos.x, renderedPos.y, renderedSize.x, renderedSize.y);
+        const auto naturalGlobal = stateSnapshotGlobalRectForWindow(window, useGoalGeometry);
         const auto previewAlpha = std::clamp(window->m_activeInactiveAlpha->value(), 0.0F, 1.0F);
         const auto targetMonitor = preferredMonitorForWindow(window, state);
 
@@ -6257,9 +6547,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             continue;
 
         const bool useGoalGeometry = shouldUseGoalGeometryForStateSnapshot(window);
-        const auto renderedPos = renderedWindowPosition(window, useGoalGeometry);
-        const auto renderedSize = useGoalGeometry ? window->m_realSize->goal() : window->m_realSize->value();
-        const Rect naturalGlobal = makeRect(renderedPos.x, renderedPos.y, renderedSize.x, renderedSize.y);
+        const Rect naturalGlobal = stateSnapshotGlobalRectForWindow(window, useGoalGeometry);
         const std::size_t windowIndex = state.windows.size();
 
         inputsByMonitor[targetMonitor->m_id].push_back({

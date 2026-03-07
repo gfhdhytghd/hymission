@@ -39,6 +39,7 @@ struct WorkspaceStripReservation {
 [[nodiscard]] double                     easeOutCubic(double t);
 [[nodiscard]] double                     easeInCubic(double t);
 [[nodiscard]] bool                       shouldSyncOverviewLiveFocus(bool handlesInput, bool overviewFocusFollowsMouse, long inputFollowMouseBeforeOpen);
+[[nodiscard]] int                        resolveRecommandGestureCommitDirection(double signedProgress, double lastSignedSpeed, double speedThreshold, bool cancelled);
 [[nodiscard]] OverviewWorkspaceChangeAction resolveOverviewWorkspaceChangeAction(bool overviewVisible, bool applyingWorkspaceTransitionCommit,
                                                                                  bool workspaceTransitionActive, bool closing,
                                                                                  bool liveFocusTriggeredWorkspaceChange, bool allowsWorkspaceSwitchInOverview);

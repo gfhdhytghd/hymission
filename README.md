@@ -27,10 +27,13 @@
 - overview 打开后的同窗口集重建会尽量保持 preview slot 顺序稳定，避免 scrolling focus 波动把 preview 洗牌
 - overview 打开期间窗口集变化会重建当前场景；如果 scope 内已无可参与窗口，则自动退出 overview
 - 官方 trackpad gesture 接入：可用 `dispatcher, hymission:toggle,...` 做跟手、可打断的 overview 开关
+- gesture-only `recommand` 模式：同一条 `toggle` 手势可双向映射成 `forceall` / `onlycurrentworkspace`
 - 鼠标命中测试、点击激活、方向键导航、`Esc` / `Return`
-- workspace strip 首版：`only_active_workspace = 1` 时显示 workspace 条带，支持 `top` / `left` / `right` 锚点
+- workspace strip 首版：当前 overview scope 只展示活动 workspace 时显示 workspace 条带，支持 `top` / `left` / `right` 锚点
 - 主 overview 仍只显示当前活动 workspace；strip 负责补全全 workspace 缩略图、切换和拖拽目标
 - strip click 切换 workspace 并保持 overview 打开；支持 empty gap / trailing new-workspace 槽位
+- `forceall` 下其他 workspace 窗口会从各自屏幕外 workspace 位置飞入，并在退出时飞回
+- strip 打开和关闭都走 slide 进出场，而不是只在 opening 时滑入
 - overview 内基础跨 workspace 拖拽：按下窗口后拖到 strip 目标可 move window，不自动切换到目标 workspace
 - dispatcher：`hymission:toggle`、`hymission:open`、`hymission:close`、`hymission:debug_current_layout`
 - 一组 overview / 布局配置项
@@ -66,6 +69,7 @@ bind = SUPER, A, hymission:toggle,forceall
 bind = SUPER, M, hymission:debug_current_layout
 
 gesture = 4, vertical, dispatcher, hymission:toggle,forceall
+gesture = 4, vertical, dispatcher, hymission:toggle,recommand
 ```
 
 - `hymission:toggle`: 打开或关闭 overview；支持可选参数 `onlycurrentworkspace` 和 `forceall`
@@ -83,9 +87,13 @@ Gesture 说明：
 
 - 只接管 Hyprland 官方 gesture 语法里的 `dispatcher, hymission:toggle,...` / `dispatcher, hymission:open,...`
 - 推荐写法：`gesture = 4, vertical, dispatcher, hymission:toggle,forceall`
+- `recommand` 是 gesture-only 参数，仅支持 `gesture = ..., dispatcher, hymission:toggle,recommand`
 - `vertical` 和 `horizontal` 都支持；`horizontal` 体感上等价于把左右映射成上下
 - `up` / `down` / `left` / `right` / 非官方简写不走插件接管
 - 默认语义是 state-aware：overview 关闭时上滑打开，overview 打开时下滑关闭
+- `recommand` 语义是双段式：hidden 时上滑进 `forceall`，下滑进 `onlycurrentworkspace`，且这一 compact side 不受 `only_active_workspace` 默认配置影响
+- `recommand` 从一侧切到另一侧时，必须先拉回 hidden；穿过 hidden 后还需要再滑一小段 transfer gap，另一侧才会开始打开
+- `recommand` 松手仍然走 `50% + velocity`；如果释放瞬间速度反向，会优先回到 hidden，不直接硬跳到对侧
 - 如果手势开始方向和当前状态不匹配，例如 overview 关闭时直接下滑，则整个手势应 no-op
 - 松手采用 `50% + velocity` 提交规则；手指未抬起时可以直接反向拖回
 - 如果当前 overview scope 只展示活动 workspace，且 `workspace_change_keeps_overview = 1`，则 Hyprland 原生 `gesture = ..., workspace` 会在 overview 内被接管为 monitor-local 的 overview-to-overview 滑动；中间帧只显示 overview 预览，不显示原生 workspace 切换动画
@@ -151,7 +159,7 @@ plugin {
 - `show_special`: 默认 scope 下是否额外纳入参与 monitor 上当前可见的 special workspace 窗口
 - `workspace_change_keeps_overview`: 当前 overview scope 只展示活动 workspace 时，是否允许切 workspace 后继续留在 overview；开启后键盘、dispatcher 和原生 `gesture = ..., workspace` 都会走 overview-to-overview 过渡，关闭时切 workspace 会直接退出 overview
 - `one_workspace_per_row`: 布局解算时是否按 workspace 分行；开启后同一 monitor 上每个 workspace 占一整行，行顺序按 workspace 从上到下排列，行内仍尽量跟随真实窗口左右排布
-- `workspace_strip_anchor`: `only_active_workspace = 1` 时 strip 的锚点；支持 `top`、`left`、`right`
+- `workspace_strip_anchor`: 当前 overview scope 只展示活动 workspace 时 strip 的锚点；支持 `top`、`left`、`right`
 - `workspace_strip_thickness`: strip 厚度
 - `workspace_strip_gap`: strip 和主 overview 内容之间的间距
 
@@ -256,28 +264,34 @@ plugin {
 ### CMake
 
 ```sh
-cmake -DCMAKE_BUILD_TYPE=Release -B build
-cmake --build build -j"$(nproc)"
-ctest --test-dir build --output-on-failure
+cmake -DCMAKE_BUILD_TYPE=Release -B build-cmake
+cmake --build build-cmake -j"$(nproc)"
+ctest --test-dir build-cmake --output-on-failure
 ```
 
 产物：
 
-- 插件：`build/libhymission.so`
-- demo：`build/hymission-layout-demo`
-- 逻辑单测：`build/hymission-overview-logic-test`
+- 插件：`build-cmake/libhymission.so`
+- demo：`build-cmake/hymission-layout-demo`
+- 逻辑单测：`build-cmake/hymission-overview-logic-test`
 
-### Meson
+### 插件 Reload
 
 ```sh
-meson setup build-meson
-meson compile -C build-meson
+hyprctl plugin unload /home/wilf/data/hyprland_plugins/hymission/build/libhymission.so
+hyprctl plugin unload /home/wilf/data/hyprland_plugins/hymission/build-cmake/libhymission.so
+hyprctl plugin unload /home/wilf/data/hyprland_plugins/hymission/build-meson/libhymission.so
+hyprctl plugin load /home/wilf/data/hyprland_plugins/hymission/build-cmake/libhymission.so
+hyprctl plugin list
 ```
+
+- `plugin not loaded` 是安全且预期的返回
+- 当前本地开发默认应以 `build-cmake/libhymission.so` 为准
 
 ## 最小调试流程
 
 1. 编译插件
-2. 在 `hyprland.conf` 中加载 `libhymission.so`
+2. 通过 `hyprctl plugin unload ...` / `hyprctl plugin load ...` reload `build-cmake/libhymission.so`
 3. 绑定 `hymission:toggle` 和 `hymission:debug_current_layout`
 4. 先触发 `hymission:debug_current_layout`，确认通知里能看到 preview 数量和前几个目标矩形
 5. 再触发 `hymission:toggle`，确认 overview 能正常打开、关闭和选窗
@@ -293,8 +307,8 @@ meson compile -C build-meson
 如果只想验证布局算法而不启动 Hyprland 插件，可以直接运行：
 
 ```sh
-./build/hymission-layout-demo
-./build/hymission-overview-logic-test
+./build-cmake/hymission-layout-demo
+./build-cmake/hymission-overview-logic-test
 ```
 
 ## 近期路线

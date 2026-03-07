@@ -155,6 +155,22 @@ bool shouldSyncOverviewLiveFocus(bool handlesInput, bool overviewFocusFollowsMou
     return handlesInput && overviewFocusFollowsMouse && inputFollowMouseBeforeOpen != 0;
 }
 
+int resolveRecommandGestureCommitDirection(double signedProgress, double lastSignedSpeed, double speedThreshold, bool cancelled) {
+    if (cancelled)
+        return 0;
+
+    const int sign = signedProgress > 0.0001 ? 1 : signedProgress < -0.0001 ? -1 : 0;
+    if (sign == 0)
+        return 0;
+
+    const bool speedOpen = speedThreshold > 0.0 && ((sign > 0 && lastSignedSpeed >= speedThreshold) || (sign < 0 && lastSignedSpeed <= -speedThreshold));
+    const bool speedClose = speedThreshold > 0.0 && ((sign > 0 && lastSignedSpeed <= -speedThreshold) || (sign < 0 && lastSignedSpeed >= speedThreshold));
+    if (speedClose)
+        return 0;
+
+    return (speedOpen || std::abs(signedProgress) >= 0.5) ? sign : 0;
+}
+
 OverviewWorkspaceChangeAction resolveOverviewWorkspaceChangeAction(bool overviewVisible, bool applyingWorkspaceTransitionCommit, bool workspaceTransitionActive,
                                                                    bool closing, bool liveFocusTriggeredWorkspaceChange,
                                                                    bool allowsWorkspaceSwitchInOverview) {

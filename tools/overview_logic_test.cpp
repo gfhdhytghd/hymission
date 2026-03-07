@@ -66,6 +66,16 @@ int main() {
     ok &= expect(shouldSyncOverviewLiveFocus(true, true, 1), "live focus should sync when overview and Hyprland follow-mouse are enabled");
     ok &= expect(!shouldSyncOverviewLiveFocus(true, true, 0), "live focus should not sync when Hyprland follow-mouse was disabled before opening overview");
     ok &= expect(!shouldSyncOverviewLiveFocus(false, true, 1), "live focus should not sync when overview input handling is inactive");
+    ok &= expect(resolveRecommandGestureCommitDirection(0.6, 0.0, 30.0, false) == 1,
+                 "positive recommand gestures past halfway should commit to forceall");
+    ok &= expect(resolveRecommandGestureCommitDirection(-0.6, 0.0, 30.0, false) == -1,
+                 "negative recommand gestures past halfway should commit to compact scope");
+    ok &= expect(resolveRecommandGestureCommitDirection(0.8, -40.0, 30.0, false) == 0,
+                 "reverse velocity should close forceall instead of jumping directly to compact scope");
+    ok &= expect(resolveRecommandGestureCommitDirection(-0.8, 40.0, 30.0, false) == 0,
+                 "reverse velocity should close compact scope instead of jumping directly to forceall");
+    ok &= expect(resolveRecommandGestureCommitDirection(0.2, 40.0, 30.0, false) == 1,
+                 "forward velocity should still be able to commit the current recommand side");
 
     ok &= expect(resolveOverviewWorkspaceChangeAction(true, false, false, false, true, false) == OverviewWorkspaceChangeAction::Rebuild,
                  "live focus workspace changes should rebuild overview instead of aborting");

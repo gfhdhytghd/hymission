@@ -86,7 +86,7 @@ class OverviewController {
     CRegion             surfaceOpaqueRegionHook(void* surfacePassThisptr);
     CRegion             surfaceVisibleRegionHook(void* surfacePassThisptr, bool& cancel);
     std::optional<std::string> handleGestureConfigHook(const std::string& keyword, const std::string& value);
-    [[nodiscard]] bool         beginTrackpadGesture(bool openOnly, ScopeOverride requestedScope, eTrackpadGestureDirection direction,
+    [[nodiscard]] bool         beginTrackpadGesture(bool openOnly, ScopeOverride requestedScope, bool recommand, eTrackpadGestureDirection direction,
                                                     const IPointer::SSwipeUpdateEvent& event, float deltaScale);
     void                       updateTrackpadGesture(const IPointer::SSwipeUpdateEvent& event);
     void                       endTrackpadGesture(bool cancelled);
@@ -237,10 +237,16 @@ class OverviewController {
 
     struct GestureSession {
         bool         active = false;
+        bool         recommand = false;
+        bool         startedVisible = false;
         bool         opening = true;
         ScopeOverride requestedScope = ScopeOverride::Default;
+        ScopeOverride initialScope = ScopeOverride::Default;
+        ScopeOverride compactScope = ScopeOverride::Default;
         eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_VERTICAL;
         double       openness = 0.0;
+        double       signedProgress = 0.0;
+        double       hiddenGapProgress = 0.0;
         double       lastSignedSpeed = 0.0;
         float        deltaScale = 1.0F;
     };
@@ -441,6 +447,7 @@ class OverviewController {
 
     void beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope);
     void beginClose(CloseMode mode = CloseMode::Normal, std::optional<double> fromVisualOverride = std::nullopt, bool deferFullscreenMutations = false);
+    [[nodiscard]] bool retargetGestureScope(ScopeOverride requestedScope);
     void deactivate();
     void scheduleDeactivate();
     void refreshScene(const PHLMONITOR& monitor) const;

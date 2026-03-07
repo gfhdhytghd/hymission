@@ -24,6 +24,7 @@ v1 必做：
 - scope-aware overview：支持默认配置范围、`onlycurrentworkspace` 和 `forceall`
 - 打开 / 关闭 overview
 - 官方 trackpad gesture 驱动的 overview 开关，视觉进度跟手且支持中途反向打断
+- 当前 workspace scope 下的 workspace 条带 / 缩略图入口
 - compositor-side preview 几何计算
 - preview 渲染
 - 鼠标点击 preview 激活对应窗口并退出 overview
@@ -33,7 +34,7 @@ v1 必做：
 v1 不做：
 
 - 跨 workspace 拖拽窗口
-- workspace 条带 / workspace 缩略图
+- 完整 surface 级别的 workspace 缩略图
 - 搜索过滤
 - group / stack 展开
 - popup 的完整 preview 语义
@@ -166,6 +167,10 @@ v1 dispatcher 名称固定为：
 - `onlycurrentworkspace`：只展示 anchor monitor 的当前普通 workspace，不纳入 special workspace
 - `forceall`：跨所有 monitor 展示所有普通 workspace，并额外纳入当前可见的 special workspace
 
+gesture-only 参数：
+
+- `recommand`：仅支持 `gesture = ..., dispatcher, hymission:toggle,recommand`；hidden 时正向进入 `forceall`，反向进入 `onlycurrentworkspace`
+
 约束：
 
 - `toggle,*` 在 overview 已可见时总是执行关闭，参数在关闭路径上忽略
@@ -176,10 +181,14 @@ v1 dispatcher 名称固定为：
 
 - 只接管 Hyprland 官方 gesture 语法里的 `dispatcher, hymission:toggle,...` / `dispatcher, hymission:open,...`
 - 推荐写法：`gesture = 4, vertical, dispatcher, hymission:toggle,forceall`
+- `recommand` 只允许出现在 `hymission:toggle` 的 gesture 配置里；dispatcher 不支持该参数
 - 不支持非官方简写 `gesture = 4, vertical, hymission:toggle,forceall`
 - `vertical` 和 `horizontal` 都要求具备跟手动画；`horizontal` 体感上等价于把左右映射成上下
 - `up` / `down` / `left` / `right` 继续走 Hyprland 默认 dispatcher gesture 语义
 - 默认语义是 state-aware：overview 关闭时上滑打开，overview 打开时下滑关闭
+- `recommand` 语义是双段式：hidden 时正向进入 `forceall`，反向进入 `onlycurrentworkspace`，且 compact side 固定为 `onlycurrentworkspace`，不受 `only_active_workspace` 默认 scope 影响
+- `recommand` 从一侧切到另一侧时，必须先收回到 hidden；穿过 hidden 后还必须继续滑过一段 transfer gap，另一侧 scope 才允许开始展开
+- `recommand` 释放时如果瞬时速度与当前 scope 展开方向相反，优先回到 hidden，不得直接跨到对侧 scope
 - `gesture_invert_vertical = 1` 时，上述方向对调
 - 如果手势开始方向与当前状态不匹配，例如 overview 关闭时直接下滑，则整个手势应 no-op，不得先拉出半开 overview
 - 手指未抬起时允许直接反向拖动，把 overview 进度拉回
@@ -234,6 +243,12 @@ dispatcher override：
 - `onlycurrentworkspace`：忽略默认 scope 配置，只展示 anchor monitor 的当前普通 workspace
 - `forceall`：忽略默认 scope 配置，跨所有 monitor 展示所有普通 workspace，并额外纳入当前可见的 special workspace
 
+workspace strip 补充语义：
+
+- 当当前 overview scope 只展示活动 workspace 时，应显示 workspace strip
+- strip 的进入和退出都必须与 overview 主动画共用同一视觉进度，不能只在 opening 时滑入、close 时直接消失
+- strip 点击切 workspace 后 overview 应继续保持打开，并切换到新 workspace 对应的 overview
+
 多 monitor 语义：
 
 - 每个参与 monitor 都有自己的 overview backdrop 和 slot 布局区域
@@ -242,7 +257,6 @@ dispatcher override：
 
 不做：
 
-- workspace 条带
 - 把所有 monitor 的窗口压缩进单一 monitor 画布
 
 workspace 切换补充语义：
@@ -278,6 +292,9 @@ workspace 切换补充语义：
 - `show_special`
 - `workspace_change_keeps_overview`
 - `one_workspace_per_row`
+- `workspace_strip_anchor`
+- `workspace_strip_thickness`
+- `workspace_strip_gap`
 
 约束：
 
@@ -287,6 +304,7 @@ workspace 切换补充语义：
 - `gesture_invert_vertical` 只影响被插件接管的 vertical overview gesture；它不改变普通 dispatcher、键盘输入或 Hyprland 其他 gesture 的方向
 - 如果退出 overview 时提交的真实目标窗口仍不在屏内，允许临时保持该窗口为真实 focus，直到下一次真实鼠标事件；只有当目标窗口在当前 monitor 上存在可见区域时，才允许顺带移动光标去对齐真实 focus
 - `only_active_workspace`、`only_active_monitor`、`show_special` 只影响默认 scope；`onlycurrentworkspace` 和 `forceall` dispatcher 参数优先级更高
+- `workspace_strip_anchor`、`workspace_strip_thickness` 和 `workspace_strip_gap` 只在当前 overview scope 只展示活动 workspace 时生效
 - `workspace_change_keeps_overview` 只在当前 overview scope 只展示活动 workspace 时生效；当前 scope 同时展示多个 workspace 时，workspace 切换必须被禁止
 - `workspace_change_keeps_overview = 1` 时，workspace 切换的视觉语义是 overview-to-overview 过渡，而不是普通 workspace 动画 + overview 重建
 - 除 `overview_focus_follows_mouse` 外，overview 状态机、动画、输入等配置不在 v1 第一阶段暴露
