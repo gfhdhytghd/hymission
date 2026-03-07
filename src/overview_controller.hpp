@@ -545,6 +545,7 @@ class OverviewController {
     std::size_t              m_stripSnapshotRenderDepth = 0;
     bool                     m_stripSnapshotsDirty = false;
     bool                     m_stripSnapshotRefreshScheduled = false;
+    bool                     m_primaryButtonPressed = false;
     std::optional<std::size_t> m_pressedStripIndex;
     std::optional<std::size_t> m_pressedWindowIndex;
     std::optional<std::size_t> m_draggedWindowIndex;

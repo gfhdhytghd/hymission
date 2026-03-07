@@ -1014,8 +1014,47 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
         debugLog(out.str());
     }
 
-    if (event.button != BTN_LEFT)
+    const auto buttonLooksValid = [&](uint32_t button) {
+        return button >= BTN_LEFT && button <= BTN_TASK;
+    };
+
+    uint32_t effectiveButton = event.button;
+    bool     synthesizedButton = false;
+    if (!buttonLooksValid(effectiveButton)) {
+        effectiveButton = BTN_LEFT;
+        synthesizedButton = true;
+    }
+
+    wl_pointer_button_state effectiveState = event.state;
+    bool                    synthesizedState = false;
+    if (effectiveState != WL_POINTER_BUTTON_STATE_PRESSED && effectiveState != WL_POINTER_BUTTON_STATE_RELEASED) {
+        effectiveState = m_primaryButtonPressed ? WL_POINTER_BUTTON_STATE_RELEASED : WL_POINTER_BUTTON_STATE_PRESSED;
+        synthesizedState = true;
+    } else if (synthesizedButton) {
+        // Some Hyprland/plugin ABI combinations are delivering a valid callback
+        // but a corrupted button code and an unusable edge indicator. Fall back
+        // to a minimal local left-button state machine so strip clicks still
+        // produce a press edge followed by a release edge.
+        effectiveState = m_primaryButtonPressed ? WL_POINTER_BUTTON_STATE_RELEASED : WL_POINTER_BUTTON_STATE_PRESSED;
+        synthesizedState = true;
+    }
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] mouse button resolved rawState=" << static_cast<int>(event.state) << " rawButton=" << event.button
+            << " effectiveState=" << static_cast<int>(effectiveState) << " effectiveButton=" << effectiveButton
+            << " synthesizedButton=" << (synthesizedButton ? 1 : 0) << " synthesizedState=" << (synthesizedState ? 1 : 0)
+            << " primaryDownBefore=" << (m_primaryButtonPressed ? 1 : 0);
+        debugLog(out.str());
+    }
+
+    if (effectiveButton != BTN_LEFT)
         return true;
+
+    if (effectiveState == WL_POINTER_BUTTON_STATE_PRESSED)
+        m_primaryButtonPressed = true;
+    else if (effectiveState == WL_POINTER_BUTTON_STATE_RELEASED)
+        m_primaryButtonPressed = false;
 
     const auto cachedHoveredStripIndex = m_state.hoveredStripIndex;
     const auto cachedHoveredIndex = m_state.hoveredIndex;
@@ -1026,7 +1065,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
-        out << "[hymission] mouse button state=" << static_cast<int>(event.state) << " button=" << event.button
+        out << "[hymission] mouse button state=" << static_cast<int>(effectiveState) << " button=" << effectiveButton
             << " ptr=" << vectorToString(pointerBeforeUpdate)
             << " cachedStrip=" << (cachedHoveredStripIndex ? std::to_string(*cachedHoveredStripIndex) : "<null>")
             << " liveStrip=" << (m_state.hoveredStripIndex ? std::to_string(*m_state.hoveredStripIndex) : "<null>")
@@ -1037,7 +1076,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
         debugLog(out.str());
     }
 
-    if (event.state == WL_POINTER_BUTTON_STATE_RELEASED) {
+    if (effectiveState == WL_POINTER_BUTTON_STATE_RELEASED) {
         if (m_draggedWindowIndex && *m_draggedWindowIndex < m_state.windows.size()) {
             const auto window = m_state.windows[*m_draggedWindowIndex].window;
             const auto hoveredStripIndex = m_state.hoveredStripIndex;
@@ -1086,7 +1125,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
         return true;
     }
 
-    if (event.state != WL_POINTER_BUTTON_STATE_PRESSED)
+    if (effectiveState != WL_POINTER_BUTTON_STATE_PRESSED)
         return true;
 
     if (effectiveHoveredStripIndex && *effectiveHoveredStripIndex < m_state.stripEntries.size()) {
@@ -4349,6 +4388,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     m_pendingLiveFocusWorkspaceChangeTarget.reset();
     clearPendingStripWorkspaceChange();
     clearStripWindowDragState();
+    m_primaryButtonPressed = false;
     next.phase = Phase::Opening;
     next.animationProgress = 0.0;
     next.animationFromVisual = fromVisual;
@@ -4602,6 +4642,7 @@ void OverviewController::deactivate() {
     const auto focusMonitor = desiredFocus ? (previewMonitorForWindow(desiredFocus) ? previewMonitorForWindow(desiredFocus) : desiredFocus->m_monitor.lock()) : PHLMONITOR{};
     const auto visiblePoint = shouldPreserveExitFocus ? visiblePointForWindowOnMonitor(desiredFocus, focusMonitor, preferGoalVisiblePoint) : std::nullopt;
     const bool shouldWarpCursorForExitFocus = visiblePoint && desiredFocus != m_state.focusBeforeOpen;
+    m_primaryButtonPressed = false;
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] deactivate monitor=" << (monitor ? monitor->m_name : "?");
