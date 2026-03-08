@@ -1770,11 +1770,11 @@ bool OverviewController::workspaceChangeKeepsOverviewEnabled() const {
 }
 
 bool OverviewController::hideBarsWhenStripShownEnabled() const {
-    return getConfigInt(m_handle, "plugin:hymission:hide_bar_when_strip", 0) != 0;
+    return getConfigInt(m_handle, "plugin:hymission:hide_bar_when_strip", 1) != 0;
 }
 
 bool OverviewController::showFocusIndicatorEnabled() const {
-    return getConfigInt(m_handle, "plugin:hymission:show_focus_indicator", 1) != 0;
+    return getConfigInt(m_handle, "plugin:hymission:show_focus_indicator", 0) != 0;
 }
 
 bool OverviewController::debugLogsEnabled() const {

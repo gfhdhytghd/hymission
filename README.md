@@ -205,7 +205,7 @@ plugin {
 | `only_active_monitor` | bool | `0` | Restrict the default scope to the monitor under the cursor. |
 | `show_special` | bool | `0` | Include currently visible special workspaces in the default scope. |
 | `workspace_change_keeps_overview` | bool | `0` | Keep overview open when switching workspaces in active-workspace scope. |
-| `show_focus_indicator` | bool | `1` | Render selected and hovered preview focus chrome. |
+| `show_focus_indicator` | bool | `0` | Render selected and hovered preview focus chrome. |
 
 ### Workspace strip options
 
@@ -215,7 +215,7 @@ plugin {
 | `workspace_strip_empty_mode` | string | `existing` | Empty-workspace strip policy. `existing` only shows real workspaces; `continuous` inserts the next missing numbered workspace in each positive-id gap without expanding named-workspace spans. |
 | `workspace_strip_thickness` | int | `144` | Strip thickness. |
 | `workspace_strip_gap` | int | `24` | Gap between the strip and the main overview content. |
-| `hide_bar_when_strip` | bool | `0` | Hide matching bar/layer surfaces while the strip is shown. |
+| `hide_bar_when_strip` | bool | `1` | Hide matching bar/layer surfaces while the strip is shown. |
 
 The workspace strip is shown when the current overview scope displays only the active workspace.
 By default it only shows real workspaces plus the trailing new-workspace card. In `continuous` mode, synthetic empty workspaces progressively expose numbered gaps one slot at a time and render the monitor background/wallpaper when available; the trailing new-workspace card keeps its dedicated `+` styling.
