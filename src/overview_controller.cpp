@@ -284,6 +284,10 @@ double clampUnit(double value) {
     return std::clamp(value, 0.0, 1.0);
 }
 
+bool hasUsableWindowSize(const Vector2D& size) {
+    return size.x >= 1.0 && size.y >= 1.0;
+}
+
 Rect makeRect(double x, double y, double width, double height) {
     return {
         x,
@@ -986,7 +990,7 @@ void OverviewController::renderStage(eRenderStage stage) {
             scheduleWorkspaceStripSnapshotRefresh();
         }
         if ((isAnimating() || m_state.phase == Phase::ClosingSettle || m_state.relayoutActive || m_postOpenRefreshFrames > 0) && !m_deactivatePending) {
-            damageOwnedMonitor();
+            damageOwnedMonitors();
             if (m_postOpenRefreshFrames > 0)
                 --m_postOpenRefreshFrames;
         }
@@ -1024,7 +1028,7 @@ void OverviewController::handleMouseMove() {
             }
         }
 
-        damageOwnedMonitor();
+        damageOwnedMonitors();
         return;
     }
 
@@ -1136,7 +1140,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
                 }
             }
 
-            damageOwnedMonitor();
+            damageOwnedMonitors();
             return true;
         }
 
@@ -1174,7 +1178,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
             out << "[hymission] mouse press captured strip index=" << *m_pressedStripIndex;
             debugLog(out.str());
         }
-        damageOwnedMonitor();
+        damageOwnedMonitors();
         return true;
     }
 
@@ -1182,7 +1186,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
         m_state.selectedIndex = effectiveHoveredIndex;
         m_pressedWindowIndex = effectiveHoveredIndex;
         m_pressedWindowPointer = g_pInputManager->getMouseCoordsInternal();
-        damageOwnedMonitor();
+        damageOwnedMonitors();
         return true;
     }
 
@@ -1247,8 +1251,12 @@ void OverviewController::handleWindowSetChange(PHLWINDOW window) {
         clearPostCloseForcedFocus();
     if (window && m_pendingLiveFocusWorkspaceChangeTarget.lock() == window)
         m_pendingLiveFocusWorkspaceChangeTarget.reset();
+    if (!window) {
+        clearPendingWindowGeometryRetry();
+        return;
+    }
 
-    if (!isVisible() || !window)
+    if (!isVisible())
         return;
 
     if (m_applyingWorkspaceTransitionCommit) {
@@ -1262,19 +1270,26 @@ void OverviewController::handleWindowSetChange(PHLWINDOW window) {
     if (m_workspaceTransition.active) {
         clearOverviewWorkspaceTransition();
         rebuildVisibleState();
+        updatePendingWindowGeometryRetry(window);
         return;
     }
 
-    if (!shouldAutoCloseFor(window))
+    if (!shouldAutoCloseFor(window)) {
+        if (m_pendingWindowGeometryRetryTarget.lock() == window)
+            clearPendingWindowGeometryRetry();
         return;
+    }
 
     if (m_state.phase == Phase::Opening || m_state.phase == Phase::Active) {
         rebuildVisibleState();
+        updatePendingWindowGeometryRetry(window);
         return;
     }
 
-    if (m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
+    if (m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle) {
+        clearPendingWindowGeometryRetry();
         beginClose(CloseMode::Abort);
+    }
 }
 
 void OverviewController::handleWorkspaceChange(PHLWORKSPACE workspace) {
@@ -1841,6 +1856,10 @@ std::string OverviewController::workspaceStripAnchor() const {
     }
 }
 
+WorkspaceStripEmptyMode OverviewController::workspaceStripEmptyMode() const {
+    return parseWorkspaceStripEmptyMode(getConfigString(m_handle, "plugin:hymission:workspace_strip_empty_mode", "existing"));
+}
+
 double OverviewController::workspaceStripThickness(const PHLMONITOR& monitor) const {
     const double raw = std::max(64.0, static_cast<double>(getConfigInt(m_handle, "plugin:hymission:workspace_strip_thickness", 144)));
     if (!monitor)
@@ -2149,9 +2168,10 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
 
     const bool opening = !isVisible() || openOnly || m_state.phase == Phase::Opening;
     const double initialDelta = normalizedGestureDelta(event, direction, deltaScale, gestureInvertVerticalEnabled());
+    const int    initialDirectionSign = signedUnit(initialDelta);
 
     if (recommand) {
-        if (openOnly || std::abs(initialDelta) < 0.0001)
+        if (openOnly || initialDirectionSign == 0)
             return false;
 
         const bool currentlyVisible = isVisible();
@@ -2159,23 +2179,16 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
         ScopeOverride initialScope = ScopeOverride::Default;
         double       initialSignedProgress = 0.0;
         bool         gestureOpening = true;
+        bool         allowTransfer = false;
+        int          directionSign = initialDirectionSign;
 
         if (currentlyVisible) {
             initialScope = m_state.collectionPolicy.requestedScope;
+            const int currentSign = recommandScopeSign(initialScope);
             // `recommand` always uses `onlycurrentworkspace` as its compact side,
             // regardless of the config-driven default scope.
-            initialSignedProgress = visualProgress() * (initialScope == ScopeOverride::ForceAll ? 1.0 : -1.0);
-
-            if ((initialScope == ScopeOverride::ForceAll && initialDelta >= 0.0) || (initialScope != ScopeOverride::ForceAll && initialDelta <= 0.0)) {
-                if (debugLogsEnabled()) {
-                    std::ostringstream out;
-                    out << "[hymission] recommand gesture ignored delta=" << initialDelta
-                        << " scope=" << (initialScope == ScopeOverride::ForceAll ? "forceall" : "compact");
-                    debugLog(out.str());
-                }
-                return false;
-            }
-
+            initialSignedProgress = visualProgress() * static_cast<double>(currentSign);
+            allowTransfer = resolveRecommandVisibleGestureMode(currentSign, initialDirectionSign) == RecommandVisibleGestureMode::TransferCapable;
             gestureOpening = false;
 
             if (m_state.phase == Phase::Active && m_state.relayoutActive) {
@@ -2194,9 +2207,10 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
             if (!monitor)
                 return false;
 
-            const auto initialScopeTarget = initialDelta > 0.0 ? ScopeOverride::ForceAll : compactScope;
+            const auto initialScopeTarget = initialDirectionSign > 0 ? ScopeOverride::ForceAll : compactScope;
             initialScope = initialScopeTarget;
             requestedScope = initialScopeTarget;
+            directionSign = recommandScopeSign(initialScopeTarget);
 
             m_suppressInitialHoverUpdate = true;
             beginOpen(monitor, initialScopeTarget);
@@ -2210,25 +2224,28 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
             .recommand = true,
             .startedVisible = currentlyVisible,
             .opening = gestureOpening,
+            .allowRecommandTransfer = allowTransfer,
             .requestedScope = currentlyVisible ? initialScope : requestedScope,
             .initialScope = initialScope,
             .compactScope = compactScope,
             .direction = direction,
+            .directionSign = directionSign,
             .openness = currentlyVisible ? std::abs(initialSignedProgress) : visualProgress(),
             .signedProgress = initialSignedProgress,
-            .lastSignedSpeed = 0.0,
+            .lastAlignedSpeed = 0.0,
             .deltaScale = deltaScale,
         };
 
         if (debugLogsEnabled()) {
             std::ostringstream out;
             out << "[hymission] recommand gesture begin openness=" << m_gestureSession.openness << " signed=" << m_gestureSession.signedProgress
-                << " scale=" << deltaScale << " dir=" << (direction == TRACKPAD_GESTURE_DIR_HORIZONTAL ? "horizontal" : "vertical");
+                << " transfer=" << (m_gestureSession.allowRecommandTransfer ? 1 : 0) << " scale=" << deltaScale << " dir="
+                << (direction == TRACKPAD_GESTURE_DIR_HORIZONTAL ? "horizontal" : "vertical");
             debugLog(out.str());
         }
 
         updateTrackpadGesture(event);
-        refreshOwnedMonitors();
+        damageOwnedMonitors();
         return true;
     }
 
@@ -2237,7 +2254,7 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
 
     // Keeping overview open across workspace changes only affects native workspace swipes.
     // The plugin's own toggle gesture must still be able to close the visible overview.
-    if ((opening && initialDelta <= 0.0) || (!opening && initialDelta >= 0.0)) {
+    if (initialDirectionSign == 0 || (opening && initialDelta <= 0.0)) {
         if (debugLogsEnabled()) {
             std::ostringstream out;
             out << "[hymission] gesture ignored mode=" << (opening ? "open" : "close") << " delta=" << initialDelta
@@ -2276,10 +2293,11 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
     m_gestureSession = {
         .active = true,
         .opening = opening,
-        .requestedScope = requestedScope,
+        .requestedScope = opening ? requestedScope : m_state.collectionPolicy.requestedScope,
         .direction = direction,
+        .directionSign = opening ? 1 : initialDirectionSign,
         .openness = visualProgress(),
-        .lastSignedSpeed = 0.0,
+        .lastAlignedSpeed = 0.0,
         .deltaScale = deltaScale,
     };
 
@@ -2291,7 +2309,7 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
     }
 
     updateTrackpadGesture(event);
-    refreshOwnedMonitors();
+    damageOwnedMonitors();
     return true;
 }
 
@@ -2300,10 +2318,11 @@ void OverviewController::updateTrackpadGesture(const IPointer::SSwipeUpdateEvent
         return;
 
     const double delta = normalizedGestureDelta(event, m_gestureSession.direction, m_gestureSession.deltaScale, gestureInvertVerticalEnabled());
+    const double alignedDelta = delta * static_cast<double>(m_gestureSession.directionSign);
 
     if (m_gestureSession.recommand) {
-        m_gestureSession.lastSignedSpeed = delta;
-        const double deltaProgress = delta / gestureSwipeDistance();
+        m_gestureSession.lastAlignedSpeed = alignedDelta;
+        const double deltaProgress = alignedDelta / gestureSwipeDistance();
         constexpr double MAX_STAGE_PROGRESS = 1.0 + RECOMMAND_STAGE_TRANSFER;
 
         const auto syncCurrentScopeProgress = [&] {
@@ -2324,15 +2343,18 @@ void OverviewController::updateTrackpadGesture(const IPointer::SSwipeUpdateEvent
             m_gestureSession.signedProgress = static_cast<double>(sign) * clampUnit(openness);
             m_gestureSession.openness = clampUnit(openness);
             m_gestureSession.opening = true;
+            m_gestureSession.allowRecommandTransfer = false;
+            m_gestureSession.directionSign = sign;
             return true;
         };
 
         const int currentSign = recommandScopeSign(m_gestureSession.requestedScope);
+        const double sideSpaceDelta = static_cast<double>(m_gestureSession.opening ? currentSign : -currentSign) * deltaProgress;
 
         // Crossing through the hidden workspace should leave a small transfer
         // gap before the opposite scope starts opening.
         if (std::abs(m_gestureSession.hiddenGapProgress) > 0.0001) {
-            const double projectedGap = std::clamp(m_gestureSession.hiddenGapProgress + deltaProgress, -MAX_STAGE_PROGRESS, MAX_STAGE_PROGRESS);
+            const double projectedGap = std::clamp(m_gestureSession.hiddenGapProgress + sideSpaceDelta, -MAX_STAGE_PROGRESS, MAX_STAGE_PROGRESS);
             const int    projectedGapSign = signedUnit(projectedGap);
 
             if (projectedGapSign == 0) {
@@ -2343,6 +2365,10 @@ void OverviewController::updateTrackpadGesture(const IPointer::SSwipeUpdateEvent
                 m_gestureSession.hiddenGapProgress = 0.0;
                 m_gestureSession.signedProgress = static_cast<double>(currentSign) * clampUnit(std::abs(projectedGap));
                 syncCurrentScopeProgress();
+            } else if (!m_gestureSession.allowRecommandTransfer) {
+                m_gestureSession.hiddenGapProgress = 0.0;
+                m_gestureSession.signedProgress = 0.0;
+                m_gestureSession.openness = 0.0;
             } else if (std::abs(projectedGap) < RECOMMAND_STAGE_TRANSFER) {
                 m_gestureSession.hiddenGapProgress = projectedGap;
                 m_gestureSession.signedProgress = 0.0;
@@ -2354,7 +2380,7 @@ void OverviewController::updateTrackpadGesture(const IPointer::SSwipeUpdateEvent
                     return;
             }
         } else {
-            const double projectedProgress = std::clamp(m_gestureSession.signedProgress + deltaProgress, -MAX_STAGE_PROGRESS, MAX_STAGE_PROGRESS);
+            const double projectedProgress = std::clamp(m_gestureSession.signedProgress + sideSpaceDelta, -MAX_STAGE_PROGRESS, MAX_STAGE_PROGRESS);
             const int    projectedSign = signedUnit(projectedProgress);
 
             if (projectedSign == 0) {
@@ -2363,6 +2389,10 @@ void OverviewController::updateTrackpadGesture(const IPointer::SSwipeUpdateEvent
             } else if (projectedSign == currentSign) {
                 m_gestureSession.signedProgress = static_cast<double>(currentSign) * clampUnit(std::abs(projectedProgress));
                 syncCurrentScopeProgress();
+            } else if (!m_gestureSession.allowRecommandTransfer) {
+                m_gestureSession.hiddenGapProgress = 0.0;
+                m_gestureSession.signedProgress = 0.0;
+                m_gestureSession.openness = 0.0;
             } else {
                 const double overflow = std::abs(projectedProgress);
                 if (overflow < RECOMMAND_STAGE_TRANSFER) {
@@ -2381,7 +2411,7 @@ void OverviewController::updateTrackpadGesture(const IPointer::SSwipeUpdateEvent
         if (debugLogsEnabled()) {
             std::ostringstream out;
             out << "[hymission] recommand gesture update openness=" << m_gestureSession.openness << " signed=" << m_gestureSession.signedProgress
-                << " gap=" << m_gestureSession.hiddenGapProgress << " delta=" << delta << " scope=";
+                << " gap=" << m_gestureSession.hiddenGapProgress << " aligned=" << alignedDelta << " scope=";
             switch (m_gestureSession.requestedScope) {
                 case ScopeOverride::ForceAll:
                     out << "forceall";
@@ -2397,20 +2427,20 @@ void OverviewController::updateTrackpadGesture(const IPointer::SSwipeUpdateEvent
             debugLog(out.str());
         }
 
-        refreshOwnedMonitors();
+        damageOwnedMonitors();
         return;
     }
 
-    m_gestureSession.lastSignedSpeed = delta;
-    m_gestureSession.openness = clampUnit(m_gestureSession.openness + delta / gestureSwipeDistance());
+    m_gestureSession.lastAlignedSpeed = alignedDelta;
+    m_gestureSession.openness = clampUnit(m_gestureSession.openness + (m_gestureSession.opening ? alignedDelta : -alignedDelta) / gestureSwipeDistance());
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
-        out << "[hymission] gesture update openness=" << m_gestureSession.openness << " delta=" << delta;
+        out << "[hymission] gesture update openness=" << m_gestureSession.openness << " aligned=" << alignedDelta;
         debugLog(out.str());
     }
 
-    refreshOwnedMonitors();
+    damageOwnedMonitors();
 }
 
 void OverviewController::endTrackpadGesture(bool cancelled) {
@@ -2421,12 +2451,13 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
 
     if (gesture.recommand) {
         const double speedThreshold = gestureForceSpeedThreshold();
-        const int    commitDirection = resolveRecommandGestureCommitDirection(gesture.signedProgress, gesture.lastSignedSpeed, speedThreshold, cancelled);
+        const int    commitDirection =
+            resolveRecommandGestureCommitDirection(gesture.signedProgress, gesture.opening, gesture.lastAlignedSpeed, speedThreshold, cancelled);
 
         if (debugLogsEnabled()) {
             std::ostringstream out;
             out << "[hymission] recommand gesture end cancelled=" << (cancelled ? 1 : 0) << " target=" << commitDirection << " openness=" << gesture.openness
-                << " signed=" << gesture.signedProgress << " lastSpeed=" << gesture.lastSignedSpeed;
+                << " signed=" << gesture.signedProgress << " lastAligned=" << gesture.lastAlignedSpeed;
             debugLog(out.str());
         }
 
@@ -2448,7 +2479,7 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
             m_state.animationFromVisual = gesture.openness;
             m_state.animationToVisual = 0.0;
             m_state.animationStart = {};
-            refreshOwnedMonitors();
+            damageOwnedMonitors();
             return;
         }
 
@@ -2465,19 +2496,17 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
         m_state.animationFromVisual = gesture.openness;
         m_state.animationToVisual = 1.0;
         m_state.animationStart = {};
-        refreshOwnedMonitors();
+        damageOwnedMonitors();
         return;
     }
 
-    const double         speedThreshold = gestureForceSpeedThreshold();
-    const bool           speedCommit = speedThreshold > 0.0 &&
-        (gesture.opening ? (gesture.lastSignedSpeed >= speedThreshold) : (gesture.lastSignedSpeed <= -speedThreshold));
-    const bool commit = !cancelled && (speedCommit || (gesture.opening ? gesture.openness >= 0.5 : gesture.openness <= 0.5));
+    const double speedThreshold = gestureForceSpeedThreshold();
+    const bool   commit = resolveOverviewGestureCommit(gesture.opening, gesture.openness, gesture.lastAlignedSpeed, speedThreshold, cancelled);
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] gesture end mode=" << (gesture.opening ? "open" : "close") << " cancelled=" << (cancelled ? 1 : 0) << " commit=" << (commit ? 1 : 0)
-            << " openness=" << gesture.openness << " lastSpeed=" << gesture.lastSignedSpeed;
+            << " openness=" << gesture.openness << " lastAligned=" << gesture.lastAlignedSpeed;
         debugLog(out.str());
     }
 
@@ -2517,7 +2546,7 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
         m_state.animationStart = {};
     }
 
-    refreshOwnedMonitors();
+    damageOwnedMonitors();
 }
 
 bool OverviewController::beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction) {
@@ -2634,7 +2663,7 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
         debugLog(out.str());
     }
 
-    refreshOwnedMonitors();
+    damageOwnedMonitors();
     return true;
 }
 
@@ -2670,7 +2699,7 @@ void OverviewController::updateOverviewWorkspaceSwipeGesture(double delta) {
     if (std::abs(candidateTotal) < 0.0001) {
         if (m_workspaceTransition.active) {
             m_workspaceTransition.delta = 0.0;
-            refreshOwnedMonitors();
+            damageOwnedMonitors();
         }
         return;
     }
@@ -2704,7 +2733,7 @@ void OverviewController::updateOverviewWorkspaceSwipeGesture(double delta) {
         debugLog(out.str());
     }
 
-    refreshOwnedMonitors();
+    damageOwnedMonitors();
 
     if (gestureSwipeForeverEnabled() && std::abs(m_workspaceTransition.delta) >= m_workspaceTransition.distance - 0.5)
         commitOverviewWorkspaceTransition(true);
@@ -2736,7 +2765,7 @@ void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
         debugLog(out.str());
     }
 
-    refreshOwnedMonitors();
+    damageOwnedMonitors();
 }
 
 void OverviewController::updateOverviewWorkspaceTransition() {
@@ -2762,7 +2791,7 @@ void OverviewController::updateOverviewWorkspaceTransition() {
     if (m_workspaceTransition.mode == WorkspaceTransitionMode::TimedRevert) {
         clearOverviewWorkspaceTransition();
         updateHoveredFromPointer(focusFollowsMouseEnabled(), false);
-        refreshOwnedMonitors();
+        damageOwnedMonitors();
         return;
     }
 
@@ -2772,6 +2801,8 @@ void OverviewController::updateOverviewWorkspaceTransition() {
 void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
     if (!m_workspaceTransition.active || !m_workspaceTransition.monitor)
         return;
+
+    clearPendingWindowGeometryRetry();
 
     const auto transitionMonitor = m_workspaceTransition.monitor;
     const auto oldWorkspace = transitionMonitor->m_activeWorkspace;
@@ -2786,7 +2817,7 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
     }
     if (!targetWorkspace) {
         clearOverviewWorkspaceTransition();
-        refreshOwnedMonitors();
+        damageOwnedMonitors();
         return;
     }
 
@@ -2877,10 +2908,11 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
     } else {
         updateHoveredFromPointer(focusFollowsMouseEnabled(), true, false);
     }
-    refreshOwnedMonitors();
+    damageOwnedMonitors();
 }
 
 void OverviewController::clearOverviewWorkspaceTransition() {
+    clearPendingWindowGeometryRetry();
     m_workspaceTransition = {};
 }
 
@@ -3454,25 +3486,24 @@ bool OverviewController::hasManagedWindow(const PHLWINDOW& window) const {
     return managedWindowFor(window) != nullptr;
 }
 
-bool OverviewController::shouldAutoCloseFor(const PHLWINDOW& window) const {
-    if (!window || !m_state.ownerMonitor)
+bool OverviewController::windowHasUsableStateGeometry(const PHLWINDOW& window) const {
+    if (!window)
         return false;
 
-    if (hasManagedWindow(window))
+    if (hasUsableWindowSize(window->m_realSize->value()))
         return true;
 
-    return shouldManageWindow(window, m_state);
+    return hasUsableWindowSize(window->m_realSize->goal());
 }
 
-bool OverviewController::shouldManageWindow(const PHLWINDOW& window, const State& state) const {
+bool OverviewController::windowMatchesOverviewScope(const PHLWINDOW& window, const State& state, bool requireUsableGeometry) const {
     if (!window)
         return false;
 
     if (!window->m_isMapped || window->m_fadingOut || window->isHidden())
         return false;
 
-    const auto size = window->m_realSize->value();
-    if (size.x < 1.0 || size.y < 1.0)
+    if (requireUsableGeometry && !windowHasUsableStateGeometry(window))
         return false;
 
     if (window->m_pinned) {
@@ -3488,6 +3519,20 @@ bool OverviewController::shouldManageWindow(const PHLWINDOW& window, const State
         return state.collectionPolicy.includeSpecial && containsHandle(state.managedWorkspaces, window->m_workspace) && window->m_workspace->isVisible();
 
     return containsHandle(state.managedWorkspaces, window->m_workspace);
+}
+
+bool OverviewController::shouldAutoCloseFor(const PHLWINDOW& window) const {
+    if (!window || !m_state.ownerMonitor)
+        return false;
+
+    if (hasManagedWindow(window))
+        return true;
+
+    return windowMatchesOverviewScope(window, m_state, false);
+}
+
+bool OverviewController::shouldManageWindow(const PHLWINDOW& window, const State& state) const {
+    return windowMatchesOverviewScope(window, state, true);
 }
 
 std::string OverviewController::collectionSummary(const PHLMONITOR& monitor) const {
@@ -3578,8 +3623,7 @@ std::string OverviewController::collectionSummary(const PHLMONITOR& monitor) con
             }
         }
 
-        const auto size = window->m_realSize->value();
-        if (size.x < 1.0 || size.y < 1.0) {
+        if (!windowHasUsableStateGeometry(window)) {
             ++invalidSize;
             continue;
         }
@@ -3775,7 +3819,16 @@ Rect OverviewController::goalGlobalRectForWindow(const PHLWINDOW& window) const 
 }
 
 bool OverviewController::shouldUseGoalGeometryForStateSnapshot(const PHLWINDOW& window) const {
-    return window && window->m_workspace && !window->m_workspace->isVisible();
+    if (!window)
+        return false;
+
+    if (window->m_workspace && !window->m_workspace->isVisible())
+        return true;
+
+    if (hasUsableWindowSize(window->m_realSize->value()))
+        return false;
+
+    return hasUsableWindowSize(window->m_realSize->goal());
 }
 
 void OverviewController::refreshWorkspaceLayoutSnapshot(const PHLWORKSPACE& workspace) const {
@@ -4530,6 +4583,100 @@ void OverviewController::syncFocusDuringOverviewFromSelection(bool syncScrolling
     syncRealFocusDuringOverview(selected, syncScrollingSpot);
 }
 
+void OverviewController::clearPendingWindowGeometryRetry() {
+    m_pendingWindowGeometryRetryTarget.reset();
+    m_pendingWindowGeometryRetryRemaining = 0;
+    m_pendingWindowGeometryRetryScheduled = false;
+    ++m_pendingWindowGeometryRetryGeneration;
+}
+
+void OverviewController::schedulePendingWindowGeometryRetry(const PHLWINDOW& window) {
+    if (!window || !g_pEventLoopManager || !isVisible() || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
+        return;
+
+    const auto pendingTarget = m_pendingWindowGeometryRetryTarget.lock();
+    if (pendingTarget != window)
+        m_pendingWindowGeometryRetryRemaining = 2;
+    else
+        m_pendingWindowGeometryRetryRemaining = std::max<std::size_t>(m_pendingWindowGeometryRetryRemaining, 2);
+    m_pendingWindowGeometryRetryTarget = window;
+
+    if (m_pendingWindowGeometryRetryScheduled)
+        return;
+
+    m_pendingWindowGeometryRetryScheduled = true;
+    const auto generation = ++m_pendingWindowGeometryRetryGeneration;
+    g_pEventLoopManager->doLater([this, generation] {
+        if (g_controller != this || generation != m_pendingWindowGeometryRetryGeneration)
+            return;
+
+        m_pendingWindowGeometryRetryScheduled = false;
+
+        if (!isVisible() || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle) {
+            clearPendingWindowGeometryRetry();
+            return;
+        }
+
+        const auto window = m_pendingWindowGeometryRetryTarget.lock();
+        if (!window || !windowMatchesOverviewScope(window, m_state, false)) {
+            clearPendingWindowGeometryRetry();
+            return;
+        }
+
+        if (hasManagedWindow(window)) {
+            clearPendingWindowGeometryRetry();
+            return;
+        }
+
+        if (m_pendingWindowGeometryRetryRemaining == 0) {
+            clearPendingWindowGeometryRetry();
+            return;
+        }
+
+        --m_pendingWindowGeometryRetryRemaining;
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] retry overview rebuild for pending window geometry target=" << debugWindowLabel(window)
+                << " retriesLeft=" << m_pendingWindowGeometryRetryRemaining;
+            debugLog(out.str());
+        }
+
+        rebuildVisibleState();
+        if (!isVisible()) {
+            clearPendingWindowGeometryRetry();
+            return;
+        }
+
+        if (!windowMatchesOverviewScope(window, m_state, false) || hasManagedWindow(window) || windowHasUsableStateGeometry(window) ||
+            m_pendingWindowGeometryRetryRemaining == 0) {
+            clearPendingWindowGeometryRetry();
+            return;
+        }
+
+        schedulePendingWindowGeometryRetry(window);
+    });
+}
+
+void OverviewController::updatePendingWindowGeometryRetry(const PHLWINDOW& window) {
+    if (!window)
+        return;
+
+    const auto pendingTarget = m_pendingWindowGeometryRetryTarget.lock();
+    if (!isVisible() || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle) {
+        if (pendingTarget == window)
+            clearPendingWindowGeometryRetry();
+        return;
+    }
+
+    if (!windowMatchesOverviewScope(window, m_state, false) || hasManagedWindow(window) || windowHasUsableStateGeometry(window)) {
+        if (pendingTarget == window)
+            clearPendingWindowGeometryRetry();
+        return;
+    }
+
+    schedulePendingWindowGeometryRetry(window);
+}
+
 bool OverviewController::matchesPendingLiveFocusWorkspaceChange(const PHLWORKSPACE& workspace) const {
     if (!workspace)
         return false;
@@ -4700,6 +4847,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     if (!activateHooks())
         return;
 
+    clearPendingWindowGeometryRetry();
     clearPostCloseForcedFocus();
     clearPostCloseDispatcher();
     m_pendingLiveFocusWorkspaceChangeTarget.reset();
@@ -4745,7 +4893,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
         debugLog(out.str());
     }
 
-    refreshOwnedMonitors();
+    damageOwnedMonitors();
 }
 
 bool OverviewController::retargetGestureScope(ScopeOverride requestedScope) {
@@ -4770,6 +4918,8 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
         return;
 
     const ScopedFlag beginCloseGuard(m_beginCloseInProgress);
+
+    clearPendingWindowGeometryRetry();
 
     if (mode == CloseMode::Abort)
         clearPostCloseDispatcher();
@@ -4950,7 +5100,7 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
         }
     }
 
-    refreshOwnedMonitors();
+    damageOwnedMonitors();
 }
 
 void OverviewController::deactivate() {
@@ -5086,14 +5236,20 @@ void OverviewController::deactivate() {
     m_deactivatePending = false;
     m_deactivateScheduled = false;
     m_postOpenRefreshFrames = 0;
+    clearPendingWindowGeometryRetry();
     clearOverviewWorkspaceTransition();
     m_workspaceSwipeGesture = {};
     m_stripSnapshotsDirty = false;
     m_stripSnapshotRefreshScheduled = false;
     m_state = {};
-    for (const auto& ownedMonitor : ownedMonitors)
-        refreshScene(ownedMonitor);
-    refreshScene(monitor);
+    for (const auto& ownedMonitor : ownedMonitors) {
+        g_pHyprRenderer->damageMonitor(ownedMonitor);
+        g_pCompositor->scheduleFrameForMonitor(ownedMonitor);
+    }
+    if (monitor) {
+        g_pHyprRenderer->damageMonitor(monitor);
+        g_pCompositor->scheduleFrameForMonitor(monitor);
+    }
 
     switch (postCloseDispatcher) {
         case PostCloseDispatcher::Fullscreen:
@@ -5138,27 +5294,11 @@ void OverviewController::scheduleDeactivate() {
     });
 }
 
-void OverviewController::refreshScene(const PHLMONITOR& monitor) const {
-    if (!monitor)
-        return;
-
-    if (debugLogsEnabled()) {
-        std::ostringstream out;
-        out << "[hymission] refreshScene monitor=" << monitor->m_name;
-        debugLog(out.str());
+void OverviewController::damageOwnedMonitors() const {
+    for (const auto& monitor : ownedMonitors()) {
+        g_pHyprRenderer->damageMonitor(monitor);
+        g_pCompositor->scheduleFrameForMonitor(monitor);
     }
-
-    g_pHyprRenderer->damageMonitor(monitor);
-    g_pCompositor->scheduleFrameForMonitor(monitor);
-}
-
-void OverviewController::refreshOwnedMonitors() const {
-    for (const auto& monitor : ownedMonitors())
-        refreshScene(monitor);
-}
-
-void OverviewController::damageOwnedMonitor() const {
-    refreshOwnedMonitors();
 }
 
 void OverviewController::updateAnimation() {
@@ -5205,7 +5345,7 @@ void OverviewController::updateAnimation() {
             if (appliedDeferredFullscreenMutation) {
                 m_state.settleHasSample = false;
                 m_state.settleStableFrames = 0;
-                refreshOwnedMonitors();
+                damageOwnedMonitors();
                 return;
             }
         }
@@ -5343,7 +5483,7 @@ void OverviewController::updateAnimation() {
         if (debugLogsEnabled())
             debugLog("[hymission] anim opening complete");
         updateHoveredFromPointer();
-        refreshOwnedMonitors();
+        damageOwnedMonitors();
     } else if (m_state.phase == Phase::Closing) {
         m_state.animationProgress = 1.0;
         m_state.animationFromVisual = 0.0;
@@ -5417,7 +5557,7 @@ void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncR
                 out << " active=<null>";
             debugLog(out.str());
         }
-        damageOwnedMonitor();
+        damageOwnedMonitors();
     }
 }
 
@@ -5609,7 +5749,7 @@ void OverviewController::rebuildVisibleState() {
     applyWorkspaceNameOverrides(m_state);
     refreshWorkspaceStripSnapshots();
     updateHoveredFromPointer(focusFollowsMouseEnabled(), false);
-    refreshOwnedMonitors();
+    damageOwnedMonitors();
 }
 
 void OverviewController::moveSelection(Direction direction) {
@@ -5619,7 +5759,7 @@ void OverviewController::moveSelection(Direction direction) {
     if (!m_state.selectedIndex) {
         m_state.selectedIndex = 0;
         syncFocusDuringOverviewFromSelection();
-        damageOwnedMonitor();
+        damageOwnedMonitors();
         return;
     }
 
@@ -5628,7 +5768,7 @@ void OverviewController::moveSelection(Direction direction) {
             return;
         m_state.selectedIndex = *next;
         syncFocusDuringOverviewFromSelection();
-        damageOwnedMonitor();
+        damageOwnedMonitors();
     }
 }
 
@@ -5663,7 +5803,7 @@ void OverviewController::activateStripTarget(std::size_t index) {
 
     if (targetWorkspace && entry.monitor->m_activeWorkspace == targetWorkspace) {
         m_state.hoveredStripIndex = index;
-        damageOwnedMonitor();
+        damageOwnedMonitors();
         return;
     }
 
@@ -5685,7 +5825,7 @@ void OverviewController::activateStripTarget(std::size_t index) {
     if (!beginOverviewWorkspaceTransition(entry.monitor, entry.workspaceId, targetName, targetWorkspace, syntheticTarget, WorkspaceTransitionMode::TimedCommit)) {
         if (debugLogsEnabled())
             debugLog("[hymission] strip target transition begin failed");
-        damageOwnedMonitor();
+        damageOwnedMonitors();
     }
 }
 
@@ -5752,16 +5892,19 @@ bool OverviewController::workspaceStripEntriesMatchForSnapshot(const WorkspaceSt
     if (lhsMonitorId != rhsMonitorId)
         return false;
 
-    if (lhs.newWorkspaceSlot != rhs.newWorkspaceSlot || lhs.syntheticEmpty != rhs.syntheticEmpty)
+    if (lhs.newWorkspaceSlot != rhs.newWorkspaceSlot)
         return false;
 
-    if (lhs.newWorkspaceSlot || lhs.syntheticEmpty)
+    if (lhs.workspaceId != rhs.workspaceId)
+        return false;
+
+    if (lhs.newWorkspaceSlot)
         return lhs.workspaceId == rhs.workspaceId;
 
     if (lhs.workspace && rhs.workspace)
         return lhs.workspace == rhs.workspace;
 
-    return lhs.workspaceId == rhs.workspaceId;
+    return true;
 }
 
 void OverviewController::carryOverWorkspaceStripSnapshots(State& next, const State& previous) const {
@@ -5772,7 +5915,7 @@ void OverviewController::carryOverWorkspaceStripSnapshots(State& next, const Sta
     // the new state. Otherwise workspace commits briefly render only the card
     // background because the replacement snapshot is deferred to doLater().
     for (auto& nextEntry : next.stripEntries) {
-        if (nextEntry.snapshot || nextEntry.newWorkspaceSlot || nextEntry.syntheticEmpty)
+        if (nextEntry.snapshot || nextEntry.newWorkspaceSlot)
             continue;
 
         const auto previousIt = std::find_if(previous.stripEntries.begin(), previous.stripEntries.end(), [&](const WorkspaceStripEntry& previousEntry) {
@@ -5879,7 +6022,7 @@ Rect OverviewController::workspaceStripThumbRect(const WorkspaceStripEntry& entr
 void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry) {
     entry.snapshot.reset();
 
-    if (!entry.monitor || entry.newWorkspaceSlot || entry.syntheticEmpty)
+    if (!entry.monitor || entry.newWorkspaceSlot)
         return;
 
     const Rect thumb = workspaceStripThumbRect(entry, entry.monitor);
@@ -5899,43 +6042,45 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             debugLog("[hymission] failed to resolve CHyprRenderer::renderWorkspace for strip snapshots");
     }
 
-    if (!renderWorkspaceFn)
-        return;
-
     const auto monitor = entry.monitor;
     const auto targetWorkspace = entry.workspace ? entry.workspace : g_pCompositor->getWorkspaceByID(entry.workspaceId);
-    if (!targetWorkspace)
+    if (targetWorkspace && !renderWorkspaceFn)
         return;
-
-    const std::vector<WorkspaceOverride> workspaceOverrides = {{
-        .monitorId = monitor->m_id,
-        .workspace = targetWorkspace,
-        .workspaceId = entry.workspaceId,
-        .workspaceName = entry.workspaceName,
-        .syntheticEmpty = false,
-    }};
-    State previewState = buildState(monitor, ScopeOverride::OnlyCurrentWorkspace, workspaceOverrides, true, false);
-    previewState.phase = Phase::Active;
-    previewState.animationProgress = 1.0;
-    previewState.animationFromVisual = 1.0;
-    previewState.animationToVisual = 1.0;
-    previewState.relayoutProgress = 1.0;
-    previewState.relayoutActive = false;
-
-    const Vector2D previewOffset = stripThumbnailPreviewOffset(monitor, previewState);
-    if (previewOffset.x != 0.0 || previewOffset.y != 0.0) {
-        for (auto& managed : previewState.windows) {
-            managed.targetGlobal = translateRect(managed.targetGlobal, -previewOffset.x, -previewOffset.y);
-            managed.relayoutFromGlobal = translateRect(managed.relayoutFromGlobal, -previewOffset.x, -previewOffset.y);
-            managed.exitGlobal = translateRect(managed.exitGlobal, -previewOffset.x, -previewOffset.y);
-            managed.slot.target =
-                makeRect(managed.slot.target.x - previewOffset.x, managed.slot.target.y - previewOffset.y, managed.slot.target.width, managed.slot.target.height);
-        }
-    }
+    if (!targetWorkspace && !entry.syntheticEmpty)
+        return;
 
     auto snapshot = std::make_shared<WorkspaceStripEntry::Snapshot>();
     if (!snapshot->framebuffer.alloc(fbWidth, fbHeight))
         return;
+
+    State previewState;
+    if (targetWorkspace) {
+        const std::vector<WorkspaceOverride> workspaceOverrides = {{
+            .monitorId = monitor->m_id,
+            .workspace = targetWorkspace,
+            .workspaceId = entry.workspaceId,
+            .workspaceName = entry.workspaceName,
+            .syntheticEmpty = false,
+        }};
+        previewState = buildState(monitor, ScopeOverride::OnlyCurrentWorkspace, workspaceOverrides, true, false);
+        previewState.phase = Phase::Active;
+        previewState.animationProgress = 1.0;
+        previewState.animationFromVisual = 1.0;
+        previewState.animationToVisual = 1.0;
+        previewState.relayoutProgress = 1.0;
+        previewState.relayoutActive = false;
+
+        const Vector2D previewOffset = stripThumbnailPreviewOffset(monitor, previewState);
+        if (previewOffset.x != 0.0 || previewOffset.y != 0.0) {
+            for (auto& managed : previewState.windows) {
+                managed.targetGlobal = translateRect(managed.targetGlobal, -previewOffset.x, -previewOffset.y);
+                managed.relayoutFromGlobal = translateRect(managed.relayoutFromGlobal, -previewOffset.x, -previewOffset.y);
+                managed.exitGlobal = translateRect(managed.exitGlobal, -previewOffset.x, -previewOffset.y);
+                managed.slot.target =
+                    makeRect(managed.slot.target.x - previewOffset.x, managed.slot.target.y - previewOffset.y, managed.slot.target.width, managed.slot.target.height);
+            }
+        }
+    }
 
     const auto previousWorkspace = monitor->m_activeWorkspace;
     const auto previousSpecialWorkspace = monitor->m_activeSpecialWorkspace;
@@ -5982,23 +6127,44 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         state.fullscreenOverrideActive = false;
     };
 
+    const auto renderBackgroundLayers = [&](const Time::steady_tp& now) {
+        if (!m_renderLayerOriginal)
+            return;
+
+        for (const auto layerKind : {ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM}) {
+            for (const auto& layer : g_pCompositor->m_layers) {
+                if (!layer || !layer->m_mapped || layer->m_readyToDelete)
+                    continue;
+
+                const auto layerMonitor = layer->m_monitor.lock();
+                if (!layerMonitor || layerMonitor != monitor || layer->m_layer != static_cast<int>(layerKind))
+                    continue;
+
+                m_renderLayerOriginal(g_pHyprRenderer.get(), layer, monitor, now, false, false);
+            }
+        }
+    };
+
     ++m_stripSnapshotRenderDepth;
     g_pHyprRenderer->makeEGLCurrent();
     g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
-    m_stripPreviewContext.active = true;
-    m_stripPreviewContext.monitor = monitor;
-    m_stripPreviewContext.state = std::move(previewState);
-    m_stripPreviewContext.framebufferSize = Vector2D{static_cast<double>(fbWidth), static_cast<double>(fbHeight)};
-    applyFullscreenOverrideForState(m_stripPreviewContext.state, true);
+    if (targetWorkspace) {
+        m_stripPreviewContext.active = true;
+        m_stripPreviewContext.monitor = monitor;
+        m_stripPreviewContext.state = std::move(previewState);
+        m_stripPreviewContext.framebufferSize = Vector2D{static_cast<double>(fbWidth), static_cast<double>(fbHeight)};
+        applyFullscreenOverrideForState(m_stripPreviewContext.state, true);
+    }
 
-    if (previousWorkspace && targetWorkspace != previousWorkspace && previousWorkspace->m_visible) {
+    if (targetWorkspace && previousWorkspace && targetWorkspace != previousWorkspace && previousWorkspace->m_visible) {
         previousWorkspace->m_visible = false;
         previousVisibilityChanged = true;
         g_pDesktopAnimationManager->startAnimation(previousWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_OUT, false, true);
         previousAnimationActivated = true;
     }
 
-    monitor->m_activeSpecialWorkspace.reset();
+    if (targetWorkspace)
+        monitor->m_activeSpecialWorkspace.reset();
 
     if (targetWorkspace) {
         monitor->m_activeWorkspace = targetWorkspace;
@@ -6012,18 +6178,23 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             monitor->m_activeSpecialWorkspace = previousSpecialWorkspace;
     }
 
-    CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
+    const auto renderNow = Time::steadyNow();
+    CRegion     fakeDamage{0, 0, INT16_MAX, INT16_MAX};
     g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &snapshot->framebuffer);
     g_pHyprOpenGL->clear(CHyprColor{0.05, 0.06, 0.08, 1.0});
-    renderWorkspaceFn(g_pHyprRenderer.get(), monitor, targetWorkspace, Time::steadyNow(), CBox{0.0, 0.0, static_cast<double>(fbWidth), static_cast<double>(fbHeight)});
+    renderBackgroundLayers(renderNow);
+    if (targetWorkspace && renderWorkspaceFn)
+        renderWorkspaceFn(g_pHyprRenderer.get(), monitor, targetWorkspace, renderNow, CBox{0.0, 0.0, static_cast<double>(fbWidth), static_cast<double>(fbHeight)});
     g_pHyprOpenGL->m_renderData.blockScreenShader = true;
     g_pHyprRenderer->endRender();
     g_pHyprOpenGL->m_renderData.blockScreenShader = previousBlockScreenShader;
-    applyFullscreenOverrideForState(m_stripPreviewContext.state, false);
-    m_stripPreviewContext.state = {};
-    m_stripPreviewContext.framebufferSize = {};
-    m_stripPreviewContext.monitor.reset();
-    m_stripPreviewContext.active = false;
+    if (targetWorkspace) {
+        applyFullscreenOverrideForState(m_stripPreviewContext.state, false);
+        m_stripPreviewContext.state = {};
+        m_stripPreviewContext.framebufferSize = {};
+        m_stripPreviewContext.monitor.reset();
+        m_stripPreviewContext.active = false;
+    }
 
     if (targetAnimationActivated && !restoreCurrentWorkspaceAnimation)
         g_pDesktopAnimationManager->startAnimation(targetWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_OUT, false, true);
@@ -6123,7 +6294,7 @@ void OverviewController::renderWorkspaceStrip() const {
         const Rect thumb = rectToMonitorLocal(outerGlobal, renderMonitor);
         const Rect thumbRender = scaleRectForRender(thumb, renderMonitor);
 
-        const CHyprColor cardColor = entry.newWorkspaceSlot ? CHyprColor(0.08, 0.12, 0.18, 0.22 * progress) :
+        const CHyprColor cardColor = entry.newWorkspaceSlot ? CHyprColor(0.11, 0.16, 0.23, 0.26 * progress) :
                                       entry.syntheticEmpty ? CHyprColor(0.06, 0.10, 0.16, 0.18 * progress) :
                                       entry.active ? CHyprColor(0.10, 0.18, 0.32, 0.24 * progress) :
                                                      CHyprColor(0.05, 0.09, 0.15, 0.18 * progress);
@@ -6132,7 +6303,7 @@ void OverviewController::renderWorkspaceStrip() const {
 
         g_pHyprOpenGL->renderRect(toBox(thumbRender), cardColor, {.blur = true, .blurA = 1.0F});
 
-        if (!entry.syntheticEmpty && !entry.newWorkspaceSlot && entry.snapshot && entry.snapshot->framebuffer.isAllocated() && entry.snapshot->framebuffer.getTexture()) {
+        if (!entry.newWorkspaceSlot && entry.snapshot && entry.snapshot->framebuffer.isAllocated() && entry.snapshot->framebuffer.getTexture()) {
             g_pHyprOpenGL->renderTexture(entry.snapshot->framebuffer.getTexture(), toBox(thumbRender), {.a = static_cast<float>(std::clamp(progress, 0.0, 1.0))});
         }
 
@@ -6141,12 +6312,14 @@ void OverviewController::renderWorkspaceStrip() const {
         }
 
         if (entry.newWorkspaceSlot) {
-            const Rect plusHorizontal = makeRect(thumb.centerX() - thumb.width * 0.18, thumb.centerY() - 1.5, thumb.width * 0.36, 3.0);
-            const Rect plusVertical = makeRect(thumb.centerX() - 1.5, thumb.centerY() - thumb.height * 0.18, 3.0, thumb.height * 0.36);
-            g_pHyprOpenGL->renderRect(toBox(scaleRectForRender(plusHorizontal, renderMonitor)), CHyprColor(0.96, 0.98, 1.0, 0.92 * progress),
-                                      {});
-            g_pHyprOpenGL->renderRect(toBox(scaleRectForRender(plusVertical, renderMonitor)), CHyprColor(0.96, 0.98, 1.0, 0.92 * progress),
-                                      {});
+            const double plusArmLength = std::min(thumb.width, thumb.height) * 0.28;
+            const double plusThickness = std::max(2.0, std::round(std::min(thumb.width, thumb.height) * 0.03));
+            const Rect plusHorizontal =
+                makeRect(thumb.centerX() - plusArmLength * 0.5, thumb.centerY() - plusThickness * 0.5, plusArmLength, plusThickness);
+            const Rect plusVertical =
+                makeRect(thumb.centerX() - plusThickness * 0.5, thumb.centerY() - plusArmLength * 0.5, plusThickness, plusArmLength);
+            g_pHyprOpenGL->renderRect(toBox(scaleRectForRender(plusHorizontal, renderMonitor)), CHyprColor(0.97, 0.985, 1.0, 0.88 * progress), {});
+            g_pHyprOpenGL->renderRect(toBox(scaleRectForRender(plusVertical, renderMonitor)), CHyprColor(0.97, 0.985, 1.0, 0.88 * progress), {});
         }
     }
 }
@@ -6158,10 +6331,11 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
     if (!workspaceStripEnabled(state))
         return;
 
-    const std::string anchor = workspaceStripAnchor();
-    const bool        horizontal = anchor == "top";
-    const double      stripGap = std::clamp(workspaceStripGap() * 0.5, 8.0, 24.0);
-    const double      padding = 12.0;
+    const std::string            anchor = workspaceStripAnchor();
+    const WorkspaceStripEmptyMode emptyMode = workspaceStripEmptyMode();
+    const bool                   horizontal = anchor == "top";
+    const double                 stripGap = std::clamp(workspaceStripGap() * 0.5, 8.0, 24.0);
+    const double                 padding = 12.0;
 
     for (const auto& monitor : state.participatingMonitors) {
         if (!monitor)
@@ -6194,23 +6368,18 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
                 normalById.emplace(workspace->m_id, workspace);
         }
 
-        WORKSPACEID lowestId = INT64_MAX;
-        WORKSPACEID highestId = INT64_MIN;
+        std::vector<int64_t> workspaceIds;
+        workspaceIds.reserve(normalWorkspaces.size());
         for (const auto& workspace : normalWorkspaces) {
-            if (!workspace)
-                continue;
-            lowestId = std::min(lowestId, workspace->m_id);
-            highestId = std::max(highestId, workspace->m_id);
+            if (workspace)
+                workspaceIds.push_back(workspace->m_id);
         }
 
-        if (lowestId == INT64_MAX || highestId == INT64_MIN) {
-            const auto fallbackId = monitor->m_activeWorkspace && !monitor->m_activeWorkspace->m_isSpecialWorkspace ? monitor->m_activeWorkspace->m_id : 1;
-            lowestId = fallbackId;
-            highestId = fallbackId;
-        }
+        const auto stripWorkspaceIds = expandWorkspaceStripWorkspaceIds(workspaceIds, emptyMode);
 
         std::vector<WorkspaceStripEntry> monitorEntries;
-        for (WORKSPACEID workspaceId = lowestId; workspaceId <= highestId; ++workspaceId) {
+        for (const auto rawWorkspaceId : stripWorkspaceIds) {
+            const auto workspaceId = static_cast<WORKSPACEID>(rawWorkspaceId);
             const auto it = normalById.find(workspaceId);
             if (it != normalById.end()) {
                 monitorEntries.push_back({
@@ -6235,7 +6404,7 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
             }
         }
 
-        WORKSPACEID nextWorkspaceId = std::max<WORKSPACEID>(highestId, 0) + 1;
+        WORKSPACEID nextWorkspaceId = stripWorkspaceIds.empty() ? 1 : static_cast<WORKSPACEID>(std::max<int64_t>(stripWorkspaceIds.back(), 0) + 1);
         while (g_pCompositor->getWorkspaceByID(nextWorkspaceId))
             ++nextWorkspaceId;
 
@@ -6301,8 +6470,7 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
         if (!window || !window->m_isMapped || window->m_fadingOut || window->isHidden())
             continue;
 
-        const auto size = window->m_realSize->value();
-        if (size.x < 1.0 || size.y < 1.0)
+        if (!windowHasUsableStateGeometry(window))
             continue;
 
         const bool useGoalGeometry = shouldUseGoalGeometryForStateSnapshot(window);

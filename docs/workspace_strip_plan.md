@@ -11,9 +11,10 @@
 - strip 负责展示全 workspace 缩略图、切换和跨 workspace 拖拽目标
 - 支持 `workspace_strip_anchor = top|left|right`
 - strip click 会切换到目标 workspace，并保持 overview 打开
-- strip 会合成现有 workspace、empty gap 槽位和 trailing new-workspace 槽位
+- strip 默认只显示现有 workspace 和 trailing new-workspace 槽位；`workspace_strip_empty_mode = continuous` 时才会补 empty gap 槽位
 - overview 内已支持本地拖拽：左键按下窗口、移动超过阈值后进入 ghost 拖拽，释放到 strip 目标时移动窗口到目标 workspace；释放到 new-workspace 槽位时会先创建 workspace
 - strip 缩略图已改为基于 Hyprland `renderWorkspace(...)` 的离屏 snapshot，来自真实 workspace 渲染结果
+- synthetic empty workspace 缩略图当前会优先渲染 monitor 背景 / 壁纸层；`new workspace` 槽位继续保留独立 `+` 卡片
 - strip / selection chrome 的 overlay 渲染已改为在 `RENDER_POST_WINDOWS` 注入自定义 render-pass element，而不是直接在 stage callback 里 immediate OpenGL 绘制
 - strip / selection chrome / backdrop 的 immediate overlay 坐标已统一转换到 monitor-local physical render space，避免 scale != 1 时出现 1/2 尺寸或偏移
 - 纯逻辑层已补 `anchor` / band reservation / slot layout / strip hit-test 测试
@@ -157,6 +158,7 @@
 第一版新增最小配置面：
 
 - `workspace_strip_anchor = top|left|right`
+- `workspace_strip_empty_mode = existing|continuous`
 - `workspace_strip_thickness`
 - `workspace_strip_gap`
 
@@ -164,7 +166,8 @@
 
 - 不新增 dispatcher
 - strip 是否显示继续由 `only_active_workspace = 1` 决定
-- empty / new workspace 槽位在第一版固定开启，不再额外暴露开关
+- trailing new-workspace 槽位继续固定开启
+- empty gap 槽位由 `workspace_strip_empty_mode` 控制；默认 `existing`，可选 `continuous`
 
 ## 5. 测试计划
 

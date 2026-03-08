@@ -62,6 +62,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("debug_surface_logs", 0L);
 #undef CONF
     HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:workspace_strip_anchor", Hyprlang::STRING{"top"});
+    HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:workspace_strip_empty_mode", Hyprlang::STRING{"existing"});
 
     g_overviewController = std::make_unique<hymission::OverviewController>(g_pluginHandle);
     if (!g_overviewController->initialize()) {

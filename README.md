@@ -69,10 +69,10 @@ ctest --test-dir build-cmake --output-on-failure
 Safe reload sequence on this machine:
 
 ```sh
-hyprctl plugin unload /home/wilf/data/hyprland_plugins/hymission/build/libhymission.so
-hyprctl plugin unload /home/wilf/data/hyprland_plugins/hymission/build-cmake/libhymission.so
-hyprctl plugin unload /home/wilf/data/hyprland_plugins/hymission/build-meson/libhymission.so
-hyprctl plugin load /home/wilf/data/hyprland_plugins/hymission/build-cmake/libhymission.so
+hyprctl plugin unload "$(pwd)/build/libhymission.so"
+hyprctl plugin unload "$(pwd)/build-cmake/libhymission.so"
+hyprctl plugin unload "$(pwd)/build-meson/libhymission.so"
+hyprctl plugin load "$(pwd)/build-cmake/libhymission.so"
 hyprctl plugin list
 ```
 
@@ -82,6 +82,7 @@ Build outputs:
 
 - Plugin: `build-cmake/libhymission.so`
 - Layout demo: `build-cmake/hymission-layout-demo`
+- Layout test: `build-cmake/hymission-mission-layout-test`
 - Logic test: `build-cmake/hymission-overview-logic-test`
 
 ## Usage
@@ -124,10 +125,12 @@ Gesture notes:
 
 - `vertical` and `horizontal` are supported
 - unofficial shorthand such as `gesture = ..., hymission:toggle,...` is not supported
-- default gesture semantics are state-aware: hidden overview opens in the configured direction, visible overview closes in the opposite direction
+- default gesture semantics are state-aware: hidden overview opens in the configured direction, and visible `hymission:toggle,*` overview can close in either swipe direction
 - `recommand` is gesture-only and is only valid with `hymission:toggle`
 - in `recommand` mode, one side opens `forceall` and the other side opens `onlycurrentworkspace`
-- switching from one visible `recommand` side to the other must pass through hidden state and then cross a small transfer gap before the opposite side starts opening
+- switching from one visible `recommand` side to the other only works in the side-changing direction; it must pass through hidden state and then cross a small transfer gap before the opposite side starts opening
+- swiping the other visible `recommand` direction only exits overview back to hidden and does not continue into the opposite side
+- a gesture that started from hidden can still be pulled back to cancel, but it cannot become a new visible-start close/transfer gesture until you lift and swipe again
 - release still uses a `50% + velocity` commit rule
 
 ## Configuration
@@ -161,6 +164,7 @@ plugin {
         workspace_change_keeps_overview = 0
 
         workspace_strip_anchor = top
+        workspace_strip_empty_mode = existing
         workspace_strip_thickness = 144
         workspace_strip_gap = 24
         hide_bar_when_strip = 1
@@ -208,11 +212,13 @@ plugin {
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `workspace_strip_anchor` | string | `top` | Strip anchor. Supports `top`, `left`, and `right`. |
+| `workspace_strip_empty_mode` | string | `existing` | Empty-workspace strip policy. `existing` only shows real workspaces; `continuous` inserts the next missing numbered workspace in each positive-id gap without expanding named-workspace spans. |
 | `workspace_strip_thickness` | int | `144` | Strip thickness. |
 | `workspace_strip_gap` | int | `24` | Gap between the strip and the main overview content. |
 | `hide_bar_when_strip` | bool | `0` | Hide matching bar/layer surfaces while the strip is shown. |
 
 The workspace strip is shown when the current overview scope displays only the active workspace.
+By default it only shows real workspaces plus the trailing new-workspace card. In `continuous` mode, synthetic empty workspaces progressively expose numbered gaps one slot at a time and render the monitor background/wallpaper when available; the trailing new-workspace card keeps its dedicated `+` styling.
 
 ### Debug options
 
@@ -227,6 +233,7 @@ Useful commands:
 
 ```sh
 ./build-cmake/hymission-layout-demo
+./build-cmake/hymission-mission-layout-test
 ./build-cmake/hymission-overview-logic-test
 hyprctl dispatch hymission:debug_current_layout
 ```

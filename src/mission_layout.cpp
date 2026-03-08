@@ -12,6 +12,8 @@ namespace {
 struct PreparedWindow {
     WindowInput input;
     double      weightScale = 1.0;
+    double      layoutWidth = 0.0;
+    double      layoutHeight = 0.0;
     double      scaledWidth = 0.0;
     double      scaledHeight = 0.0;
 };
@@ -40,14 +42,30 @@ double clampPositive(double value) {
     return std::max(0.0, value);
 }
 
+double clampAdditionalScale(double value) {
+    return std::clamp(value, 0.0, 1.0);
+}
+
+double normalizedMaxPreviewScale(const LayoutConfig& config) {
+    return std::max(0.0, config.maxPreviewScale);
+}
+
+double normalizedMinSlotScale(const LayoutConfig& config) {
+    return std::clamp(config.minSlotScale, 0.0, normalizedMaxPreviewScale(config));
+}
+
+double clampLayoutScale(double value, const LayoutConfig& config) {
+    return std::clamp(value, normalizedMinSlotScale(config), normalizedMaxPreviewScale(config));
+}
+
 double lerp(double a, double b, double t) {
     const auto clamped = std::clamp(t, 0.0, 1.0);
     return a + (b - a) * clamped;
 }
 
-double computeWindowScale(const WindowInput& window, const Rect& monitorArea, const LayoutConfig& config) {
+double computeWindowScale(const Rect& naturalForLayout, const Rect& monitorArea, const LayoutConfig& config) {
     const double denom = std::max(1.0, monitorArea.height);
-    const double ratio = std::clamp(window.natural.height / denom, 0.0, 1.0);
+    const double ratio = std::clamp(naturalForLayout.height / denom, 0.0, 1.0);
     return lerp(config.smallWindowBoost, 1.0, ratio);
 }
 
@@ -83,11 +101,11 @@ std::vector<PreparedWindow> prepareWindows(const std::vector<WindowInput>& windo
     for (const auto& window : windows) {
         PreparedWindow item;
         item.input = window;
-        item.input.natural.width = std::max(window.natural.width, config.minWindowLength);
-        item.input.natural.height = std::max(window.natural.height, config.minWindowLength);
-        item.weightScale = computeWindowScale(item.input, area, config);
-        item.scaledWidth = item.input.natural.width * item.weightScale;
-        item.scaledHeight = item.input.natural.height * item.weightScale;
+        item.layoutWidth = std::max(window.natural.width, config.minWindowLength);
+        item.layoutHeight = std::max(window.natural.height, config.minWindowLength);
+        item.weightScale = computeWindowScale({window.natural.x, window.natural.y, item.layoutWidth, item.layoutHeight}, area, config);
+        item.scaledWidth = item.layoutWidth * item.weightScale;
+        item.scaledHeight = item.layoutHeight * item.weightScale;
         prepared.push_back(item);
     }
 
@@ -135,7 +153,7 @@ LayoutCandidate buildCandidate(const std::vector<PreparedWindow>& prepared, std:
         const double horizontalScale = (area.width - horizontalSpacing) / std::max(1.0, candidate.gridWidth);
         const double verticalScale = (area.height - verticalSpacing) / std::max(1.0, candidate.gridHeight);
 
-        candidate.layoutScale = std::clamp(std::min(horizontalScale, verticalScale), config.minSlotScale, config.maxPreviewScale);
+        candidate.layoutScale = clampLayoutScale(std::min(horizontalScale, verticalScale), config);
 
         for (auto& row : candidate.rows) {
             row.width = row.fullWidth * candidate.layoutScale + static_cast<double>(row.windows.size() > 0 ? row.windows.size() - 1 : 0) * config.columnSpacing;
@@ -169,11 +187,11 @@ LayoutCandidate buildCandidate(const std::vector<PreparedWindow>& prepared, std:
         Row row;
         for (; windowIdx < sorted.size(); ++windowIdx) {
             const auto& window = sorted[windowIdx];
-            row.fullHeight = std::max(row.fullHeight, window.scaledHeight);
 
             if (keepSameRow(row, window.scaledWidth, idealRowWidth) || rowIndex + 1 == numRows) {
                 row.windows.push_back(window);
                 row.fullWidth += window.scaledWidth;
+                row.fullHeight = std::max(row.fullHeight, window.scaledHeight);
             } else {
                 break;
             }
@@ -201,7 +219,7 @@ LayoutCandidate buildCandidate(const std::vector<PreparedWindow>& prepared, std:
     const double horizontalScale = (area.width - horizontalSpacing) / std::max(1.0, candidate.gridWidth);
     const double verticalScale = (area.height - verticalSpacing) / std::max(1.0, candidate.gridHeight);
 
-    candidate.layoutScale = std::clamp(std::min(horizontalScale, verticalScale), config.minSlotScale, config.maxPreviewScale);
+    candidate.layoutScale = clampLayoutScale(std::min(horizontalScale, verticalScale), config);
 
     for (auto& row : candidate.rows) {
         row.width = row.fullWidth * candidate.layoutScale + static_cast<double>(row.windows.size() > 0 ? row.windows.size() - 1 : 0) * config.columnSpacing;
@@ -226,7 +244,7 @@ std::vector<WindowSlot> materializeSlots(LayoutCandidate candidate, const Rect& 
         heightWithoutSpacing += row.height;
 
     const double verticalSpacing = static_cast<double>(candidate.rows.size() > 0 ? candidate.rows.size() - 1 : 0) * config.rowSpacing;
-    const double additionalVerticalScale = std::min(1.0, (area.height - verticalSpacing) / std::max(1.0, heightWithoutSpacing));
+    const double additionalVerticalScale = clampAdditionalScale((area.height - verticalSpacing) / std::max(1.0, heightWithoutSpacing));
 
     double compensation = 0.0;
     double y = 0.0;
@@ -234,7 +252,7 @@ std::vector<WindowSlot> materializeSlots(LayoutCandidate candidate, const Rect& 
     for (auto& row : candidate.rows) {
         const double horizontalSpacing = static_cast<double>(row.windows.size() > 0 ? row.windows.size() - 1 : 0) * config.columnSpacing;
         const double widthWithoutSpacing = std::max(1.0, row.width - horizontalSpacing);
-        const double additionalHorizontalScale = std::min(1.0, (area.width - horizontalSpacing) / widthWithoutSpacing);
+        const double additionalHorizontalScale = clampAdditionalScale((area.width - horizontalSpacing) / widthWithoutSpacing);
 
         if (additionalHorizontalScale < additionalVerticalScale) {
             row.additionalScale = additionalHorizontalScale;
@@ -260,10 +278,10 @@ std::vector<WindowSlot> materializeSlots(LayoutCandidate candidate, const Rect& 
         double x = row.x;
         for (const auto& window : row.windows) {
             double scale = candidate.layoutScale * window.weightScale * row.additionalScale;
-            const double cellWidth = window.input.natural.width * scale;
-            const double cellHeight = window.input.natural.height * scale;
+            const double cellWidth = window.layoutWidth * scale;
+            const double cellHeight = window.layoutHeight * scale;
 
-            scale = std::min(scale, config.maxPreviewScale);
+            scale = std::clamp(scale, 0.0, normalizedMaxPreviewScale(config));
 
             const double previewWidth = window.input.natural.width * scale;
             const double previewHeight = window.input.natural.height * scale;
@@ -307,11 +325,8 @@ std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowIn
         if (candidate.rows.empty())
             continue;
 
-        if (!best || candidate.score >= best->score) {
+        if (!best || candidate.score >= best->score)
             best = std::move(candidate);
-        } else {
-            break;
-        }
     }
 
     if (!best)

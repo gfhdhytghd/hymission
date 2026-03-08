@@ -240,14 +240,16 @@ class OverviewController {
         bool         recommand = false;
         bool         startedVisible = false;
         bool         opening = true;
+        bool         allowRecommandTransfer = false;
         ScopeOverride requestedScope = ScopeOverride::Default;
         ScopeOverride initialScope = ScopeOverride::Default;
         ScopeOverride compactScope = ScopeOverride::Default;
         eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_VERTICAL;
+        int          directionSign = 1;
         double       openness = 0.0;
         double       signedProgress = 0.0;
         double       hiddenGapProgress = 0.0;
-        double       lastSignedSpeed = 0.0;
+        double       lastAlignedSpeed = 0.0;
         float        deltaScale = 1.0F;
     };
 
@@ -344,6 +346,7 @@ class OverviewController {
     [[nodiscard]] bool         shouldBlockWorkspaceSwitchInOverview() const;
     [[nodiscard]] bool         shouldOverrideWorkspaceNames(const State& state) const;
     [[nodiscard]] std::string  workspaceStripAnchor() const;
+    [[nodiscard]] WorkspaceStripEmptyMode workspaceStripEmptyMode() const;
     [[nodiscard]] double       workspaceStripThickness(const PHLMONITOR& monitor) const;
     [[nodiscard]] double       workspaceStripGap() const;
     [[nodiscard]] bool         workspaceStripEnabled(const State& state) const;
@@ -376,6 +379,8 @@ class OverviewController {
     [[nodiscard]] bool         ownsMonitor(const PHLMONITOR& monitor) const;
     [[nodiscard]] bool         ownsWorkspace(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] bool         hasManagedWindow(const PHLWINDOW& window) const;
+    [[nodiscard]] bool         windowHasUsableStateGeometry(const PHLWINDOW& window) const;
+    [[nodiscard]] bool         windowMatchesOverviewScope(const PHLWINDOW& window, const State& state, bool requireUsableGeometry) const;
     [[nodiscard]] bool         shouldAutoCloseFor(const PHLWINDOW& window) const;
     [[nodiscard]] bool         shouldManageWindow(const PHLWINDOW& window, const State& state) const;
     [[nodiscard]] std::string  collectionSummary(const PHLMONITOR& monitor) const;
@@ -438,6 +443,9 @@ class OverviewController {
     void                       refreshExitLayoutForFocus(const PHLWINDOW& window) const;
     void                       syncRealFocusDuringOverview(const PHLWINDOW& window, bool syncScrollingSpot = true);
     void                       syncFocusDuringOverviewFromSelection(bool syncScrollingSpot = true);
+    void                       clearPendingWindowGeometryRetry();
+    void                       schedulePendingWindowGeometryRetry(const PHLWINDOW& window);
+    void                       updatePendingWindowGeometryRetry(const PHLWINDOW& window);
     [[nodiscard]] bool         matchesPendingLiveFocusWorkspaceChange(const PHLWORKSPACE& workspace) const;
     void                       clearPostCloseForcedFocus();
     void                       clearPostCloseDispatcher();
@@ -450,9 +458,7 @@ class OverviewController {
     [[nodiscard]] bool retargetGestureScope(ScopeOverride requestedScope);
     void deactivate();
     void scheduleDeactivate();
-    void refreshScene(const PHLMONITOR& monitor) const;
-    void refreshOwnedMonitors() const;
-    void damageOwnedMonitor() const;
+    void damageOwnedMonitors() const;
     void updateAnimation();
     void updateHoveredFromPointer(bool syncSelection = true, bool syncRealFocus = true, bool syncScrollingSpot = true);
     void rebuildVisibleState();
@@ -537,6 +543,10 @@ class OverviewController {
     bool                      m_deactivateScheduled = false;
     std::size_t               m_surfaceRenderDataTransformDepth = 0;
     PHLWINDOWREF              m_pendingLiveFocusWorkspaceChangeTarget;
+    PHLWINDOWREF              m_pendingWindowGeometryRetryTarget;
+    bool                      m_pendingWindowGeometryRetryScheduled = false;
+    std::size_t               m_pendingWindowGeometryRetryRemaining = 0;
+    std::size_t               m_pendingWindowGeometryRetryGeneration = 0;
     PHLWORKSPACEREF           m_pendingStripWorkspaceChangeTarget;
     PHLWINDOWREF              m_postCloseForcedFocus;
     bool                      m_postCloseForcedFocusLatched = false;

@@ -46,6 +46,14 @@ executable('hymission-layout-demo',
   install: false,
 )
 
+mission_layout_test = executable('hymission-mission-layout-test',
+  ['tools/mission_layout_test.cpp', 'src/mission_layout.cpp'],
+  include_directories: include_directories('src'),
+  install: false,
+)
+
+test('hymission-mission-layout-test', mission_layout_test)
+
 overview_logic_test = executable('hymission-overview-logic-test',
   ['tools/overview_logic_test.cpp', 'src/overview_logic.cpp'],
   include_directories: include_directories('src'),

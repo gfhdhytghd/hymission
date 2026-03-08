@@ -155,7 +155,26 @@ bool shouldSyncOverviewLiveFocus(bool handlesInput, bool overviewFocusFollowsMou
     return handlesInput && overviewFocusFollowsMouse && inputFollowMouseBeforeOpen != 0;
 }
 
-int resolveRecommandGestureCommitDirection(double signedProgress, double lastSignedSpeed, double speedThreshold, bool cancelled) {
+RecommandVisibleGestureMode resolveRecommandVisibleGestureMode(int currentScopeSign, int gestureDirectionSign) {
+    if (currentScopeSign != 0 && gestureDirectionSign == -currentScopeSign)
+        return RecommandVisibleGestureMode::TransferCapable;
+
+    return RecommandVisibleGestureMode::CloseOnly;
+}
+
+bool resolveOverviewGestureCommit(bool opening, double openness, double lastAlignedSpeed, double speedThreshold, bool cancelled) {
+    if (cancelled)
+        return false;
+
+    const bool speedForward = speedThreshold > 0.0 && lastAlignedSpeed >= speedThreshold;
+    const bool speedReverse = speedThreshold > 0.0 && lastAlignedSpeed <= -speedThreshold;
+    if (speedReverse)
+        return false;
+
+    return speedForward || (opening ? openness >= 0.5 : openness <= 0.5);
+}
+
+int resolveRecommandGestureCommitDirection(double signedProgress, bool opening, double lastAlignedSpeed, double speedThreshold, bool cancelled) {
     if (cancelled)
         return 0;
 
@@ -163,12 +182,12 @@ int resolveRecommandGestureCommitDirection(double signedProgress, double lastSig
     if (sign == 0)
         return 0;
 
-    const bool speedOpen = speedThreshold > 0.0 && ((sign > 0 && lastSignedSpeed >= speedThreshold) || (sign < 0 && lastSignedSpeed <= -speedThreshold));
-    const bool speedClose = speedThreshold > 0.0 && ((sign > 0 && lastSignedSpeed <= -speedThreshold) || (sign < 0 && lastSignedSpeed >= speedThreshold));
-    if (speedClose)
+    const bool speedTowardCurrentSide = speedThreshold > 0.0 && (opening ? lastAlignedSpeed >= speedThreshold : lastAlignedSpeed <= -speedThreshold);
+    const bool speedTowardHidden = speedThreshold > 0.0 && (opening ? lastAlignedSpeed <= -speedThreshold : lastAlignedSpeed >= speedThreshold);
+    if (speedTowardHidden)
         return 0;
 
-    return (speedOpen || std::abs(signedProgress) >= 0.5) ? sign : 0;
+    return (speedTowardCurrentSide || std::abs(signedProgress) >= 0.5) ? sign : 0;
 }
 
 OverviewWorkspaceChangeAction resolveOverviewWorkspaceChangeAction(bool overviewVisible, bool applyingWorkspaceTransitionCommit, bool workspaceTransitionActive,
@@ -194,8 +213,44 @@ WorkspaceStripAnchor parseWorkspaceStripAnchor(std::string_view value) {
     return WorkspaceStripAnchor::Top;
 }
 
+WorkspaceStripEmptyMode parseWorkspaceStripEmptyMode(std::string_view value) {
+    value = trimAsciiWhitespace(value);
+
+    if (equalsAsciiInsensitive(value, "continuous"))
+        return WorkspaceStripEmptyMode::Continuous;
+
+    return WorkspaceStripEmptyMode::Existing;
+}
+
 bool isWorkspaceStripHorizontal(WorkspaceStripAnchor anchor) {
     return anchor == WorkspaceStripAnchor::Top;
+}
+
+std::vector<int64_t> expandWorkspaceStripWorkspaceIds(const std::vector<int64_t>& workspaceIds, WorkspaceStripEmptyMode mode) {
+    std::vector<int64_t> sortedIds = workspaceIds;
+    std::sort(sortedIds.begin(), sortedIds.end());
+    sortedIds.erase(std::unique(sortedIds.begin(), sortedIds.end()), sortedIds.end());
+
+    if (mode == WorkspaceStripEmptyMode::Existing || sortedIds.empty())
+        return sortedIds;
+
+    std::vector<int64_t> expanded;
+    expanded.reserve(sortedIds.size() * 2);
+    for (std::size_t index = 0; index < sortedIds.size(); ++index) {
+        const int64_t workspaceId = sortedIds[index];
+        expanded.push_back(workspaceId);
+
+        if (index + 1 >= sortedIds.size())
+            continue;
+
+        const int64_t nextWorkspaceId = sortedIds[index + 1];
+        if (workspaceId < 1 || nextWorkspaceId <= workspaceId + 1)
+            continue;
+
+        expanded.push_back(workspaceId + 1);
+    }
+
+    return expanded;
 }
 
 WorkspaceStripReservation reserveWorkspaceStripBand(const Rect& monitorArea, WorkspaceStripAnchor anchor, double thickness, double gap) {

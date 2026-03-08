@@ -10,7 +10,9 @@ namespace {
 
 using hymission::Direction;
 using hymission::Rect;
+using hymission::RecommandVisibleGestureMode;
 using hymission::WorkspaceStripAnchor;
+using hymission::WorkspaceStripEmptyMode;
 using hymission::WorkspaceStripReservation;
 
 bool expect(bool condition, const char* message) {
@@ -66,16 +68,37 @@ int main() {
     ok &= expect(shouldSyncOverviewLiveFocus(true, true, 1), "live focus should sync when overview and Hyprland follow-mouse are enabled");
     ok &= expect(!shouldSyncOverviewLiveFocus(true, true, 0), "live focus should not sync when Hyprland follow-mouse was disabled before opening overview");
     ok &= expect(!shouldSyncOverviewLiveFocus(false, true, 1), "live focus should not sync when overview input handling is inactive");
-    ok &= expect(resolveRecommandGestureCommitDirection(0.6, 0.0, 30.0, false) == 1,
+
+    ok &= expect(resolveRecommandVisibleGestureMode(1, -1) == RecommandVisibleGestureMode::TransferCapable,
+                 "visible forceall swipes toward compact should allow recommand transfer");
+    ok &= expect(resolveRecommandVisibleGestureMode(-1, 1) == RecommandVisibleGestureMode::TransferCapable,
+                 "visible compact swipes toward forceall should allow recommand transfer");
+    ok &= expect(resolveRecommandVisibleGestureMode(1, 1) == RecommandVisibleGestureMode::CloseOnly,
+                 "visible forceall swipes in the other direction should only close");
+    ok &= expect(resolveRecommandVisibleGestureMode(-1, -1) == RecommandVisibleGestureMode::CloseOnly,
+                 "visible compact swipes in the other direction should only close");
+
+    ok &= expect(resolveOverviewGestureCommit(true, 0.6, 0.0, 30.0, false),
+                 "opening gestures past halfway should commit");
+    ok &= expect(!resolveOverviewGestureCommit(true, 0.4, -40.0, 30.0, false),
+                 "reverse velocity should cancel opening gestures");
+    ok &= expect(resolveOverviewGestureCommit(false, 0.4, 40.0, 30.0, false),
+                 "close gestures past halfway should commit to hidden");
+    ok &= expect(!resolveOverviewGestureCommit(false, 0.6, -40.0, 30.0, false),
+                 "reverse velocity should cancel close gestures");
+
+    ok &= expect(resolveRecommandGestureCommitDirection(0.6, true, 0.0, 30.0, false) == 1,
                  "positive recommand gestures past halfway should commit to forceall");
-    ok &= expect(resolveRecommandGestureCommitDirection(-0.6, 0.0, 30.0, false) == -1,
+    ok &= expect(resolveRecommandGestureCommitDirection(-0.6, true, 0.0, 30.0, false) == -1,
                  "negative recommand gestures past halfway should commit to compact scope");
-    ok &= expect(resolveRecommandGestureCommitDirection(0.8, -40.0, 30.0, false) == 0,
+    ok &= expect(resolveRecommandGestureCommitDirection(0.8, true, -40.0, 30.0, false) == 0,
                  "reverse velocity should close forceall instead of jumping directly to compact scope");
-    ok &= expect(resolveRecommandGestureCommitDirection(-0.8, 40.0, 30.0, false) == 0,
+    ok &= expect(resolveRecommandGestureCommitDirection(-0.8, true, 40.0, 30.0, false) == -1,
+                 "opening compact with forward velocity should still commit the current recommand side");
+    ok &= expect(resolveRecommandGestureCommitDirection(-0.8, false, 40.0, 30.0, false) == 0,
                  "reverse velocity should close compact scope instead of jumping directly to forceall");
-    ok &= expect(resolveRecommandGestureCommitDirection(0.2, 40.0, 30.0, false) == 1,
-                 "forward velocity should still be able to commit the current recommand side");
+    ok &= expect(resolveRecommandGestureCommitDirection(0.8, false, -40.0, 30.0, false) == 1,
+                 "reverse reopening velocity should still be able to keep the current visible recommand side");
 
     ok &= expect(resolveOverviewWorkspaceChangeAction(true, false, false, false, true, false) == OverviewWorkspaceChangeAction::Rebuild,
                  "live focus workspace changes should rebuild overview instead of aborting");
@@ -90,10 +113,25 @@ int main() {
     ok &= expect(parseWorkspaceStripAnchor(" LEFT ") == WorkspaceStripAnchor::Left, "left anchor parsing should ignore case and whitespace");
     ok &= expect(parseWorkspaceStripAnchor("Right") == WorkspaceStripAnchor::Right, "right anchor should parse");
     ok &= expect(parseWorkspaceStripAnchor("unexpected") == WorkspaceStripAnchor::Top, "invalid anchors should fall back to top");
+    ok &= expect(parseWorkspaceStripEmptyMode("existing") == WorkspaceStripEmptyMode::Existing, "existing empty-mode should parse");
+    ok &= expect(parseWorkspaceStripEmptyMode(" Continuous ") == WorkspaceStripEmptyMode::Continuous,
+                 "continuous empty-mode parsing should ignore case and whitespace");
+    ok &= expect(parseWorkspaceStripEmptyMode("unexpected") == WorkspaceStripEmptyMode::Existing, "invalid empty-mode should fall back to existing");
 
     ok &= expect(isWorkspaceStripHorizontal(WorkspaceStripAnchor::Top), "top strip should be horizontal");
     ok &= expect(!isWorkspaceStripHorizontal(WorkspaceStripAnchor::Left), "left strip should be vertical");
     ok &= expect(!isWorkspaceStripHorizontal(WorkspaceStripAnchor::Right), "right strip should be vertical");
+
+    ok &= expect(expandWorkspaceStripWorkspaceIds({1, 5, 9}, WorkspaceStripEmptyMode::Existing) == std::vector<int64_t>({1, 5, 9}),
+                 "existing empty-mode should keep sparse workspace ids");
+    ok &= expect(expandWorkspaceStripWorkspaceIds({9, 1, 5, 5}, WorkspaceStripEmptyMode::Continuous) == std::vector<int64_t>({1, 2, 5, 6, 9}),
+                 "continuous empty-mode should progressively expose numeric gaps");
+    ok &= expect(expandWorkspaceStripWorkspaceIds({1, 1000}, WorkspaceStripEmptyMode::Continuous) == std::vector<int64_t>({1, 2, 1000}),
+                 "continuous empty-mode should not expand large numeric spans into one slot per id");
+    ok &= expect(expandWorkspaceStripWorkspaceIds({-1337, 1}, WorkspaceStripEmptyMode::Continuous) == std::vector<int64_t>({-1337, 1}),
+                 "continuous empty-mode should not expand named workspace ids");
+    ok &= expect(expandWorkspaceStripWorkspaceIds({}, WorkspaceStripEmptyMode::Continuous).empty(),
+                 "empty workspace id sets should stay empty");
 
     ok &= expectReservation(reserveWorkspaceStripBand({10, 20, 300, 200}, WorkspaceStripAnchor::Top, 40, 12),
                             {
