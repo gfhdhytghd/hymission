@@ -25,6 +25,10 @@ bool closeEnough(double actual, double expected, double epsilon = 1e-6) {
     return std::abs(actual - expected) <= epsilon;
 }
 
+bool rectsOverlap(const Rect& lhs, const Rect& rhs) {
+    return lhs.x < rhs.x + rhs.width && lhs.x + lhs.width > rhs.x && lhs.y < rhs.y + rhs.height && lhs.y + lhs.height > rhs.y;
+}
+
 bool expectSlot(const WindowSlot& actual, const Rect& expectedTarget, double expectedScale, const char* message) {
     return expect(closeEnough(actual.target.x, expectedTarget.x) && closeEnough(actual.target.y, expectedTarget.y) &&
                       closeEnough(actual.target.width, expectedTarget.width) && closeEnough(actual.target.height, expectedTarget.height) &&
@@ -124,6 +128,27 @@ int main() {
                      "layout previews must preserve the original aspect ratio");
         ok &= expect(slots[1].target.x < slots[0].target.x && slots[0].target.x < slots[2].target.x,
                      "default ordering should reorder slots by geometry instead of preserving input order");
+    }
+
+    {
+        const std::vector<WindowInput> baseline = {
+            {.index = 0, .natural = {0, 0, 200, 160}, .label = "selected"},
+            {.index = 1, .natural = {240, 0, 200, 160}, .label = "neighbor"},
+        };
+        const std::vector<WindowInput> emphasized = {
+            {.index = 0, .natural = {0, 0, 200, 160}, .label = "selected", .layoutEmphasis = 1.18},
+            {.index = 1, .natural = {240, 0, 200, 160}, .label = "neighbor"},
+        };
+
+        const auto baselineSlots = engine.compute(baseline, {0, 0, 420, 220}, deterministicConfig());
+        const auto emphasizedSlots = engine.compute(emphasized, {0, 0, 420, 220}, deterministicConfig());
+        ok &= expect(baselineSlots.size() == 2 && emphasizedSlots.size() == 2, "selected emphasis case should keep both windows");
+        ok &= expect(emphasizedSlots[0].target.width > baselineSlots[0].target.width,
+                     "selected emphasis should enlarge the selected preview");
+        ok &= expect(emphasizedSlots[1].target.width < baselineSlots[1].target.width || emphasizedSlots[1].target.x > baselineSlots[1].target.x,
+                     "selected emphasis should push neighboring previews away");
+        ok &= expect(!rectsOverlap(emphasizedSlots[0].target, emphasizedSlots[1].target),
+                     "selected emphasis should keep previews non-overlapping");
     }
 
     return ok ? EXIT_SUCCESS : EXIT_FAILURE;

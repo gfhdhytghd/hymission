@@ -26,6 +26,7 @@ struct WindowInput {
     Rect        natural;
     std::string label;
     std::size_t rowGroup = 0;
+    double      layoutEmphasis = 1.0;
 };
 
 struct WindowSlot {

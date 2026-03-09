@@ -47,6 +47,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("min_slot_scale", 0.10F);
     CONF("layout_scale_weight", 1.0F);
     CONF("layout_space_weight", 0.10F);
+    CONF("expand_selected_window", 0L);
     CONF("overview_focus_follows_mouse", 1L);
     CONF("gesture_invert_vertical", 0L);
     CONF("one_workspace_per_row", 0L);

@@ -16,6 +16,7 @@
 - Mission Control-style overview with animated window previews
 - Scope control with default config scope, `onlycurrentworkspace`, and `forceall`
 - Mouse, keyboard, and trackpad-driven overview interaction
+- Optional selected-preview expansion with local push-away animation
 - Gesture-only `recommand` mode for two-sided `toggle` gestures
 - Workspace strip when the current overview scope shows only the active workspace
 - Multi-monitor support
@@ -155,6 +156,7 @@ plugin {
         layout_scale_weight = 1.0
         layout_space_weight = 0.10
 
+        expand_selected_window = 0
         overview_focus_follows_mouse = 1
         gesture_invert_vertical = 0
         one_workspace_per_row = 0
@@ -205,13 +207,19 @@ plugin {
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. |
+| `expand_selected_window` | bool | `0` | Enlarge the selected preview and push nearby previews away without reshuffling the whole overview grid. Uses the overview-selected target, which usually follows hover when `overview_focus_follows_mouse = 1`. |
+| `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. Hover retargeting is frame-coalesced for smoother animation, and multi-workspace overview stays visually anchored when real focus crosses workspaces. |
 | `gesture_invert_vertical` | bool | `0` | Invert the plugin-managed vertical overview gesture direction. |
 | `only_active_workspace` | bool | `0` | Restrict the default scope to the active regular workspace per participating monitor. |
 | `only_active_monitor` | bool | `0` | Restrict the default scope to the monitor under the cursor. |
 | `show_special` | bool | `0` | Include currently visible special workspaces in the default scope. |
 | `workspace_change_keeps_overview` | bool | `1` | Keep overview open when switching workspaces in active-workspace scope. |
 | `show_focus_indicator` | bool | `0` | Render selected and hovered preview focus chrome. |
+
+Behavior notes:
+
+- In multi-workspace overview, hover-driven real focus may still cross workspaces, but the overview grid stays anchored instead of rebuilding on every workspace change.
+- In active-workspace overview, workspace changes still use the dedicated overview-to-overview transition path.
 
 ### Workspace strip options
 

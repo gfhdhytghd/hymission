@@ -208,7 +208,9 @@ gesture-only 参数：
 - 左键点击 preview：激活对应窗口并退出 overview
 - 点击 overview 空白区域：退出 overview；当 `overview_focus_follows_mouse = 0` 时不切换窗口，当 `overview_focus_follows_mouse = 1` 时提交当前选中的 preview
 - overview 激活期间可以临时关闭真实窗口侧的 `input:follow_mouse`，避免 compositor 继续按真实窗口命中区域驱动 focus；退出 overview 后必须恢复原值
-- 当 `overview_focus_follows_mouse = 1` 且 overview 打开前 `input:follow_mouse != 0` 时，鼠标 hover 到 preview 上必须实时同步真实活动窗口；如果 hover 目标位于其他 workspace，overview 必须在真实 workspace 切换后重建并继续保持打开
+- 当 `overview_focus_follows_mouse = 1` 且 overview 打开前 `input:follow_mouse != 0` 时，鼠标 hover 到 preview 上必须实时同步真实活动窗口
+- 上述实时同步在 active-workspace overview 中，如果 hover 目标位于其他 workspace，应在真实 workspace 切换后过渡到目标 workspace 的 overview
+- 上述实时同步在 multi-workspace overview 中，即使 hover 引起真实 focus 跨 workspace，也不得因此整盘重建 overview、漂移 `ownerWorkspace`，或打乱既有 preview 槽位顺序；只允许更新当前选中项、真实 focus 和必要的 strip active 状态
 - 对 scrolling 工作区，如果退出 overview 会改变真实 focus，则必须先等真实 layout 收敛到目标 focus 对应的位置，再开始 close 动画；close 动画不得先飞回 overview 打开前的旧几何
 
 ### 6.3 键盘
@@ -272,7 +274,8 @@ workspace 切换补充语义：
 - 上述过渡应只作用于触发切换的 monitor；其他 participating monitor 保持当前 overview 不动
 - 上述过渡提交时必须屏蔽 Hyprland 原生普通 workspace in/out 动画，只保留 overview 自己的滑动
 - 如果当前 overview scope 只展示活动 workspace，但 `workspace_change_keeps_overview = 0`，则 workspace 变化成立后，overview 应退出到正常工作区
-- 如果当前 overview scope 同时展示了多个 workspace，则 overview 内必须禁止 workspace 切换，包括 keyboard dispatcher 和原生 workspace swipe
+- 如果当前 overview scope 同时展示了多个 workspace，则 overview 内必须禁止用户主动发起的 workspace 切换，包括 keyboard dispatcher 和原生 workspace swipe
+- 上述限制不包含 `overview_focus_follows_mouse = 1` 带来的 hover-time 真实 focus 跟随；这类跨 workspace focus 可以发生，但不得因此重建整个 overview 或改写其布局锚点
 - 多 workspace overview 期间，只有当 `bar_single_mission_control = 1` 时，bar 才应临时折叠成单个 `Mission Control` 项；退出 overview 后恢复原名
 - overview 不得通过持续 `rawWindowFocus(...)` 把工作区切换强行拉回原 workspace
 
@@ -292,6 +295,7 @@ workspace 切换补充语义：
 - `min_slot_scale`
 - `layout_scale_weight`
 - `layout_space_weight`
+- `expand_selected_window`
 - `overview_focus_follows_mouse`
 - `gesture_invert_vertical`
 - `only_active_workspace`
@@ -309,6 +313,7 @@ workspace 切换补充语义：
 
 - 旧配置 `outer_padding` 允许继续作为统一回退值存在，但新的方向配置优先级更高
 - `outer_padding*`、`row_spacing`、`column_spacing`、`min_window_length`、`small_window_boost`、`max_preview_scale`、`min_slot_scale`、`layout_scale_weight`、`layout_space_weight` 当前只控制布局算法
+- `expand_selected_window` 让 overview 当前选中项在布局阶段获得额外权重，从而放大并挤开相邻 preview；它依赖 `selectedIndex`，因此在 `overview_focus_follows_mouse = 1` 时通常也会跟随 hover 触发 relayout
 - `overview_focus_follows_mouse` 控制 overview 内部选中项是否跟随鼠标，以及在允许时是否把当前选中项实时同步到真实 focus；当 overview 打开前 `input:follow_mouse = 0` 时，它退化为“只改 overview 内部选中项 + 退出时提交”
 - `gesture_invert_vertical` 只影响被插件接管的 vertical overview gesture；它不改变普通 dispatcher、键盘输入或 Hyprland 其他 gesture 的方向
 - 如果退出 overview 时提交的真实目标窗口仍不在屏内，允许临时保持该窗口为真实 focus，直到下一次真实鼠标事件；只有当目标窗口在当前 monitor 上存在可见区域时，才允许顺带移动光标去对齐真实 focus

@@ -103,7 +103,8 @@ std::vector<PreparedWindow> prepareWindows(const std::vector<WindowInput>& windo
         item.input = window;
         item.layoutWidth = std::max(window.natural.width, config.minWindowLength);
         item.layoutHeight = std::max(window.natural.height, config.minWindowLength);
-        item.weightScale = computeWindowScale({window.natural.x, window.natural.y, item.layoutWidth, item.layoutHeight}, area, config);
+        const double emphasis = std::max(0.0, window.layoutEmphasis);
+        item.weightScale = computeWindowScale({window.natural.x, window.natural.y, item.layoutWidth, item.layoutHeight}, area, config) * emphasis;
         item.scaledWidth = item.layoutWidth * item.weightScale;
         item.scaledHeight = item.layoutHeight * item.weightScale;
         prepared.push_back(item);

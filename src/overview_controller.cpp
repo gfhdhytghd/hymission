@@ -6,6 +6,7 @@
 #include <cctype>
 #include <fstream>
 #include <linux/input-event-codes.h>
+#include <numeric>
 #include <optional>
 #include <ranges>
 #include <sstream>
@@ -126,6 +127,10 @@ constexpr double STRIP_THUMB_PADDING = 0.0;
 constexpr double STRIP_LABEL_HEIGHT = 0.0;
 constexpr double STRIP_MIN_THUMB_LENGTH = 12.0;
 constexpr double RECOMMAND_STAGE_TRANSFER = 0.18;
+constexpr double SELECTED_WINDOW_LAYOUT_EMPHASIS = 1.18;
+constexpr double HOVER_SELECTION_RETARGET_DISTANCE = 18.0;
+constexpr auto   HOVER_SELECTION_RETARGET_COOLDOWN = std::chrono::milliseconds(static_cast<int>(RELAYOUT_DURATION_MS + 48.0));
+constexpr auto   HOVER_SELECTION_RETARGET_DWELL = std::chrono::milliseconds(48);
 constexpr auto   MISSION_CONTROL_WORKSPACE_NAME = "Mission Control";
 constexpr auto   MISSION_CONTROL_HIDDEN_WORKSPACE_PREFIX = "__hymission_hidden__:";
 OverviewController* g_controller = nullptr;
@@ -301,6 +306,66 @@ Rect makeRect(double x, double y, double width, double height) {
 
 Rect translateRect(const Rect& rect, double dx, double dy) {
     return makeRect(rect.x + dx, rect.y + dy, rect.width, rect.height);
+}
+
+Rect scaleRectAroundCenter(const Rect& rect, double scale) {
+    const double clampedScale = std::max(0.0, scale);
+    const double width = rect.width * clampedScale;
+    const double height = rect.height * clampedScale;
+    return makeRect(rect.centerX() - width * 0.5, rect.centerY() - height * 0.5, width, height);
+}
+
+Rect clampRectInside(const Rect& rect, const Rect& bounds) {
+    const double width = std::min(rect.width, bounds.width);
+    const double height = std::min(rect.height, bounds.height);
+    double x = rect.x;
+    double y = rect.y;
+
+    if (x < bounds.x)
+        x = bounds.x;
+    if (x + width > bounds.x + bounds.width)
+        x = bounds.x + bounds.width - width;
+
+    if (y < bounds.y)
+        y = bounds.y;
+    if (y + height > bounds.y + bounds.height)
+        y = bounds.y + bounds.height - height;
+
+    return makeRect(x, y, width, height);
+}
+
+Rect inflateRect(const Rect& rect, double amount) {
+    return makeRect(rect.x - amount, rect.y - amount, rect.width + amount * 2.0, rect.height + amount * 2.0);
+}
+
+bool rectsOverlap(const Rect& lhs, const Rect& rhs) {
+    return lhs.x < rhs.x + rhs.width && lhs.x + lhs.width > rhs.x && lhs.y < rhs.y + rhs.height && lhs.y + lhs.height > rhs.y;
+}
+
+std::optional<double> overlapExitDistanceAlongDirection(const Rect& moving, const Rect& obstacle, double dirX, double dirY) {
+    if (!rectsOverlap(moving, obstacle))
+        return 0.0;
+
+    std::optional<double> exitDistance;
+    const auto consider = [&](double candidate) {
+        if (candidate < 0.0)
+            return;
+        candidate += 0.5;
+        if (!exitDistance || candidate < *exitDistance)
+            exitDistance = candidate;
+    };
+
+    if (dirX > 0.001)
+        consider((obstacle.x + obstacle.width - moving.x) / dirX);
+    else if (dirX < -0.001)
+        consider((moving.x + moving.width - obstacle.x) / -dirX);
+
+    if (dirY > 0.001)
+        consider((obstacle.y + obstacle.height - moving.y) / dirY);
+    else if (dirY < -0.001)
+        consider((moving.y + moving.height - obstacle.y) / -dirY);
+
+    return exitDistance;
 }
 
 CBox toBox(const Rect& rect) {
@@ -1283,7 +1348,7 @@ bool OverviewController::initialize() {
     m_monitorRemovedListener = events.monitor.removed.listen([this](PHLMONITOR monitor) { handleMonitorChange(monitor); });
     m_monitorFocusedListener = events.monitor.focused.listen([this](PHLMONITOR) {
         if (isVisible() && shouldHandleInput())
-            updateHoveredFromPointer();
+            updateHoveredFromPointer(false, false, false, false, "monitor-focused");
     });
 
     return true;
@@ -1381,6 +1446,8 @@ void OverviewController::renderStage(eRenderStage stage) {
     if (stage == RENDER_POST_WALLPAPER) {
         updateOverviewWorkspaceTransition();
         updateAnimation();
+        flushQueuedSelectionRetargetDuringOverview();
+        flushQueuedRealFocusDuringOverview();
         renderBackdrop();
     } else if (stage == RENDER_POST_WINDOWS) {
         if (m_deactivatePending) {
@@ -1421,7 +1488,7 @@ void OverviewController::handleMouseMove() {
         return;
 
     if (m_pressedWindowIndex || m_draggedWindowIndex) {
-        updateHoveredFromPointer(false, false, false);
+        updateHoveredFromPointer(false, false, false, false, "mouse-move-drag");
 
         const Vector2D pointer = g_pInputManager->getMouseCoordsInternal();
         if (!m_draggedWindowIndex && m_pressedWindowIndex && *m_pressedWindowIndex < m_state.windows.size()) {
@@ -1438,7 +1505,7 @@ void OverviewController::handleMouseMove() {
         return;
     }
 
-    updateHoveredFromPointer();
+    updateHoveredFromPointer(true, true, true, true, "mouse-move");
 }
 
 bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) {
@@ -1507,7 +1574,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
     const auto cachedHoveredStripIndex = m_state.hoveredStripIndex;
     const auto cachedHoveredIndex = m_state.hoveredIndex;
     const Vector2D pointerBeforeUpdate = g_pInputManager->getMouseCoordsInternal();
-    updateHoveredFromPointer(false, false, false);
+    updateHoveredFromPointer(false, false, false, false, "mouse-button-refresh");
     const auto effectiveHoveredStripIndex = m_state.hoveredStripIndex ? m_state.hoveredStripIndex : cachedHoveredStripIndex;
     const auto effectiveHoveredIndex = m_state.hoveredIndex ? m_state.hoveredIndex : cachedHoveredIndex;
 
@@ -1589,9 +1656,17 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
     }
 
     if (effectiveHoveredIndex) {
+        const auto previousSelectedWindow = selectedWindow();
         m_state.selectedIndex = effectiveHoveredIndex;
+        m_state.focusDuringOverview = m_state.windows[*effectiveHoveredIndex].window;
+        m_queuedOverviewSelectionTarget.reset();
+        m_queuedOverviewSelectionSyncScrollingSpot = false;
+        m_queuedOverviewLiveFocusTarget.reset();
+        m_queuedOverviewLiveFocusSyncScrollingSpot = false;
         m_pressedWindowIndex = effectiveHoveredIndex;
         m_pressedWindowPointer = g_pInputManager->getMouseCoordsInternal();
+        latchHoverSelectionAnchor(m_pressedWindowPointer);
+        updateSelectedWindowLayout(previousSelectedWindow);
         damageOwnedMonitors();
         return true;
     }
@@ -1715,6 +1790,18 @@ void OverviewController::handleWorkspaceChange(PHLWORKSPACE workspace) {
     const auto action = resolveOverviewWorkspaceChangeAction(isVisible(), m_applyingWorkspaceTransitionCommit, m_workspaceTransition.active,
                                                              m_beginCloseInProgress || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle,
                                                              liveFocusWorkspaceChange || stripWorkspaceChange, allowsWorkspaceSwitchInOverview());
+    const auto refreshWorkspaceStripActivity = [this]() {
+        bool changed = false;
+        for (auto& entry : m_state.stripEntries) {
+            const bool active = entry.monitor && entry.workspace && entry.monitor->m_activeWorkspace == entry.workspace;
+            if (entry.active == active)
+                continue;
+
+            entry.active = active;
+            changed = true;
+        }
+        return changed;
+    };
 
     if (action == OverviewWorkspaceChangeAction::Ignore)
         return;
@@ -1728,6 +1815,21 @@ void OverviewController::handleWorkspaceChange(PHLWORKSPACE workspace) {
             debugLog(out.str());
         }
         m_pendingLiveFocusWorkspaceChangeTarget.reset();
+
+        if (!m_state.collectionPolicy.onlyActiveWorkspace) {
+            const bool stripActivityChanged = refreshWorkspaceStripActivity();
+            if (debugLogsEnabled()) {
+                std::ostringstream out;
+                out << "[hymission] skip overview rebuild for live focus workspace change outside active-workspace scope";
+                if (workspace)
+                    out << " workspace=" << debugWorkspaceLabel(workspace);
+                out << " stripChanged=" << (stripActivityChanged ? 1 : 0);
+                debugLog(out.str());
+            }
+
+            damageOwnedMonitors();
+            return;
+        }
     }
 
     if (stripWorkspaceChange) {
@@ -2166,6 +2268,10 @@ std::optional<OverviewController::ScopeOverride> OverviewController::parseScopeO
 
     error = "invalid overview scope: " + trimmed;
     return std::nullopt;
+}
+
+bool OverviewController::expandSelectedWindowEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:expand_selected_window", 0) != 0;
 }
 
 bool OverviewController::focusFollowsMouseEnabled() const {
@@ -3282,7 +3388,7 @@ void OverviewController::updateOverviewWorkspaceTransition() {
 
     if (m_workspaceTransition.mode == WorkspaceTransitionMode::TimedRevert) {
         clearOverviewWorkspaceTransition();
-        updateHoveredFromPointer(focusFollowsMouseEnabled(), false);
+        updateHoveredFromPointer(false, false, false, false, "workspace-transition-revert");
         damageOwnedMonitors();
         return;
     }
@@ -3446,7 +3552,7 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         m_rebuildVisibleStateAfterWorkspaceTransitionCommit = false;
         rebuildVisibleState();
     } else {
-        updateHoveredFromPointer(focusFollowsMouseEnabled(), true, false);
+        updateHoveredFromPointer(false, false, false, false, "workspace-transition-commit");
     }
     damageOwnedMonitors();
 }
@@ -5354,6 +5460,7 @@ bool OverviewController::syncScrollingWorkspaceSpotOnWindow(const PHLWINDOW& win
             << " col=" << columnIndex
             << " offsetBefore=" << offsetBefore;
         debugLog(out.str());
+        logScrollingWorkspaceSpotState("before centerOrFitCol", window->m_workspace, window);
     }
 
     column->lastFocusedTarget = targetData;
@@ -5377,6 +5484,7 @@ bool OverviewController::syncScrollingWorkspaceSpotOnWindow(const PHLWINDOW& win
             << " col=" << columnIndex
             << " offsetAfter=" << offsetAfter;
         debugLog(out.str());
+        logScrollingWorkspaceSpotState("after centerOrFitCol", window->m_workspace, window);
     }
 
     return true;
@@ -5442,6 +5550,8 @@ void OverviewController::syncRealFocusDuringOverview(const PHLWINDOW& window, bo
         if (activeBefore && activeBefore->m_workspace)
             out << " activeWorkspaceBefore=" << debugWorkspaceLabel(activeBefore->m_workspace);
         debugLog(out.str());
+        if (window->m_workspace && isScrollingWorkspace(window->m_workspace))
+            logScrollingWorkspaceSpotState("before live focus", window->m_workspace, window);
     }
 
     const bool temporarilyDisabledAnimations = !m_animationsEnabledOverridden;
@@ -5450,6 +5560,8 @@ void OverviewController::syncRealFocusDuringOverview(const PHLWINDOW& window, bo
 
     m_pendingLiveFocusWorkspaceChangeTarget = window;
     focusWindowCompat(window, false, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+    if (debugLogsEnabled() && window->m_workspace && isScrollingWorkspace(window->m_workspace))
+        logScrollingWorkspaceSpotState("after focus before explicit spot sync", window->m_workspace, window);
     if (syncScrollingSpot)
         (void)syncScrollingWorkspaceSpotOnWindow(window);
     if (g_pAnimationManager)
@@ -5476,19 +5588,333 @@ void OverviewController::syncRealFocusDuringOverview(const PHLWINDOW& window, bo
     }
 }
 
-void OverviewController::syncFocusDuringOverviewFromSelection(bool syncScrollingSpot) {
+void OverviewController::syncFocusDuringOverviewFromSelection(bool syncScrollingSpot, const char* source) {
     const auto selected = selectedWindow();
     if (!selected)
         return;
 
+    const auto previousSelected = m_state.focusDuringOverview;
     if (m_state.focusDuringOverview != selected && debugLogsEnabled()) {
         std::ostringstream out;
-        out << "[hymission] overview target " << debugWindowLabel(selected);
+        out << "[hymission] overview target " << debugWindowLabel(selected) << " source=" << (source ? source : "?");
+        if (m_state.selectedIndex && *m_state.selectedIndex < m_state.windows.size())
+            out << " selected=" << *m_state.selectedIndex << ":" << debugWindowLabel(m_state.windows[*m_state.selectedIndex].window);
+        else
+            out << " selected=<null>";
+        if (m_state.hoveredIndex && *m_state.hoveredIndex < m_state.windows.size())
+            out << " hovered=" << *m_state.hoveredIndex << ":" << debugWindowLabel(m_state.windows[*m_state.hoveredIndex].window);
+        else
+            out << " hovered=<null>";
+        out << " pointer=" << vectorToString(g_pInputManager->getMouseCoordsInternal());
         debugLog(out.str());
     }
 
     m_state.focusDuringOverview = selected;
+    latchHoverSelectionAnchor(g_pInputManager->getMouseCoordsInternal());
+    m_queuedOverviewSelectionTarget.reset();
+    m_queuedOverviewSelectionSyncScrollingSpot = false;
+    m_queuedOverviewLiveFocusTarget.reset();
+    m_queuedOverviewLiveFocusSyncScrollingSpot = false;
     syncRealFocusDuringOverview(selected, syncScrollingSpot);
+    updateSelectedWindowLayout(previousSelected);
+}
+
+void OverviewController::queueSelectionRetargetDuringOverview(const PHLWINDOW& window, bool syncScrollingSpot, const char* source) {
+    if (!window || !window->m_isMapped || !hasManagedWindow(window))
+        return;
+
+    m_queuedOverviewSelectionTarget = window;
+    m_queuedOverviewSelectionSyncScrollingSpot = syncScrollingSpot;
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] queue selection retarget during overview target=" << debugWindowLabel(window)
+            << " source=" << (source ? source : "?")
+            << " syncScrollingSpot=" << (syncScrollingSpot ? 1 : 0);
+        debugLog(out.str());
+    }
+}
+
+void OverviewController::flushQueuedSelectionRetargetDuringOverview() {
+    const auto queuedTarget = m_queuedOverviewSelectionTarget.lock();
+    if (!queuedTarget)
+        return;
+
+    if (!isVisible() || m_state.phase != Phase::Active || m_gestureSession.active || m_workspaceTransition.active || m_beginCloseInProgress)
+        return;
+
+    m_queuedOverviewSelectionTarget.reset();
+    const bool syncScrollingSpot = m_queuedOverviewSelectionSyncScrollingSpot;
+    m_queuedOverviewSelectionSyncScrollingSpot = false;
+
+    if (!queuedTarget->m_isMapped || !hasManagedWindow(queuedTarget))
+        return;
+
+    const auto queuedIt =
+        std::find_if(m_state.windows.begin(), m_state.windows.end(), [&](const ManagedWindow& managed) { return managed.window == queuedTarget; });
+    if (queuedIt == m_state.windows.end())
+        return;
+
+    const auto previousSelectedWindow = m_lastLayoutSelectedWindow.lock();
+    m_state.selectedIndex = static_cast<std::size_t>(std::distance(m_state.windows.begin(), queuedIt));
+    m_state.focusDuringOverview = queuedTarget;
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] flush queued selection retarget during overview target=" << debugWindowLabel(queuedTarget)
+            << " syncScrollingSpot=" << (syncScrollingSpot ? 1 : 0)
+            << " previousLayoutSelected=" << debugWindowLabel(previousSelectedWindow);
+        debugLog(out.str());
+    }
+
+    updateSelectedWindowLayout(previousSelectedWindow);
+    queueRealFocusDuringOverview(queuedTarget, syncScrollingSpot, "frame-coalesced");
+}
+
+void OverviewController::queueRealFocusDuringOverview(const PHLWINDOW& window, bool syncScrollingSpot, const char* source) {
+    if (!window || !window->m_isMapped || !hasManagedWindow(window))
+        return;
+
+    m_queuedOverviewLiveFocusTarget = window;
+    m_queuedOverviewLiveFocusSyncScrollingSpot = syncScrollingSpot;
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] queue real focus during overview target=" << debugWindowLabel(window)
+            << " source=" << (source ? source : "?")
+            << " syncScrollingSpot=" << (syncScrollingSpot ? 1 : 0);
+        debugLog(out.str());
+    }
+}
+
+void OverviewController::flushQueuedRealFocusDuringOverview() {
+    const auto queuedTarget = m_queuedOverviewLiveFocusTarget.lock();
+    if (!queuedTarget)
+        return;
+
+    if (!isVisible() || m_state.phase != Phase::Active || m_gestureSession.active || m_workspaceTransition.active || m_beginCloseInProgress)
+        return;
+
+    const bool syncScrollingSpot = m_queuedOverviewLiveFocusSyncScrollingSpot;
+    m_queuedOverviewLiveFocusTarget.reset();
+    m_queuedOverviewLiveFocusSyncScrollingSpot = false;
+
+    if (!queuedTarget->m_isMapped || !hasManagedWindow(queuedTarget))
+        return;
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] flush queued real focus during overview target=" << debugWindowLabel(queuedTarget)
+            << " syncScrollingSpot=" << (syncScrollingSpot ? 1 : 0);
+        debugLog(out.str());
+    }
+
+    syncRealFocusDuringOverview(queuedTarget, syncScrollingSpot);
+}
+
+void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSelectedWindow) {
+    if (!expandSelectedWindowEnabled() || !isVisible() || m_state.phase != Phase::Active || m_gestureSession.active || m_workspaceTransition.active)
+        return;
+
+    const auto currentSelection = selectedWindow();
+    const auto currentSelectedWindow = currentSelection ? currentSelection : Desktop::focusState()->window();
+    if (currentSelectedWindow == previousSelectedWindow)
+        return;
+    m_lastLayoutSelectedWindow = currentSelectedWindow;
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] expand-selected relayout previous=" << debugWindowLabel(previousSelectedWindow)
+            << " current=" << debugWindowLabel(currentSelectedWindow);
+        if (m_state.hoveredIndex && *m_state.hoveredIndex < m_state.windows.size())
+            out << " hovered=" << *m_state.hoveredIndex << ":" << debugWindowLabel(m_state.windows[*m_state.hoveredIndex].window);
+        else
+            out << " hovered=<null>";
+        if (m_state.selectedIndex && *m_state.selectedIndex < m_state.windows.size())
+            out << " selected=" << *m_state.selectedIndex << ":" << debugWindowLabel(m_state.windows[*m_state.selectedIndex].window);
+        else
+            out << " selected=<null>";
+        debugLog(out.str());
+        logOverviewLayoutState("before expand-selected relayout", m_state);
+    }
+
+    m_hoverSelectionRetargetBlockedUntil = std::chrono::steady_clock::now() + HOVER_SELECTION_RETARGET_COOLDOWN;
+    m_hoverSelectionRetargetCandidateIndex.reset();
+    m_hoverSelectionRetargetCandidateSince = {};
+    m_hoverSelectionRetargetCandidatePrimed = false;
+
+    const auto managedForWindow = [&](const PHLWINDOW& window) -> ManagedWindow* {
+        const auto it = std::find_if(m_state.windows.begin(), m_state.windows.end(), [&](const ManagedWindow& managed) { return managed.window == window; });
+        return it == m_state.windows.end() ? nullptr : &*it;
+    };
+
+    auto* currentManaged = managedForWindow(currentSelectedWindow);
+    if (!currentManaged) {
+        rebuildVisibleState(currentSelectedWindow, true);
+        return;
+    }
+
+    bool shouldAnimateRelayout = false;
+    for (auto& managed : m_state.windows) {
+        managed.relayoutFromGlobal = currentPreviewRect(managed);
+        if (managed.targetMonitor) {
+            managed.targetGlobal =
+                makeRect(managed.targetMonitor->m_position.x + managed.slot.target.x, managed.targetMonitor->m_position.y + managed.slot.target.y,
+                         managed.slot.target.width, managed.slot.target.height);
+        } else {
+            managed.targetGlobal = managed.relayoutFromGlobal;
+        }
+    }
+
+    const auto applyScaleTarget = [&](ManagedWindow* managed, double scale) -> Rect {
+        if (!managed || !managed->targetMonitor)
+            return {};
+
+        const Rect boundsLocal = overviewContentRectForMonitor(managed->targetMonitor, m_state);
+        const Rect boundsGlobal =
+            makeRect(managed->targetMonitor->m_position.x + boundsLocal.x, managed->targetMonitor->m_position.y + boundsLocal.y, boundsLocal.width, boundsLocal.height);
+        const Rect base =
+            makeRect(managed->targetMonitor->m_position.x + managed->slot.target.x, managed->targetMonitor->m_position.y + managed->slot.target.y, managed->slot.target.width,
+                     managed->slot.target.height);
+        const Rect target = clampRectInside(scaleRectAroundCenter(base, scale), boundsGlobal);
+        managed->targetGlobal = target;
+        if (!rectApproxEqual(managed->relayoutFromGlobal, managed->targetGlobal, 0.5))
+            shouldAnimateRelayout = true;
+        return boundsGlobal;
+    };
+
+    const Rect boundsGlobal = applyScaleTarget(currentManaged, SELECTED_WINDOW_LAYOUT_EMPHASIS);
+    if (!currentManaged->targetMonitor || boundsGlobal.width <= 1.0 || boundsGlobal.height <= 1.0) {
+        rebuildVisibleState(currentSelectedWindow, true);
+        return;
+    }
+
+    struct RipplePeer {
+        ManagedWindow* managed = nullptr;
+        Rect           base;
+        double         distance = 0.0;
+    };
+
+    const Rect selectedBase =
+        makeRect(currentManaged->targetMonitor->m_position.x + currentManaged->slot.target.x, currentManaged->targetMonitor->m_position.y + currentManaged->slot.target.y,
+                 currentManaged->slot.target.width, currentManaged->slot.target.height);
+    const LayoutConfig layoutConfig = loadLayoutConfig();
+    const double pushGap = std::max(8.0, std::min(layoutConfig.columnSpacing, layoutConfig.rowSpacing) * 0.5);
+    const double radialPressure =
+        std::max(pushGap, std::hypot(currentManaged->targetGlobal.width - selectedBase.width, currentManaged->targetGlobal.height - selectedBase.height) * 0.5 + pushGap * 0.75);
+    const double rippleRadius =
+        std::max(std::hypot(selectedBase.width, selectedBase.height) * 2.5, std::hypot(boundsGlobal.width, boundsGlobal.height) * 0.55);
+    const double pressureCenterX = currentManaged->targetGlobal.centerX();
+    const double pressureCenterY = currentManaged->targetGlobal.centerY();
+
+    std::vector<RipplePeer> peers;
+    peers.reserve(m_state.windows.size());
+    for (auto& managed : m_state.windows) {
+        if (&managed == currentManaged || managed.targetMonitor != currentManaged->targetMonitor)
+            continue;
+
+        const Rect base = makeRect(managed.targetMonitor->m_position.x + managed.slot.target.x, managed.targetMonitor->m_position.y + managed.slot.target.y,
+                                   managed.slot.target.width, managed.slot.target.height);
+        const double distance = std::hypot(base.centerX() - pressureCenterX, base.centerY() - pressureCenterY);
+        peers.push_back({.managed = &managed, .base = base, .distance = distance});
+    }
+
+    // Place nearby peers first so their displacement propagates outward.
+    std::stable_sort(peers.begin(), peers.end(), [](const RipplePeer& lhs, const RipplePeer& rhs) { return lhs.distance < rhs.distance; });
+
+    std::vector<ManagedWindow*> placed;
+    placed.reserve(peers.size() + 1);
+    placed.push_back(currentManaged);
+
+    const auto resolveAlongBearing = [&](Rect target, double dirX, double dirY) -> Rect {
+        for (std::size_t pass = 0; pass < 4; ++pass) {
+            bool changed = false;
+            for (const auto* obstacleManaged : placed) {
+                if (!obstacleManaged)
+                    continue;
+
+                const Rect obstacle = inflateRect(obstacleManaged->targetGlobal, pushGap);
+                if (!rectsOverlap(target, obstacle))
+                    continue;
+
+                if (std::abs(dirX) < 0.001 && std::abs(dirY) < 0.001) {
+                    dirX = target.centerX() >= pressureCenterX ? 1.0 : -1.0;
+                    dirY = target.centerY() >= pressureCenterY ? 1.0 : -1.0;
+                    const double length = std::hypot(dirX, dirY);
+                    dirX /= length;
+                    dirY /= length;
+                }
+
+                const auto exitDistance = overlapExitDistanceAlongDirection(target, obstacle, dirX, dirY);
+                if (!exitDistance)
+                    continue;
+
+                target = translateRect(target, dirX * *exitDistance, dirY * *exitDistance);
+                target = clampRectInside(target, boundsGlobal);
+                changed = true;
+            }
+
+            if (!changed)
+                break;
+        }
+
+        return target;
+    };
+
+    double maxShift = 0.0;
+    for (auto& peer : peers) {
+        const double deltaX = peer.base.centerX() - pressureCenterX;
+        const double deltaY = peer.base.centerY() - pressureCenterY;
+        double directionX = deltaX;
+        double directionY = deltaY;
+        const double directionLength = std::hypot(directionX, directionY);
+        if (directionLength > 0.001) {
+            directionX /= directionLength;
+            directionY /= directionLength;
+        } else {
+            directionX = peer.base.centerX() >= pressureCenterX ? 1.0 : -1.0;
+            directionY = peer.base.centerY() >= pressureCenterY ? 1.0 : -1.0;
+            const double length = std::hypot(directionX, directionY);
+            directionX /= length;
+            directionY /= length;
+        }
+
+        const double influence = clampUnit(1.0 - peer.distance / std::max(1.0, rippleRadius));
+        const double easedInfluence = influence * influence;
+        Rect target = translateRect(peer.base, directionX * radialPressure * easedInfluence, directionY * radialPressure * easedInfluence);
+        target = clampRectInside(target, boundsGlobal);
+        target = resolveAlongBearing(target, directionX, directionY);
+        target = clampRectInside(target, boundsGlobal);
+
+        peer.managed->targetGlobal = target;
+        placed.push_back(peer.managed);
+
+        maxShift = std::max(maxShift, std::hypot(target.centerX() - peer.base.centerX(), target.centerY() - peer.base.centerY()));
+        if (!rectApproxEqual(peer.managed->relayoutFromGlobal, peer.managed->targetGlobal, 0.5))
+            shouldAnimateRelayout = true;
+    }
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] expand-selected ripple push selected=" << debugWindowLabel(currentSelectedWindow)
+            << " peers=" << peers.size()
+            << " radius=" << rippleRadius
+            << " pressure=" << radialPressure
+            << " maxShift=" << maxShift
+            << " selectedTarget=" << rectToString(currentManaged->targetGlobal);
+        debugLog(out.str());
+    }
+
+    if (!shouldAnimateRelayout) {
+        if (debugLogsEnabled())
+            debugLog("[hymission] expand-selected relayout skipped (in-place target unchanged)");
+        return;
+    }
+
+    m_state.relayoutActive = true;
+    m_state.relayoutProgress = 0.0;
+    m_state.relayoutStart = {};
+    damageOwnedMonitors();
 }
 
 void OverviewController::clearPendingWindowGeometryRetry() {
@@ -5769,7 +6195,8 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     const double fromVisual = isVisible() ? visualProgress() : 0.0;
     clearOverviewWorkspaceTransition();
     m_workspaceSwipeGesture = {};
-    State next = buildState(monitor, requestedScope);
+    const auto preferredSelectedWindow = expandSelectedWindowEnabled() ? Desktop::focusState()->window() : PHLWINDOW{};
+    State next = buildState(monitor, requestedScope, {}, false, false, preferredSelectedWindow);
     if (next.windows.empty() && next.stripEntries.empty()) {
         notify(collectionSummary(monitor), CHyprColor(1.0, 0.7, 0.2, 1.0), 5000);
         return;
@@ -5783,6 +6210,11 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     ++m_visibleStateRebuildGeneration;
     clearPostCloseForcedFocus();
     clearPostCloseDispatcher();
+    m_lastLayoutSelectedWindow.reset();
+    m_queuedOverviewSelectionTarget.reset();
+    m_queuedOverviewSelectionSyncScrollingSpot = false;
+    m_queuedOverviewLiveFocusTarget.reset();
+    m_queuedOverviewLiveFocusSyncScrollingSpot = false;
     m_pendingLiveFocusWorkspaceChangeTarget.reset();
     clearPendingStripWorkspaceChange();
     clearStripWindowDragState();
@@ -5795,6 +6227,13 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     m_deactivatePending = false;
     carryOverWorkspaceStripSnapshots(next, m_state);
     m_state = std::move(next);
+    m_hoverSelectionAnchorValid = false;
+    m_hoverSelectionRetargetBlockedUntil = {};
+    m_hoverSelectionRetargetCandidateIndex.reset();
+    m_hoverSelectionRetargetCandidateSince = {};
+    m_hoverSelectionRetargetCandidatePrimed = false;
+    if (m_state.selectedIndex && *m_state.selectedIndex < m_state.windows.size())
+        latchHoverSelectionAnchor(g_pInputManager->getMouseCoordsInternal());
     applyWorkspaceNameOverrides(m_state);
     clearHiddenStripLayerProxies();
     syncHiddenStripLayerProxies();
@@ -5805,7 +6244,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     g_pHyprRenderer->m_directScanoutBlocked = true;
     m_postOpenRefreshFrames = 3;
     if (!m_suppressInitialHoverUpdate)
-        updateHoveredFromPointer();
+        updateHoveredFromPointer(false, false, false, false, "opening-complete");
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
@@ -5826,6 +6265,9 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
         out << " monitors=" << m_state.participatingMonitors.size() << " workspaces=" << m_state.managedWorkspaces.size() << " fullscreenBackups="
             << m_state.fullscreenBackups.size();
         debugLog(out.str());
+        logOverviewLayoutState("beginOpen", m_state);
+        if (const auto selected = selectedWindow(); selected && selected->m_workspace && isScrollingWorkspace(selected->m_workspace))
+            logScrollingWorkspaceSpotState("beginOpen", selected->m_workspace, selected);
     }
 
     damageOwnedMonitors();
@@ -5860,6 +6302,11 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
 
     if (mode == CloseMode::Abort)
         clearPostCloseDispatcher();
+
+    m_queuedOverviewSelectionTarget.reset();
+    m_queuedOverviewSelectionSyncScrollingSpot = false;
+    m_queuedOverviewLiveFocusTarget.reset();
+    m_queuedOverviewLiveFocusSyncScrollingSpot = false;
 
     if (m_state.phase == Phase::Active && m_state.relayoutActive) {
         for (auto& managed : m_state.windows) {
@@ -6060,6 +6507,11 @@ void OverviewController::deactivate() {
     const auto visiblePoint = shouldPreserveExitFocus ? visiblePointForWindowOnMonitor(desiredFocus, focusMonitor, preferGoalVisiblePoint) : std::nullopt;
     const bool shouldWarpCursorForExitFocus = visiblePoint && desiredFocus != m_state.focusBeforeOpen;
     m_primaryButtonPressed = false;
+    m_hoverSelectionAnchorValid = false;
+    m_hoverSelectionRetargetBlockedUntil = {};
+    m_hoverSelectionRetargetCandidateIndex.reset();
+    m_hoverSelectionRetargetCandidateSince = {};
+    m_hoverSelectionRetargetCandidatePrimed = false;
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] deactivate monitor=" << (monitor ? monitor->m_name : "?");
@@ -6108,6 +6560,11 @@ void OverviewController::deactivate() {
     }
 
     clearPostCloseForcedFocus();
+    m_lastLayoutSelectedWindow.reset();
+    m_queuedOverviewSelectionTarget.reset();
+    m_queuedOverviewSelectionSyncScrollingSpot = false;
+    m_queuedOverviewLiveFocusTarget.reset();
+    m_queuedOverviewLiveFocusSyncScrollingSpot = false;
     m_pendingLiveFocusWorkspaceChangeTarget.reset();
     clearPendingStripWorkspaceChange();
     clearStripWindowDragState();
@@ -6381,6 +6838,7 @@ void OverviewController::updateAnimation() {
             m_state.relayoutProgress = 1.0;
             m_state.relayoutActive = false;
             m_state.relayoutStart = {};
+            latchHoverSelectionAnchor(g_pInputManager->getMouseCoordsInternal());
             if (debugLogsEnabled())
                 debugLog("[hymission] relayout anim complete");
         }
@@ -6424,7 +6882,8 @@ void OverviewController::updateAnimation() {
         m_postOpenRefreshFrames = std::max<std::size_t>(m_postOpenRefreshFrames, 3);
         if (debugLogsEnabled())
             debugLog("[hymission] anim opening complete");
-        updateHoveredFromPointer();
+        updateSelectedWindowLayout({});
+        updateHoveredFromPointer(false, false, false, false, "begin-open");
         damageOwnedMonitors();
     } else if (m_state.phase == Phase::Closing) {
         m_state.animationProgress = 1.0;
@@ -6439,28 +6898,142 @@ void OverviewController::updateAnimation() {
     }
 }
 
-void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncRealFocus, bool syncScrollingSpot) {
+void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncRealFocus, bool syncScrollingSpot, bool allowSelectionRetarget, const char* source) {
     if (!isVisible())
         return;
 
     const Vector2D pointer = g_pInputManager->getMouseCoordsInternal();
-    const bool     draggingWindow = m_draggedWindowIndex.has_value();
-    const auto     previousHoveredStrip = m_state.hoveredStripIndex;
+    const bool draggingWindow = m_draggedWindowIndex.has_value();
+    const auto previousHoveredStrip = m_state.hoveredStripIndex;
     const auto previousHovered = m_state.hoveredIndex;
     const auto previousSelected = m_state.selectedIndex;
     const auto previousFocus = m_state.focusDuringOverview;
+    const auto now = std::chrono::steady_clock::now();
 
     m_state.hoveredStripIndex = hitTestStripTarget(pointer.x, pointer.y);
     m_state.hoveredIndex = (draggingWindow || m_state.hoveredStripIndex) ? std::optional<std::size_t>{} : hitTestTarget(pointer.x, pointer.y);
-    // Passive refreshes (workspace rebuild/commit) should still align overview
-    // selection with the stationary pointer, but can skip the real-focus sync
-    // that would otherwise mutate scrolling spot state.
-    if (!draggingWindow && syncSelection && m_state.hoveredIndex && focusFollowsMouseEnabled()) {
+
+    const bool wantsSelectionRetarget =
+        !draggingWindow && syncSelection && m_state.hoveredIndex && focusFollowsMouseEnabled() && allowSelectionRetarget &&
+        (!m_state.selectedIndex || *m_state.hoveredIndex != *m_state.selectedIndex);
+    const bool immediateRetarget = wantsSelectionRetarget && syncRealFocus;
+    const bool retargetBlockedByRelayout = expandSelectedWindowEnabled() && m_state.relayoutActive && !immediateRetarget;
+    const bool retargetBlockedByCooldown = expandSelectedWindowEnabled() && now < m_hoverSelectionRetargetBlockedUntil && !immediateRetarget;
+    bool retargetLocked = false;
+    if (wantsSelectionRetarget && !immediateRetarget && !retargetBlockedByRelayout && !retargetBlockedByCooldown)
+        retargetLocked = hoverSelectionRetargetLocked(pointer, m_state.hoveredIndex);
+
+    const bool retargetBlocked = retargetBlockedByRelayout || retargetBlockedByCooldown || retargetLocked;
+    const bool canRetargetSelection = wantsSelectionRetarget && !retargetBlocked;
+
+    if (!wantsSelectionRetarget || immediateRetarget) {
+        m_hoverSelectionRetargetCandidateIndex.reset();
+        m_hoverSelectionRetargetCandidateSince = {};
+        m_hoverSelectionRetargetCandidatePrimed = false;
+    } else if (retargetBlocked) {
+        m_hoverSelectionRetargetCandidateIndex = m_state.hoveredIndex;
+        m_hoverSelectionRetargetCandidateSince = {};
+        m_hoverSelectionRetargetCandidatePrimed = false;
+    }
+
+    if (immediateRetarget && m_state.hoveredIndex) {
         m_state.selectedIndex = m_state.hoveredIndex;
-        if (syncRealFocus)
-            syncFocusDuringOverviewFromSelection(syncScrollingSpot);
+        const auto nextSelectedWindow = selectedWindow();
+        if (nextSelectedWindow) {
+            m_state.focusDuringOverview = nextSelectedWindow;
+            queueSelectionRetargetDuringOverview(nextSelectedWindow, syncScrollingSpot, source);
+            if (debugLogsEnabled()) {
+                std::ostringstream out;
+                out << "[hymission] hover retarget immediate queued pointer=" << pointer.x << ',' << pointer.y;
+                out << " source=" << (source ? source : "?");
+                out << " selected=" << *m_state.selectedIndex << ":" << debugWindowLabel(nextSelectedWindow);
+                const auto activeWindow = Desktop::focusState()->window();
+                if (activeWindow)
+                    out << " active=" << debugWindowLabel(activeWindow);
+                else
+                    out << " active=<null>";
+                debugLog(out.str());
+            }
+        }
+    } else if (canRetargetSelection) {
+        const bool candidateNeedsPriming = m_hoverSelectionRetargetCandidateIndex != m_state.hoveredIndex || !m_hoverSelectionRetargetCandidatePrimed ||
+            m_hoverSelectionRetargetCandidateSince == std::chrono::steady_clock::time_point{};
+        if (candidateNeedsPriming) {
+            m_hoverSelectionRetargetCandidateIndex = m_state.hoveredIndex;
+            m_hoverSelectionRetargetCandidateSince = now;
+            m_hoverSelectionRetargetCandidatePrimed = true;
+            if (debugLogsEnabled()) {
+                std::ostringstream out;
+                out << "[hymission] hover retarget dwell start pointer=" << pointer.x << ',' << pointer.y;
+                out << " source=" << (source ? source : "?");
+                out << " candidate=" << *m_state.hoveredIndex << ":" << debugWindowLabel(m_state.windows[*m_state.hoveredIndex].window);
+                if (m_state.selectedIndex && *m_state.selectedIndex < m_state.windows.size())
+                    out << " selected=" << *m_state.selectedIndex << ":" << debugWindowLabel(m_state.windows[*m_state.selectedIndex].window);
+                else
+                    out << " selected=<null>";
+                out << " dwellMs=" << HOVER_SELECTION_RETARGET_DWELL.count();
+                debugLog(out.str());
+            }
+        } else if (now - m_hoverSelectionRetargetCandidateSince >= HOVER_SELECTION_RETARGET_DWELL) {
+            const bool selectionChanged = m_state.selectedIndex != m_state.hoveredIndex;
+            m_state.selectedIndex = m_state.hoveredIndex;
+            m_hoverSelectionRetargetCandidateIndex.reset();
+            m_hoverSelectionRetargetCandidateSince = {};
+            m_hoverSelectionRetargetCandidatePrimed = false;
+            if (syncRealFocus)
+                syncFocusDuringOverviewFromSelection(syncScrollingSpot, source);
+            else
+                m_state.focusDuringOverview = m_state.windows[*m_state.hoveredIndex].window;
+            if (selectionChanged && !syncRealFocus)
+                latchHoverSelectionAnchor(pointer);
+        } else if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] hover retarget dwelling pointer=" << pointer.x << ',' << pointer.y;
+            out << " source=" << (source ? source : "?");
+            out << " candidate=" << *m_state.hoveredIndex << ":" << debugWindowLabel(m_state.windows[*m_state.hoveredIndex].window);
+            if (m_state.selectedIndex && *m_state.selectedIndex < m_state.windows.size())
+                out << " selected=" << *m_state.selectedIndex << ":" << debugWindowLabel(m_state.windows[*m_state.selectedIndex].window);
+            else
+                out << " selected=<null>";
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_hoverSelectionRetargetCandidateSince).count();
+            out << " elapsedMs=" << elapsed;
+            out << " dwellMs=" << HOVER_SELECTION_RETARGET_DWELL.count();
+            debugLog(out.str());
+        }
+    } else if (retargetBlockedByCooldown && allowSelectionRetarget && debugLogsEnabled() && m_state.hoveredIndex && m_state.selectedIndex &&
+               *m_state.hoveredIndex != *m_state.selectedIndex) {
+        std::ostringstream out;
+        out << "[hymission] hover retarget cooling down pointer=" << pointer.x << ',' << pointer.y;
+        out << " source=" << (source ? source : "?");
+        out << " hovered=" << *m_state.hoveredIndex << ":" << debugWindowLabel(m_state.windows[*m_state.hoveredIndex].window);
+        out << " selected=" << *m_state.selectedIndex << ":" << debugWindowLabel(m_state.windows[*m_state.selectedIndex].window);
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(m_hoverSelectionRetargetBlockedUntil - now).count();
+        out << " remainingMs=" << std::max<long long>(remaining, 0);
+        debugLog(out.str());
+    } else if (retargetBlockedByRelayout && allowSelectionRetarget && debugLogsEnabled() && m_state.hoveredIndex && m_state.selectedIndex &&
+               *m_state.hoveredIndex != *m_state.selectedIndex) {
+        std::ostringstream out;
+        out << "[hymission] hover retarget deferred during relayout pointer=" << pointer.x << ',' << pointer.y;
+        out << " source=" << (source ? source : "?");
+        out << " hovered=" << *m_state.hoveredIndex << ":" << debugWindowLabel(m_state.windows[*m_state.hoveredIndex].window);
+        out << " selected=" << *m_state.selectedIndex << ":" << debugWindowLabel(m_state.windows[*m_state.selectedIndex].window);
+        out << " relayoutT=" << m_state.relayoutProgress;
+        debugLog(out.str());
+    } else if (retargetLocked && debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] hover retarget locked pointer=" << pointer.x << ',' << pointer.y
+            << " source=" << (source ? source : "?")
+            << " anchor=" << vectorToString(m_hoverSelectionAnchorPointer)
+            << " threshold=" << HOVER_SELECTION_RETARGET_DISTANCE;
+        if (m_state.hoveredIndex && *m_state.hoveredIndex < m_state.windows.size())
+            out << " hovered=" << *m_state.hoveredIndex << ":" << debugWindowLabel(m_state.windows[*m_state.hoveredIndex].window);
         else
-            m_state.focusDuringOverview = m_state.windows[*m_state.hoveredIndex].window;
+            out << " hovered=<null>";
+        if (m_state.selectedIndex && *m_state.selectedIndex < m_state.windows.size())
+            out << " selected=" << *m_state.selectedIndex << ":" << debugWindowLabel(m_state.windows[*m_state.selectedIndex].window);
+        else
+            out << " selected=<null>";
+        debugLog(out.str());
     }
 
     if (previousHoveredStrip != m_state.hoveredStripIndex || previousHovered != m_state.hoveredIndex || previousSelected != m_state.selectedIndex ||
@@ -6468,6 +7041,7 @@ void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncR
         if (debugLogsEnabled()) {
             std::ostringstream out;
             out << "[hymission] hover pointer=" << pointer.x << ',' << pointer.y;
+            out << " source=" << (source ? source : "?");
             if (m_state.hoveredStripIndex && *m_state.hoveredStripIndex < m_state.stripEntries.size()) {
                 const auto& entry = m_state.stripEntries[*m_state.hoveredStripIndex];
                 out << " strip=" << *m_state.hoveredStripIndex << ':' << entry.workspaceId;
@@ -6503,7 +7077,7 @@ void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncR
     }
 }
 
-void OverviewController::rebuildVisibleState() {
+void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, bool forceRelayout) {
     if (!isVisible() || !m_state.ownerMonitor || !m_state.ownerWorkspace)
         return;
 
@@ -6511,6 +7085,7 @@ void OverviewController::rebuildVisibleState() {
         clearOverviewWorkspaceTransition();
 
     const auto monitor = m_state.ownerMonitor;
+    const auto previousOwnerWorkspace = m_state.ownerWorkspace;
     const auto requestedScope = m_state.collectionPolicy.requestedScope;
     const auto previousPhase = m_state.phase;
     const auto previousAnimationProgress = m_state.animationProgress;
@@ -6536,11 +7111,27 @@ void OverviewController::rebuildVisibleState() {
     for (const auto& window : m_state.transientClosingWindows)
         previousPreviewRects.emplace_back(window.window, currentPreviewRect(window));
 
-    State next = buildState(monitor, requestedScope);
+    const auto layoutSelectedWindow =
+        expandSelectedWindowEnabled() ? (preferredSelectedWindow ? preferredSelectedWindow : (selectedWindow() ? selectedWindow() : Desktop::focusState()->window())) : PHLWINDOW{};
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] rebuild request forceRelayout=" << (forceRelayout ? 1 : 0)
+            << " preferredSelected=" << debugWindowLabel(preferredSelectedWindow)
+            << " layoutSelected=" << debugWindowLabel(layoutSelectedWindow);
+        if (const auto activeWindow = Desktop::focusState()->window(); activeWindow)
+            out << " active=" << debugWindowLabel(activeWindow);
+        else
+            out << " active=<null>";
+        debugLog(out.str());
+    }
+    State next = buildState(monitor, requestedScope, {}, false, false, layoutSelectedWindow);
     if (next.windows.empty() && next.stripEntries.empty()) {
         beginClose(CloseMode::Abort);
         return;
     }
+
+    if (!m_state.collectionPolicy.onlyActiveWorkspace && previousOwnerWorkspace)
+        next.ownerWorkspace = previousOwnerWorkspace;
 
     next.phase = previousPhase;
     next.animationProgress = previousAnimationProgress;
@@ -6588,9 +7179,10 @@ void OverviewController::rebuildVisibleState() {
         std::ranges::all_of(next.windows, [&](const ManagedWindow& managed) { return managed.window && previousManagedForWindow(managed.window) != nullptr; });
     const bool sameMonitorSet = next.participatingMonitors.size() == m_state.participatingMonitors.size() &&
         std::ranges::all_of(next.participatingMonitors, [&](const PHLMONITOR& monitor) { return containsHandle(m_state.participatingMonitors, monitor); });
+    const bool selectionRelayoutForced = forceRelayout && expandSelectedWindowEnabled();
 
     bool shouldAnimateRelayout = false;
-    if (sameWindowSet && sameMonitorSet) {
+    if (sameWindowSet && sameMonitorSet && !selectionRelayoutForced) {
         for (auto& window : next.windows) {
             const auto* previousManaged = previousManagedForWindow(window.window);
             if (!previousManaged)
@@ -6602,8 +7194,11 @@ void OverviewController::rebuildVisibleState() {
             window.relayoutFromGlobal = previousManaged->targetGlobal;
             window.exitGlobal = previousManaged->exitGlobal;
         }
-    } else if (previousPhase == Phase::Active) {
+    } else if (previousPhase == Phase::Active || selectionRelayoutForced) {
         for (auto& window : next.windows) {
+            if (const auto* previousManaged = previousManagedForWindow(window.window); previousManaged)
+                window.exitGlobal = previousManaged->exitGlobal;
+
             const auto it = std::find_if(previousPreviewRects.begin(), previousPreviewRects.end(), [&](const auto& previous) { return previous.first == window.window; });
             if (it != previousPreviewRects.end())
                 window.relayoutFromGlobal = it->second;
@@ -6644,7 +7239,7 @@ void OverviewController::rebuildVisibleState() {
     for (const auto& window : m_state.transientClosingWindows)
         appendTransientClosingWindow(window);
 
-    if (sameWindowSet && sameMonitorSet) {
+    if (sameWindowSet && sameMonitorSet && !selectionRelayoutForced) {
         next.relayoutActive = false;
         next.relayoutProgress = 1.0;
         next.relayoutStart = {};
@@ -6682,7 +7277,12 @@ void OverviewController::rebuildVisibleState() {
         }
         out << " relayout=" << (shouldAnimateRelayout ? 1 : 0);
         out << " frozenLayout=" << ((sameWindowSet && sameMonitorSet) ? 1 : 0);
+        out << " forcedSelectionRelayout=" << (selectionRelayoutForced ? 1 : 0);
         debugLog(out.str());
+        if (forceRelayout || selectionRelayoutForced) {
+            logOverviewLayoutState("rebuild-before", m_state);
+            logOverviewLayoutState("rebuild-next", next);
+        }
     }
 
     clearStripWindowDragState();
@@ -6691,7 +7291,15 @@ void OverviewController::rebuildVisibleState() {
     applyWorkspaceNameOverrides(m_state);
     syncHiddenStripLayerProxies();
     refreshWorkspaceStripSnapshots();
-    updateHoveredFromPointer(focusFollowsMouseEnabled(), false);
+    if (selectionRelayoutForced) {
+        m_state.hoveredIndex = m_state.selectedIndex;
+    } else {
+        updateHoveredFromPointer(false, false, false, false, forceRelayout ? "rebuild-forced" : "rebuild-passive");
+    }
+    if (!selectionRelayoutForced && m_state.phase == Phase::Active && (!sameWindowSet || !sameMonitorSet))
+        updateSelectedWindowLayout({});
+    if (debugLogsEnabled() && (forceRelayout || selectionRelayoutForced))
+        logOverviewLayoutState("rebuild-after-hover-refresh", m_state);
     damageOwnedMonitors();
 }
 
@@ -6701,7 +7309,7 @@ void OverviewController::moveSelection(Direction direction) {
 
     if (!m_state.selectedIndex) {
         m_state.selectedIndex = 0;
-        syncFocusDuringOverviewFromSelection();
+        syncFocusDuringOverviewFromSelection(true, "keyboard-init");
         damageOwnedMonitors();
         return;
     }
@@ -6710,7 +7318,7 @@ void OverviewController::moveSelection(Direction direction) {
         if (*next == *m_state.selectedIndex)
             return;
         m_state.selectedIndex = *next;
-        syncFocusDuringOverviewFromSelection();
+        syncFocusDuringOverviewFromSelection(true, "keyboard-nav");
         damageOwnedMonitors();
     }
 }
@@ -6827,6 +7435,173 @@ std::string OverviewController::debugWindowLabel(const PHLWINDOW& window) const 
     out << window->m_class << "::" << window->m_title << '@' << std::hex << reinterpret_cast<uintptr_t>(window.get()) << std::dec
         << (window->m_isX11 ? " x11" : " wayland");
     return out.str();
+}
+
+void OverviewController::latchHoverSelectionAnchor(const Vector2D& pointer) {
+    m_hoverSelectionAnchorPointer = pointer;
+    m_hoverSelectionAnchorValid = true;
+}
+
+bool OverviewController::hoverSelectionRetargetLocked(const Vector2D& pointer, const std::optional<std::size_t>& hoveredIndex) const {
+    if (!expandSelectedWindowEnabled() || !m_hoverSelectionAnchorValid || !m_state.selectedIndex || !hoveredIndex || *hoveredIndex == *m_state.selectedIndex)
+        return false;
+
+    const double distance = std::hypot(pointer.x - m_hoverSelectionAnchorPointer.x, pointer.y - m_hoverSelectionAnchorPointer.y);
+    return distance < HOVER_SELECTION_RETARGET_DISTANCE;
+}
+
+void OverviewController::logOverviewLayoutState(const char* context, const State& state) const {
+    if (!debugLogsEnabled())
+        return;
+
+    std::ostringstream summary;
+    summary << "[hymission] layout dump context=" << (context ? context : "?") << " phase=";
+    switch (state.phase) {
+        case Phase::Inactive:
+            summary << "inactive";
+            break;
+        case Phase::Opening:
+            summary << "opening";
+            break;
+        case Phase::Active:
+            summary << "active";
+            break;
+        case Phase::ClosingSettle:
+            summary << "closing-settle";
+            break;
+        case Phase::Closing:
+            summary << "closing";
+            break;
+    }
+    summary << " ownerMonitor=" << (state.ownerMonitor ? state.ownerMonitor->m_name : "?")
+            << " ownerWorkspace=" << debugWorkspaceLabel(state.ownerWorkspace)
+            << " windows=" << state.windows.size();
+    if (state.selectedIndex && *state.selectedIndex < state.windows.size())
+        summary << " selected=" << *state.selectedIndex << ":" << debugWindowLabel(state.windows[*state.selectedIndex].window);
+    else
+        summary << " selected=<null>";
+    if (state.hoveredIndex && *state.hoveredIndex < state.windows.size())
+        summary << " hovered=" << *state.hoveredIndex << ":" << debugWindowLabel(state.windows[*state.hoveredIndex].window);
+    else
+        summary << " hovered=<null>";
+    if (state.focusDuringOverview)
+        summary << " focusDuringOverview=" << debugWindowLabel(state.focusDuringOverview);
+    else
+        summary << " focusDuringOverview=<null>";
+    debugLog(summary.str());
+
+    if (state.windows.empty())
+        return;
+
+    std::ostringstream stateOrder;
+    stateOrder << "[hymission] layout dump state-order context=" << (context ? context : "?");
+    for (std::size_t index = 0; index < state.windows.size(); ++index) {
+        const auto& managed = state.windows[index];
+        stateOrder << " | #" << index << ' ' << debugWindowLabel(managed.window);
+        if (managed.window && managed.window->m_workspace)
+            stateOrder << " ws=" << debugWorkspaceLabel(managed.window->m_workspace);
+        stateOrder << " mon=" << (managed.targetMonitor ? managed.targetMonitor->m_name : "?")
+                   << " slot=" << rectToString(managed.slot.target)
+                   << " target=" << rectToString(managed.targetGlobal);
+    }
+    debugLog(stateOrder.str());
+
+    std::vector<std::size_t> visualOrder(state.windows.size());
+    std::iota(visualOrder.begin(), visualOrder.end(), 0);
+    std::stable_sort(visualOrder.begin(), visualOrder.end(), [&](std::size_t lhs, std::size_t rhs) {
+        const auto& left = state.windows[lhs];
+        const auto& right = state.windows[rhs];
+        const auto leftMonitorId = left.targetMonitor ? left.targetMonitor->m_id : MONITOR_INVALID;
+        const auto rightMonitorId = right.targetMonitor ? right.targetMonitor->m_id : MONITOR_INVALID;
+        if (leftMonitorId != rightMonitorId)
+            return leftMonitorId < rightMonitorId;
+        if (std::abs(left.targetGlobal.y - right.targetGlobal.y) > 0.5)
+            return left.targetGlobal.y < right.targetGlobal.y;
+        if (std::abs(left.targetGlobal.x - right.targetGlobal.x) > 0.5)
+            return left.targetGlobal.x < right.targetGlobal.x;
+        return lhs < rhs;
+    });
+
+    std::ostringstream visual;
+    visual << "[hymission] layout dump visual-order context=" << (context ? context : "?");
+    for (std::size_t visualIndex = 0; visualIndex < visualOrder.size(); ++visualIndex) {
+        const auto stateIndex = visualOrder[visualIndex];
+        const auto& managed = state.windows[stateIndex];
+        visual << " | @" << visualIndex << " #" << stateIndex << ' ' << debugWindowLabel(managed.window)
+               << " target=" << rectToString(managed.targetGlobal);
+    }
+    debugLog(visual.str());
+}
+
+void OverviewController::logScrollingWorkspaceSpotState(const char* context, const PHLWORKSPACE& workspace, const PHLWINDOW& focusWindow) const {
+    if (!debugLogsEnabled() || !workspace)
+        return;
+
+    auto* scrolling = scrollingAlgorithmForWorkspace(workspace);
+    if (!scrolling || !scrolling->m_scrollingData || !scrolling->m_scrollingData->controller) {
+        std::ostringstream out;
+        out << "[hymission] scrolling spot dump context=" << (context ? context : "?")
+            << " workspace=" << debugWorkspaceLabel(workspace) << " unavailable=1";
+        debugLog(out.str());
+        return;
+    }
+
+    const auto& data = scrolling->m_scrollingData;
+    std::ostringstream summary;
+    summary << "[hymission] scrolling spot dump context=" << (context ? context : "?")
+            << " workspace=" << debugWorkspaceLabel(workspace)
+            << " visible=" << (workspace->isVisible() ? 1 : 0)
+            << " columns=" << data->columns.size()
+            << " offset=" << data->controller->getOffset();
+    if (data->lockedCameraOffset)
+        summary << " lockedOffset=" << *data->lockedCameraOffset;
+    else
+        summary << " lockedOffset=<null>";
+    if (focusWindow)
+        summary << " focus=" << debugWindowLabel(focusWindow);
+    const auto activeWindow = Desktop::focusState()->window();
+    if (activeWindow)
+        summary << " active=" << debugWindowLabel(activeWindow);
+    else
+        summary << " active=<null>";
+    debugLog(summary.str());
+
+    std::ostringstream columns;
+    columns << "[hymission] scrolling spot columns context=" << (context ? context : "?");
+    for (std::size_t columnIndex = 0; columnIndex < data->columns.size(); ++columnIndex) {
+        const auto& column = data->columns[columnIndex];
+        if (!column) {
+            columns << " | col#" << columnIndex << " <null-column>";
+            continue;
+        }
+
+        const auto lastFocusedTarget = column->lastFocusedTarget.lock();
+        columns << " | col#" << columnIndex << " width=" << column->getColumnWidth() << " targets=" << column->targetDatas.size();
+        if (lastFocusedTarget) {
+            const auto lastTarget = lastFocusedTarget->target.lock();
+            columns << " lastFocused=" << debugWindowLabel(lastTarget ? lastTarget->window() : PHLWINDOW{});
+        } else {
+            columns << " lastFocused=<null>";
+        }
+
+        for (std::size_t targetIndex = 0; targetIndex < column->targetDatas.size(); ++targetIndex) {
+            const auto& targetData = column->targetDatas[targetIndex];
+            const auto target = targetData ? targetData->target.lock() : SP<Layout::ITarget>{};
+            const auto window = target ? target->window() : PHLWINDOW{};
+
+            columns << " [" << targetIndex << ']';
+            if (targetData && targetData == lastFocusedTarget)
+                columns << '*';
+            if (window == focusWindow)
+                columns << '!';
+            columns << debugWindowLabel(window);
+            if (target)
+                columns << " pos=" << boxToString(target->position());
+            if (targetData)
+                columns << " layout=" << boxToString(targetData->layoutBox);
+        }
+    }
+    debugLog(columns.str());
 }
 
 bool OverviewController::workspaceStripEntriesMatchForSnapshot(const WorkspaceStripEntry& lhs, const WorkspaceStripEntry& rhs) const {
@@ -7500,7 +8275,8 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
 }
 
 OverviewController::State OverviewController::buildState(const PHLMONITOR& monitor, ScopeOverride requestedScope, const std::vector<WorkspaceOverride>& workspaceOverrides,
-                                                         bool keepEmptyParticipatingMonitors, bool suppressWorkspaceStrip) const {
+                                                         bool keepEmptyParticipatingMonitors, bool suppressWorkspaceStrip,
+                                                         PHLWINDOW preferredSelectedWindow) const {
     State state;
     if (!monitor || !monitor->m_activeWorkspace)
         return state;
@@ -7512,8 +8288,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     state.ownerWorkspace = monitor->m_activeWorkspace;
     state.collectionPolicy = loadCollectionPolicy(requestedScope);
     state.suppressWorkspaceStrip = suppressWorkspaceStrip;
-    state.focusBeforeOpen = Desktop::focusState()->window();
-    state.focusDuringOverview = state.focusBeforeOpen;
+    const auto focusedWindow = Desktop::focusState()->window();
+    state.focusBeforeOpen = focusedWindow;
+    state.focusDuringOverview = preferredSelectedWindow ? preferredSelectedWindow : focusedWindow;
 
     const auto addMonitor = [&](const PHLMONITOR& candidate) {
         if (!candidate || containsHandle(state.participatingMonitors, candidate))
@@ -7645,9 +8422,38 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     if (preserveExistingOrder && !m_state.windows.empty()) {
         std::unordered_map<PHLWINDOW, std::size_t> previousOrder;
         previousOrder.reserve(m_state.windows.size());
+
+        std::vector<std::size_t> visibleOrder;
+        visibleOrder.reserve(m_state.windows.size());
         for (std::size_t i = 0; i < m_state.windows.size(); ++i) {
             if (m_state.windows[i].window)
-                previousOrder.emplace(m_state.windows[i].window, i);
+                visibleOrder.push_back(i);
+        }
+
+        // Preserve the currently visible preview order rather than the raw
+        // storage order. Selection-emphasis relayouts should only resize and
+        // nudge neighbors, not reshuffle previews that are already on screen.
+        std::stable_sort(visibleOrder.begin(), visibleOrder.end(), [&](std::size_t lhsIndex, std::size_t rhsIndex) {
+            const auto& lhs = m_state.windows[lhsIndex];
+            const auto& rhs = m_state.windows[rhsIndex];
+            const auto lhsMonitorId = lhs.targetMonitor ? lhs.targetMonitor->m_id : MONITOR_INVALID;
+            const auto rhsMonitorId = rhs.targetMonitor ? rhs.targetMonitor->m_id : MONITOR_INVALID;
+            if (lhsMonitorId != rhsMonitorId)
+                return lhsMonitorId < rhsMonitorId;
+
+            const Rect lhsRect = currentPreviewRect(lhs);
+            const Rect rhsRect = currentPreviewRect(rhs);
+            if (std::abs(lhsRect.y - rhsRect.y) > 0.5)
+                return lhsRect.y < rhsRect.y;
+            if (std::abs(lhsRect.x - rhsRect.x) > 0.5)
+                return lhsRect.x < rhsRect.x;
+            return lhsIndex < rhsIndex;
+        });
+
+        for (std::size_t order = 0; order < visibleOrder.size(); ++order) {
+            const auto& managed = m_state.windows[visibleOrder[order]];
+            if (managed.window)
+                previousOrder.emplace(managed.window, order);
         }
 
         std::stable_sort(candidates.begin(), candidates.end(), [&](const PHLWINDOW& lhs, const PHLWINDOW& rhs) {
@@ -7712,6 +8518,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 },
             .label = window->m_title,
             .rowGroup = rowGroupForWindow(window),
+            .layoutEmphasis = 1.0,
         });
         indexesByMonitor[targetMonitor->m_id].push_back(windowIndex);
 
@@ -7765,11 +8572,20 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     state.participatingMonitors = std::move(activeParticipatingMonitors);
     buildWorkspaceStripEntries(state);
 
-    const auto focused = Desktop::focusState()->window();
+    const auto selectionTarget = preferredSelectedWindow ? preferredSelectedWindow : focusedWindow;
     for (std::size_t index = 0; index < state.windows.size(); ++index) {
-        if (state.windows[index].window == focused) {
+        if (state.windows[index].window == selectionTarget) {
             state.selectedIndex = index;
             break;
+        }
+    }
+
+    if (!state.selectedIndex) {
+        for (std::size_t index = 0; index < state.windows.size(); ++index) {
+            if (state.windows[index].window == focusedWindow) {
+                state.selectedIndex = index;
+                break;
+            }
         }
     }
 
@@ -7778,6 +8594,8 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
     if (state.selectedIndex && *state.selectedIndex < state.windows.size())
         state.focusDuringOverview = state.windows[*state.selectedIndex].window;
+    else
+        state.focusDuringOverview = focusedWindow;
 
     return state;
 }

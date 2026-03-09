@@ -342,6 +342,7 @@ class OverviewController {
     [[nodiscard]] LayoutConfig loadLayoutConfig() const;
     [[nodiscard]] CollectionPolicy loadCollectionPolicy(ScopeOverride requestedScope) const;
     [[nodiscard]] std::optional<ScopeOverride> parseScopeOverride(const std::string& args, std::string& error) const;
+    [[nodiscard]] bool         expandSelectedWindowEnabled() const;
     [[nodiscard]] bool         focusFollowsMouseEnabled() const;
     [[nodiscard]] bool         gestureInvertVerticalEnabled() const;
     [[nodiscard]] bool         workspaceSwipeInvertEnabled() const;
@@ -472,7 +473,12 @@ class OverviewController {
     [[nodiscard]] bool         syncScrollingWorkspaceSpotOnWindow(const PHLWINDOW& window) const;
     void                       refreshExitLayoutForFocus(const PHLWINDOW& window) const;
     void                       syncRealFocusDuringOverview(const PHLWINDOW& window, bool syncScrollingSpot = true);
-    void                       syncFocusDuringOverviewFromSelection(bool syncScrollingSpot = true);
+    void                       syncFocusDuringOverviewFromSelection(bool syncScrollingSpot = true, const char* source = "?");
+    void                       queueSelectionRetargetDuringOverview(const PHLWINDOW& window, bool syncScrollingSpot = true, const char* source = "?");
+    void                       flushQueuedSelectionRetargetDuringOverview();
+    void                       queueRealFocusDuringOverview(const PHLWINDOW& window, bool syncScrollingSpot = true, const char* source = "?");
+    void                       flushQueuedRealFocusDuringOverview();
+    void                       updateSelectedWindowLayout(const PHLWINDOW& previousSelectedWindow);
     void                       clearPendingWindowGeometryRetry();
     void                       scheduleVisibleStateRebuild();
     void                       schedulePendingWindowGeometryRetry(const PHLWINDOW& window);
@@ -491,8 +497,9 @@ class OverviewController {
     void scheduleDeactivate();
     void damageOwnedMonitors() const;
     void updateAnimation();
-    void updateHoveredFromPointer(bool syncSelection = true, bool syncRealFocus = true, bool syncScrollingSpot = true);
-    void rebuildVisibleState();
+    void updateHoveredFromPointer(bool syncSelection = true, bool syncRealFocus = true, bool syncScrollingSpot = true, bool allowSelectionRetarget = false,
+                                  const char* source = "?");
+    void rebuildVisibleState(PHLWINDOW preferredSelectedWindow = {}, bool forceRelayout = false);
     void moveSelection(Direction direction);
     void activateSelection();
     void notify(const std::string& message, const CHyprColor& color, float durationMs) const;
@@ -500,6 +507,10 @@ class OverviewController {
     void debugSurfaceLog(const std::string& message) const;
     [[nodiscard]] std::string debugWorkspaceLabel(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] std::string debugWindowLabel(const PHLWINDOW& window) const;
+    void logOverviewLayoutState(const char* context, const State& state) const;
+    void logScrollingWorkspaceSpotState(const char* context, const PHLWORKSPACE& workspace, const PHLWINDOW& focusWindow = {}) const;
+    void latchHoverSelectionAnchor(const Vector2D& pointer);
+    [[nodiscard]] bool hoverSelectionRetargetLocked(const Vector2D& pointer, const std::optional<std::size_t>& hoveredIndex) const;
     [[nodiscard]] bool workspaceStripEntriesMatchForSnapshot(const WorkspaceStripEntry& lhs, const WorkspaceStripEntry& rhs) const;
     void carryOverWorkspaceStripSnapshots(State& next, const State& previous) const;
     void renderWorkspaceStrip() const;
@@ -517,7 +528,7 @@ class OverviewController {
     [[nodiscard]] bool matchesPendingStripWorkspaceChange(const PHLWORKSPACE& workspace) const;
     void buildWorkspaceStripEntries(State& state) const;
     State  buildState(const PHLMONITOR& monitor, ScopeOverride requestedScope, const std::vector<WorkspaceOverride>& workspaceOverrides = {},
-                      bool keepEmptyParticipatingMonitors = false, bool suppressWorkspaceStrip = false) const;
+                      bool keepEmptyParticipatingMonitors = false, bool suppressWorkspaceStrip = false, PHLWINDOW preferredSelectedWindow = {}) const;
     State  m_state;
     HANDLE m_handle = nullptr;
 
@@ -573,6 +584,11 @@ class OverviewController {
     bool                      m_deactivatePending = false;
     bool                      m_deactivateScheduled = false;
     std::size_t               m_surfaceRenderDataTransformDepth = 0;
+    PHLWINDOWREF              m_lastLayoutSelectedWindow;
+    PHLWINDOWREF              m_queuedOverviewSelectionTarget;
+    bool                      m_queuedOverviewSelectionSyncScrollingSpot = false;
+    PHLWINDOWREF              m_queuedOverviewLiveFocusTarget;
+    bool                      m_queuedOverviewLiveFocusSyncScrollingSpot = false;
     PHLWINDOWREF              m_pendingLiveFocusWorkspaceChangeTarget;
     PHLWINDOWREF              m_pendingWindowGeometryRetryTarget;
     bool                      m_visibleStateRebuildScheduled = false;
@@ -606,8 +622,14 @@ class OverviewController {
     std::optional<std::size_t> m_pressedStripIndex;
     std::optional<std::size_t> m_pressedWindowIndex;
     std::optional<std::size_t> m_draggedWindowIndex;
-    Vector2D                 m_pressedWindowPointer;
-    Vector2D                 m_draggedWindowPointerOffset;
+    Vector2D                  m_pressedWindowPointer;
+    Vector2D                  m_draggedWindowPointerOffset;
+    Vector2D                  m_hoverSelectionAnchorPointer;
+    bool                      m_hoverSelectionAnchorValid = false;
+    std::chrono::steady_clock::time_point m_hoverSelectionRetargetBlockedUntil = {};
+    std::optional<std::size_t> m_hoverSelectionRetargetCandidateIndex;
+    std::chrono::steady_clock::time_point m_hoverSelectionRetargetCandidateSince = {};
+    bool                      m_hoverSelectionRetargetCandidatePrimed = false;
     bool                      m_suppressInitialHoverUpdate = false;
     std::size_t               m_postOpenRefreshFrames = 0;
 
