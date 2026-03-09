@@ -173,6 +173,7 @@ plugin {
         hide_bar_animation_move_multiplier = 0.8
         hide_bar_animation_scale_divisor = 1.1
         hide_bar_animation_alpha_end = 0
+        bar_single_mission_control = 0
         show_focus_indicator = 0
 
         debug_logs = 0
@@ -226,9 +227,31 @@ plugin {
 | `hide_bar_animation_move_multiplier` | float | `0.8` | Multiplier for how much the bar follows strip movement. Clamped to `0.0` - `2.0`. `1.0` matches full strip travel and `2.0` doubles it. |
 | `hide_bar_animation_scale_divisor` | float | `1.1` | Bar scale divisor at full strip reveal. A value of `n` means the proxy scales to `1 / n` of its original size at maximum. `1.0` disables scaling. |
 | `hide_bar_animation_alpha_end` | float | `0.0` | Final bar proxy alpha when the strip is fully revealed. Clamped to `0.0` - `1.0`. `0.0` fully fades out; higher values keep part of the bar visible. |
+| `bar_single_mission_control` | bool | `0` | Multi-workspace overview only. Keep this at `0` to preserve the bar's normal numbered workspace display. When enabled, the bar workspace list collapses to a single `Mission Control` entry and the other regular overview workspaces are renamed to an internal hidden prefix so bars can filter them out. Intended for Waybar `ignore-workspaces`. |
 
 The workspace strip is shown when the current overview scope displays only the active workspace.
 By default it only shows real workspaces plus the trailing new-workspace card. In `continuous` mode, synthetic empty workspaces progressively expose numbered gaps one slot at a time and render the monitor background/wallpaper when available; the trailing new-workspace card keeps its dedicated `+` styling.
+
+### Optional Waybar Single-Entry Setup
+
+Leave `bar_single_mission_control = 0` if you want `hyprland/workspaces` to keep showing the usual numbered workspaces.
+
+If you explicitly want `hyprland/workspaces` to collapse to a single `Mission Control` button while multi-workspace overview is visible:
+
+1. Set `bar_single_mission_control = 1` in `plugin:hymission`.
+2. Add an `ignore-workspaces` rule that hides the plugin's temporary names:
+
+```jsonc
+"hyprland/workspaces": {
+  "all-outputs": true,
+  "disable-scroll": true,
+  "on-click": "activate",
+  "persistent_workspaces": {},
+  "ignore-workspaces": ["^__hymission_hidden__:"]
+}
+```
+
+This keeps normal workspace names untouched outside overview. While overview is open, the anchor workspace remains `Mission Control` and the other regular overview workspaces are renamed to the hidden prefix so Waybar drops them from the module.
 
 ### Debug options
 

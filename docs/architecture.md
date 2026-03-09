@@ -65,7 +65,7 @@
 - 管理 overview 打开、关闭、relayout、settle、workspace 过渡和 gesture session
 - 接管 render / input / dispatcher / gesture hook
 - 在 overview 期间临时覆盖 `input:follow_mouse`、`scrolling:follow_focus`、`animations:enabled`
-- 对多 workspace overview 临时改名为 `Mission Control`
+- 在 `bar_single_mission_control = 1` 时，对多 workspace overview 临时改名为单个 `Mission Control`
 - 处理 fullscreen backup / restore 以及 scrolling workspace 的退出收尾
 
 ### 2.4 插件入口
@@ -212,7 +212,7 @@ overview 可见期间，controller 持续做三件事：
   - 可接管原生 workspace swipe
 - scope 同时展示多个 workspace：
   - 禁止 workspace 切换
-  - 临时把参与 monitor 上活动 workspace 名字改成 `Mission Control`
+  - 默认保持 bar workspace 正常编号显示；只有 `bar_single_mission_control = 1` 时才临时折叠成单个 `Mission Control`
 
 ## 7. 当前测试边界
 

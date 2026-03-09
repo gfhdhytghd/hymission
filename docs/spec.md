@@ -273,7 +273,7 @@ workspace 切换补充语义：
 - 上述过渡提交时必须屏蔽 Hyprland 原生普通 workspace in/out 动画，只保留 overview 自己的滑动
 - 如果当前 overview scope 只展示活动 workspace，但 `workspace_change_keeps_overview = 0`，则 workspace 变化成立后，overview 应退出到正常工作区
 - 如果当前 overview scope 同时展示了多个 workspace，则 overview 内必须禁止 workspace 切换，包括 keyboard dispatcher 和原生 workspace swipe
-- 多 workspace overview 期间，参与 monitor 上活动 workspace 的名字应临时改成 `Mission Control`，退出 overview 后恢复原名
+- 多 workspace overview 期间，只有当 `bar_single_mission_control = 1` 时，bar 才应临时折叠成单个 `Mission Control` 项；退出 overview 后恢复原名
 - overview 不得通过持续 `rawWindowFocus(...)` 把工作区切换强行拉回原 workspace
 
 ## 8. 当前配置面
@@ -303,6 +303,7 @@ workspace 切换补充语义：
 - `workspace_strip_empty_mode`
 - `workspace_strip_thickness`
 - `workspace_strip_gap`
+- `bar_single_mission_control`
 
 约束：
 
@@ -316,6 +317,7 @@ workspace 切换补充语义：
 - `workspace_strip_empty_mode` 当前只支持 `existing` 和 `continuous`；默认值为 `existing`
 - `workspace_change_keeps_overview` 只在当前 overview scope 只展示活动 workspace 时生效；当前 scope 同时展示多个 workspace 时，workspace 切换必须被禁止
 - `workspace_change_keeps_overview = 1` 时，workspace 切换的视觉语义是 overview-to-overview 过渡，而不是普通 workspace 动画 + overview 重建
+- `bar_single_mission_control` 只在当前 overview scope 同时展示多个 workspace 时生效；默认建议保持 `0`，这样 bar 继续显示正常的编号 workspace；`1` 时通过临时 workspace rename 为外部 bar 提供“只保留一个 Mission Control 项”的过滤前缀，不承诺对 shell / dock 做更深的直接集成
 - 除 `overview_focus_follows_mouse` 外，overview 状态机、动画、输入等配置不在 v1 第一阶段暴露
 - 在没有充分稳定前，不新增大量面向最终用户的细粒度行为开关
 
