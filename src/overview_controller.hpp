@@ -38,6 +38,11 @@ class OverviewOverlayPassElement;
 
 class OverviewController {
   public:
+    enum class WindowSetChangeKind {
+        General,
+        MoveToWorkspace,
+    };
+
     enum class ScopeOverride {
         Default,
         OnlyCurrentWorkspace,
@@ -66,7 +71,7 @@ class OverviewController {
     void handleMouseMove();
     bool handleMouseButton(const IPointer::SButtonEvent& event);
     void handleKeyboard(const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info);
-    void handleWindowSetChange(PHLWINDOW window, bool preferDeferredRebuild = false);
+    void handleWindowSetChange(PHLWINDOW window, WindowSetChangeKind kind = WindowSetChangeKind::General, bool preferDeferredRebuild = false);
     void handleWorkspaceChange(PHLWORKSPACE workspace);
     void handleMonitorChange(PHLMONITOR monitor);
     bool                shouldRenderWindowHook(const PHLWINDOW& window, const PHLMONITOR& monitor);
