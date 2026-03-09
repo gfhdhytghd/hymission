@@ -2072,8 +2072,7 @@ void OverviewController::handleWindowSetChange(PHLWINDOW window, WindowSetChange
         return;
     }
 
-    const bool insideRenderLifecycle = m_surfaceRenderDataTransformDepth > 0 || m_stripSnapshotRenderDepth > 0 || (g_pHyprOpenGL && g_pHyprOpenGL->m_renderData.pMonitor);
-    const bool shouldDeferRebuild = preferDeferredRebuild || insideRenderLifecycle;
+    const bool shouldDeferRebuild = preferDeferredRebuild || insideRenderLifecycle();
 
     if (m_workspaceTransition.active) {
         if (shouldDeferRebuild) {
@@ -2129,6 +2128,20 @@ void OverviewController::handleWorkspaceChange(PHLWORKSPACE workspace) {
 
     if (action == OverviewWorkspaceChangeAction::Ignore)
         return;
+
+    if (insideRenderLifecycle()) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] defer workspace change handling until after render action="
+                << (action == OverviewWorkspaceChangeAction::Rebuild ? "rebuild" : "abort");
+            if (workspace)
+                out << " workspace=" << debugWorkspaceLabel(workspace);
+            debugLog(out.str());
+        }
+
+        scheduleWorkspaceChangeHandling(workspace);
+        return;
+    }
 
     if (liveFocusWorkspaceChange) {
         if (debugLogsEnabled()) {
@@ -4452,6 +4465,10 @@ bool OverviewController::shouldSyncRealFocusDuringOverview() const {
     return shouldSyncOverviewLiveFocus(shouldHandleInput(), focusFollowsMouseEnabled(), m_inputFollowMouseBackup);
 }
 
+bool OverviewController::insideRenderLifecycle() const {
+    return m_surfaceRenderDataTransformDepth > 0 || m_stripSnapshotRenderDepth > 0 || (g_pHyprOpenGL && g_pHyprOpenGL->m_renderData.pMonitor);
+}
+
 bool OverviewController::ownsMonitor(const PHLMONITOR& monitor) const {
     if (!monitor)
         return false;
@@ -6355,6 +6372,38 @@ void OverviewController::scheduleVisibleStateRebuild() {
     });
 }
 
+void OverviewController::scheduleWorkspaceChangeHandling(const PHLWORKSPACE& workspace) {
+    m_pendingWorkspaceChange = workspace;
+
+    if (m_workspaceChangeHandlingScheduled)
+        return;
+
+    if (!g_pEventLoopManager) {
+        if (!insideRenderLifecycle() && workspace)
+            handleWorkspaceChange(workspace);
+        return;
+    }
+
+    m_workspaceChangeHandlingScheduled = true;
+    const auto generation = ++m_workspaceChangeHandlingGeneration;
+    g_pEventLoopManager->doLater([this, generation] {
+        if (g_controller != this || generation != m_workspaceChangeHandlingGeneration)
+            return;
+
+        m_workspaceChangeHandlingScheduled = false;
+        const auto workspace = m_pendingWorkspaceChange.lock();
+        if (!workspace)
+            return;
+
+        if (insideRenderLifecycle()) {
+            scheduleWorkspaceChangeHandling(workspace);
+            return;
+        }
+
+        handleWorkspaceChange(workspace);
+    });
+}
+
 void OverviewController::schedulePendingWindowGeometryRetry(const PHLWINDOW& window) {
     if (!window || !g_pEventLoopManager || !isVisible() || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
         return;
@@ -6626,6 +6675,9 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     m_queuedOverviewLiveFocusTarget.reset();
     m_queuedOverviewLiveFocusSyncScrollingSpot = false;
     m_pendingLiveFocusWorkspaceChangeTarget.reset();
+    m_pendingWorkspaceChange.reset();
+    m_workspaceChangeHandlingScheduled = false;
+    ++m_workspaceChangeHandlingGeneration;
     clearPendingStripWorkspaceChange();
     clearStripWindowDragState();
     m_primaryButtonPressed = false;
@@ -6978,6 +7030,9 @@ void OverviewController::deactivate() {
     m_queuedOverviewLiveFocusTarget.reset();
     m_queuedOverviewLiveFocusSyncScrollingSpot = false;
     m_pendingLiveFocusWorkspaceChangeTarget.reset();
+    m_pendingWorkspaceChange.reset();
+    m_workspaceChangeHandlingScheduled = false;
+    ++m_workspaceChangeHandlingGeneration;
     clearPendingStripWorkspaceChange();
     clearStripWindowDragState();
     clearHiddenStripLayerProxies();

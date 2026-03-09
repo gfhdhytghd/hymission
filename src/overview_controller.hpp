@@ -407,6 +407,7 @@ class OverviewController {
     [[nodiscard]] bool         isAnimating() const;
     [[nodiscard]] bool         isVisible() const;
     [[nodiscard]] bool         shouldHandleInput() const;
+    [[nodiscard]] bool         insideRenderLifecycle() const;
     [[nodiscard]] std::vector<PHLMONITOR> ownedMonitors() const;
     [[nodiscard]] bool         ownsMonitor(const PHLMONITOR& monitor) const;
     [[nodiscard]] bool         ownsWorkspace(const PHLWORKSPACE& workspace) const;
@@ -495,6 +496,7 @@ class OverviewController {
     void                       updateSelectedWindowLayout(const PHLWINDOW& previousSelectedWindow);
     void                       clearPendingWindowGeometryRetry();
     void                       scheduleVisibleStateRebuild();
+    void                       scheduleWorkspaceChangeHandling(const PHLWORKSPACE& workspace);
     void                       schedulePendingWindowGeometryRetry(const PHLWINDOW& window);
     void                       updatePendingWindowGeometryRetry(const PHLWINDOW& window);
     [[nodiscard]] bool         matchesPendingLiveFocusWorkspaceChange(const PHLWORKSPACE& workspace) const;
@@ -615,8 +617,11 @@ class OverviewController {
     bool                      m_queuedOverviewLiveFocusSyncScrollingSpot = false;
     PHLWINDOWREF              m_pendingLiveFocusWorkspaceChangeTarget;
     PHLWINDOWREF              m_pendingWindowGeometryRetryTarget;
+    PHLWORKSPACEREF           m_pendingWorkspaceChange;
     bool                      m_visibleStateRebuildScheduled = false;
     std::size_t               m_visibleStateRebuildGeneration = 0;
+    bool                      m_workspaceChangeHandlingScheduled = false;
+    std::size_t               m_workspaceChangeHandlingGeneration = 0;
     bool                      m_pendingWindowGeometryRetryScheduled = false;
     std::size_t               m_pendingWindowGeometryRetryRemaining = 0;
     std::size_t               m_pendingWindowGeometryRetryGeneration = 0;
