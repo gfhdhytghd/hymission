@@ -352,6 +352,9 @@ class OverviewController {
     [[nodiscard]] bool         expandSelectedWindowEnabled() const;
     [[nodiscard]] bool         focusFollowsMouseEnabled() const;
     [[nodiscard]] bool         multiWorkspaceSortRecentFirstEnabled() const;
+    [[nodiscard]] bool         toggleSwitchModeEnabled() const;
+    [[nodiscard]] bool         switchToggleAutoNextEnabled() const;
+    [[nodiscard]] std::string  switchReleaseKeyConfig() const;
     [[nodiscard]] bool         gestureInvertVerticalEnabled() const;
     [[nodiscard]] bool         workspaceSwipeInvertEnabled() const;
     [[nodiscard]] bool         workspaceChangeKeepsOverviewEnabled() const;
@@ -512,6 +515,7 @@ class OverviewController {
                                   const char* source = "?");
     void rebuildVisibleState(PHLWINDOW preferredSelectedWindow = {}, bool forceRelayout = false);
     void moveSelection(Direction direction);
+    [[nodiscard]] bool moveSelectionCircular(int step = 1, const char* source = "?");
     void activateSelection();
     void notify(const std::string& message, const CHyprColor& color, float durationMs) const;
     void debugLog(const std::string& message) const;
@@ -520,6 +524,12 @@ class OverviewController {
     [[nodiscard]] std::string debugWindowLabel(const PHLWINDOW& window) const;
     void logOverviewLayoutState(const char* context, const State& state) const;
     void logScrollingWorkspaceSpotState(const char* context, const PHLWORKSPACE& workspace, const PHLWINDOW& focusWindow = {}) const;
+    [[nodiscard]] SP<IKeyboard> inputKeyboardWithState() const;
+    [[nodiscard]] bool          switchReleaseKeyHeld() const;
+    [[nodiscard]] bool          isSwitchReleaseEvent(const IKeyboard::SKeyEvent& event, const SP<IKeyboard>& keyboard) const;
+    void                        updateToggleSwitchSessionReleaseTracking(const char* source = "?");
+    void                        scheduleToggleSwitchReleasePoll();
+    void                        clearToggleSwitchSession();
     void latchHoverSelectionAnchor(const Vector2D& pointer);
     [[nodiscard]] bool hoverSelectionRetargetLocked(const Vector2D& pointer, const std::optional<std::size_t>& hoveredIndex) const;
     [[nodiscard]] bool workspaceStripEntriesMatchForSnapshot(const WorkspaceStripEntry& lhs, const WorkspaceStripEntry& rhs) const;
@@ -592,6 +602,7 @@ class OverviewController {
     bool                      m_animationsEnabledOverridden = false;
     long                      m_animationsEnabledBackup = 1;
     SP<CEventLoopTimer>       m_animationsEnabledRestoreTimer;
+    SP<CEventLoopTimer>       m_toggleSwitchReleasePollTimer;
     std::unordered_map<PHLWINDOW, std::uint64_t> m_windowMruSerials;
     std::uint64_t            m_nextWindowMruSerial = 1;
     bool                      m_deactivatePending = false;
@@ -628,6 +639,8 @@ class OverviewController {
     bool                     m_pendingWorkspaceTransitionCommitFollowGesture = false;
     std::size_t              m_workspaceTransitionCommitGeneration = 0;
     bool                     m_beginCloseInProgress = false;
+    bool                     m_toggleSwitchSessionActive = false;
+    bool                     m_toggleSwitchReleaseArmed = false;
     std::size_t              m_stripSnapshotRenderDepth = 0;
     bool                     m_stripSnapshotsDirty = false;
     bool                     m_stripSnapshotRefreshScheduled = false;

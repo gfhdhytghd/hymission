@@ -112,6 +112,24 @@ Scope arguments:
 - `onlycurrentworkspace`: show only the current regular workspace on the anchor monitor
 - `forceall`: show all regular workspaces across participating monitors and include currently visible special workspaces
 
+### Toggle Switch Mode
+
+`toggle_switch_mode` only affects `hymission:toggle`.
+
+With a binding such as `bind = ALT, TAB, hymission:toggle` and:
+
+```conf
+toggle_switch_mode = 1
+switch_toggle_auto_next = 1
+switch_release_key = Alt_L
+```
+
+- the first `ALT+TAB` opens overview as a switch session
+- repeated `TAB` presses while `ALT` stays held cycle to the next overview target
+- releasing `ALT` commits the current selection and exits overview
+
+`hymission:open`, `hymission:close`, and gesture paths keep their normal behavior. Toggle switch mode is meant for modifier-backed `hymission:toggle` bindings such as `ALT+TAB` / `SUPER+TAB`.
+
 ### Gestures
 
 `hymission` only hooks the official Hyprland dispatcher gesture form:
@@ -159,6 +177,9 @@ plugin {
         expand_selected_window = 0
         overview_focus_follows_mouse = 1
         multi_workspace_sort_recent_first = 0
+        toggle_switch_mode = 0
+        switch_toggle_auto_next = 1
+        switch_release_key = Alt_L
         gesture_invert_vertical = 0
         one_workspace_per_row = 0
         only_active_workspace = 0
@@ -211,6 +232,9 @@ plugin {
 | `expand_selected_window` | bool | `0` | Enlarge the selected preview and push nearby previews away without reshuffling the whole overview grid. Uses the overview-selected target, which usually follows hover when `overview_focus_follows_mouse = 1`. |
 | `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. Hover retargeting is frame-coalesced for smoother animation, and multi-workspace overview stays visually anchored when real focus crosses workspaces. |
 | `multi_workspace_sort_recent_first` | bool | `0` | Multi-workspace overview only. When enabled, `forceall` and any default overview scope that spans multiple workspaces place more recently used windows earlier in the grid, filling left-to-right then top-to-bottom. |
+| `toggle_switch_mode` | bool | `0` | Turn `hymission:toggle` into a toggle-only switch session. Intended for modifier-backed bindings such as `ALT+TAB` / `SUPER+TAB`. |
+| `switch_toggle_auto_next` | bool | `1` | Toggle switch mode only. When enabled, the first switch-mode `toggle` both opens overview and advances to the next target. |
+| `switch_release_key` | string | `Alt_L` | Toggle switch mode only. Release of this key commits the current selection and closes the switch session. Supports keysym names such as `Alt_L` / `Super_L` and `code:N`, and release tracking is resilient to missing per-window release events. |
 | `gesture_invert_vertical` | bool | `0` | Invert the plugin-managed vertical overview gesture direction. |
 | `only_active_workspace` | bool | `0` | Restrict the default scope to the active regular workspace per participating monitor. |
 | `only_active_monitor` | bool | `0` | Restrict the default scope to the monitor under the cursor. |
@@ -222,6 +246,7 @@ Behavior notes:
 
 - In multi-workspace overview, hover-driven real focus may still cross workspaces, but the overview grid stays anchored instead of rebuilding on every workspace change.
 - In active-workspace overview, workspace changes still use the dedicated overview-to-overview transition path.
+- Toggle switch mode keeps current hover semantics: if `overview_focus_follows_mouse = 1`, moving the pointer can still retarget the final committed selection during the switch session.
 
 ### Workspace strip options
 

@@ -235,7 +235,8 @@ overview 可见期间，controller 持续做三件事：
 当前实现故意没有把这些提前做掉：
 
 - 右键关闭窗口
-- Alt-release / Alt-Tab 模式
+- 独立任务切换器式 Alt-Tab
+  当前已实现的是 `hymission:toggle` 专用的 switch mode，不包含独立任务切换器 UI / dispatcher / 排序语义
 - 独立 `movefocus` dispatcher
 - `forceallinone`
 - workspace 条带

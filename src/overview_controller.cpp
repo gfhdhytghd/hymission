@@ -131,6 +131,7 @@ constexpr double SELECTED_WINDOW_LAYOUT_EMPHASIS = 1.18;
 constexpr double HOVER_SELECTION_RETARGET_DISTANCE = 18.0;
 constexpr auto   HOVER_SELECTION_RETARGET_COOLDOWN = std::chrono::milliseconds(static_cast<int>(RELAYOUT_DURATION_MS + 48.0));
 constexpr auto   HOVER_SELECTION_RETARGET_DWELL = std::chrono::milliseconds(48);
+constexpr auto   TOGGLE_SWITCH_RELEASE_POLL_INTERVAL = std::chrono::milliseconds(16);
 constexpr auto   MISSION_CONTROL_WORKSPACE_NAME = "Mission Control";
 constexpr auto   MISSION_CONTROL_HIDDEN_WORKSPACE_PREFIX = "__hymission_hidden__:";
 OverviewController* g_controller = nullptr;
@@ -191,6 +192,89 @@ std::string getConfigString(HANDLE handle, const char* name, std::string fallbac
     }
 
     return fallback;
+}
+
+std::optional<uint32_t> parseSwitchReleaseKeycode(const std::string& value) {
+    if (value.empty())
+        return std::nullopt;
+
+    const auto parseCode = [](const std::string& digits) -> std::optional<uint32_t> {
+        if (digits.empty() || !std::ranges::all_of(digits, [](unsigned char ch) { return std::isdigit(ch) != 0; }))
+            return std::nullopt;
+
+        try {
+            return static_cast<uint32_t>(std::stoul(digits));
+        } catch (...) {
+            return std::nullopt;
+        }
+    };
+
+    if (value.starts_with("code:"))
+        return parseCode(value.substr(5));
+
+    const auto parsed = parseCode(value);
+    if (parsed && *parsed > 9)
+        return parsed;
+
+    return std::nullopt;
+}
+
+std::string asciiLowerCopy(std::string value) {
+    std::ranges::transform(value, value.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+std::optional<uint32_t> switchReleaseModifierMask(const std::string& value) {
+    const auto lowered = asciiLowerCopy(value);
+    if (lowered == "shift" || lowered == "shift_l" || lowered == "shift_r")
+        return HL_MODIFIER_SHIFT;
+    if (lowered == "ctrl" || lowered == "control" || lowered == "control_l" || lowered == "control_r" || lowered == "ctrl_l" || lowered == "ctrl_r")
+        return HL_MODIFIER_CTRL;
+    if (lowered == "alt" || lowered == "alt_l" || lowered == "alt_r")
+        return HL_MODIFIER_ALT;
+    if (lowered == "super" || lowered == "super_l" || lowered == "super_r" || lowered == "meta" || lowered == "meta_l" || lowered == "meta_r")
+        return HL_MODIFIER_META;
+
+    return std::nullopt;
+}
+
+xkb_keysym_t keysymFromConfiguredSwitchReleaseKey(const std::string& value) {
+    if (value.empty())
+        return XKB_KEY_NoSymbol;
+
+    return xkb_keysym_from_name(value.c_str(), XKB_KEYSYM_CASE_INSENSITIVE);
+}
+
+bool keyboardHasPressedKeysym(const SP<IKeyboard>& keyboard, xkb_keysym_t target) {
+    if (!keyboard || !keyboard->m_xkbState || target == XKB_KEY_NoSymbol)
+        return false;
+
+    xkb_keymap* const keymap = xkb_state_get_keymap(keyboard->m_xkbState);
+    if (!keymap)
+        return false;
+
+    for (xkb_keycode_t keycode = xkb_keymap_min_keycode(keymap); keycode <= xkb_keymap_max_keycode(keymap); ++keycode) {
+        if (!keyboard->getPressed(keycode))
+            continue;
+
+        if (xkb_state_key_get_one_sym(keyboard->m_xkbState, keycode) == target)
+            return true;
+    }
+
+    return false;
+}
+
+template <typename Predicate>
+bool anyKeyboardWithState(Predicate&& predicate) {
+    for (const auto& candidate : g_pInputManager->m_keyboards) {
+        if (!candidate || !candidate->m_xkbState)
+            continue;
+
+        if (predicate(candidate))
+            return true;
+    }
+
+    return false;
 }
 
 int recommandScopeSign(OverviewController::ScopeOverride scope) {
@@ -1409,6 +1493,137 @@ bool OverviewController::shouldUseRecentWindowOrdering(const State& state) const
     return !state.collectionPolicy.onlyActiveWorkspace && multiWorkspaceSortRecentFirstEnabled();
 }
 
+SP<IKeyboard> OverviewController::inputKeyboardWithState() const {
+    for (const auto& candidate : g_pInputManager->m_keyboards) {
+        if (candidate && candidate->m_xkbState)
+            return candidate;
+    }
+
+    return {};
+}
+
+bool OverviewController::switchReleaseKeyHeld() const {
+    if (!toggleSwitchModeEnabled())
+        return false;
+
+    const auto releaseKey = switchReleaseKeyConfig();
+    if (releaseKey.empty())
+        return false;
+
+    if (const auto modifierMask = switchReleaseModifierMask(releaseKey))
+        return anyKeyboardWithState([modifierMask](const auto& keyboard) { return (keyboard->getModifiers() & *modifierMask) != 0; });
+
+    if (const auto configuredKeycode = parseSwitchReleaseKeycode(releaseKey))
+        return anyKeyboardWithState([configuredKeycode](const auto& keyboard) { return keyboard->getPressed(*configuredKeycode); });
+
+    const xkb_keysym_t configuredKeysym = keysymFromConfiguredSwitchReleaseKey(releaseKey);
+    return anyKeyboardWithState([configuredKeysym](const auto& keyboard) { return keyboardHasPressedKeysym(keyboard, configuredKeysym); });
+}
+
+bool OverviewController::isSwitchReleaseEvent(const IKeyboard::SKeyEvent& event, const SP<IKeyboard>& keyboard) const {
+    const auto releaseKey = switchReleaseKeyConfig();
+    if (!keyboard || !keyboard->m_xkbState || releaseKey.empty())
+        return false;
+
+    if (const auto modifierMask = switchReleaseModifierMask(releaseKey)) {
+        return !switchReleaseKeyHeld();
+    }
+
+    if (const auto configuredKeycode = parseSwitchReleaseKeycode(releaseKey))
+        return event.keycode + 8 == *configuredKeycode;
+
+    const xkb_keysym_t configuredKeysym = keysymFromConfiguredSwitchReleaseKey(releaseKey);
+    if (configuredKeysym == XKB_KEY_NoSymbol)
+        return false;
+
+    const xkb_keysym_t eventKeysym = xkb_state_key_get_one_sym(keyboard->m_xkbState, event.keycode + 8);
+    if (eventKeysym == configuredKeysym)
+        return true;
+
+    xkb_keymap* const keymap = xkb_state_get_keymap(keyboard->m_xkbState);
+    if (!keymap)
+        return false;
+
+    const xkb_keycode_t eventKeycode = event.keycode + 8;
+    for (int level = 0; level < 8; ++level) {
+        const int count = xkb_keymap_key_get_syms_by_level(keymap, eventKeycode, 0, level, nullptr);
+        if (count <= 0)
+            break;
+
+        const xkb_keysym_t* levelSyms = nullptr;
+        const int            resolvedCount = xkb_keymap_key_get_syms_by_level(keymap, eventKeycode, 0, level, &levelSyms);
+        for (int index = 0; index < resolvedCount; ++index) {
+            if (levelSyms[index] == configuredKeysym)
+                return true;
+        }
+    }
+
+    return false;
+}
+
+void OverviewController::updateToggleSwitchSessionReleaseTracking(const char* source) {
+    if (!m_toggleSwitchSessionActive || m_beginCloseInProgress || m_state.phase == Phase::Inactive || m_state.phase == Phase::Closing ||
+        m_state.phase == Phase::ClosingSettle)
+        return;
+
+    const bool releaseKeyHeld = switchReleaseKeyHeld();
+    if (!m_toggleSwitchReleaseArmed) {
+        if (!releaseKeyHeld)
+            return;
+
+        m_toggleSwitchReleaseArmed = true;
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] toggle switch release armed source=" << (source ? source : "?") << " key=" << switchReleaseKeyConfig();
+            debugLog(out.str());
+        }
+        return;
+    }
+
+    if (releaseKeyHeld)
+        return;
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] toggle switch release poll close source=" << (source ? source : "?") << " key=" << switchReleaseKeyConfig();
+        debugLog(out.str());
+    }
+    beginClose(CloseMode::ActivateSelection);
+}
+
+void OverviewController::scheduleToggleSwitchReleasePoll() {
+    if (!g_pEventLoopManager)
+        return;
+
+    if (!m_toggleSwitchReleasePollTimer) {
+        m_toggleSwitchReleasePollTimer = makeShared<CEventLoopTimer>(
+            TOGGLE_SWITCH_RELEASE_POLL_INTERVAL,
+            [this](SP<CEventLoopTimer> self, void*) {
+                updateToggleSwitchSessionReleaseTracking("poll");
+
+                if (!m_toggleSwitchSessionActive || m_beginCloseInProgress || m_state.phase == Phase::Inactive || m_state.phase == Phase::Closing ||
+                    m_state.phase == Phase::ClosingSettle) {
+                    self->updateTimeout(std::nullopt);
+                    return;
+                }
+
+                self->updateTimeout(TOGGLE_SWITCH_RELEASE_POLL_INTERVAL);
+            },
+            nullptr);
+        g_pEventLoopManager->addTimer(m_toggleSwitchReleasePollTimer);
+        return;
+    }
+
+    m_toggleSwitchReleasePollTimer->updateTimeout(TOGGLE_SWITCH_RELEASE_POLL_INTERVAL);
+}
+
+void OverviewController::clearToggleSwitchSession() {
+    m_toggleSwitchSessionActive = false;
+    m_toggleSwitchReleaseArmed = false;
+    if (m_toggleSwitchReleasePollTimer)
+        m_toggleSwitchReleasePollTimer->updateTimeout(std::nullopt);
+}
+
 SDispatchResult OverviewController::open(const std::string& args) {
     std::string error;
     const auto requestedScope = parseScopeOverride(args, error);
@@ -1447,8 +1662,36 @@ SDispatchResult OverviewController::close() {
 }
 
 SDispatchResult OverviewController::toggle(const std::string& args) {
-    if (m_state.phase == Phase::Inactive || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
-        return open(args);
+    if (m_state.phase == Phase::Inactive || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle) {
+        const bool activateSwitchSession = toggleSwitchModeEnabled();
+        const auto result = open(args);
+        if (!result.success)
+            return result;
+
+        if (activateSwitchSession && isVisible()) {
+            m_toggleSwitchSessionActive = true;
+            m_toggleSwitchReleaseArmed = switchReleaseKeyHeld();
+            scheduleToggleSwitchReleasePoll();
+            if (debugLogsEnabled()) {
+                std::ostringstream out;
+                out << "[hymission] toggle switch arm autoNext=" << (switchToggleAutoNextEnabled() ? 1 : 0) << " releaseKey=" << switchReleaseKeyConfig()
+                    << " releaseArmed=" << (m_toggleSwitchReleaseArmed ? 1 : 0);
+                debugLog(out.str());
+            }
+            if (switchToggleAutoNextEnabled())
+                (void)moveSelectionCircular(1, "toggle-switch-open");
+        }
+
+        return result;
+    }
+
+    if (m_toggleSwitchSessionActive) {
+        scheduleToggleSwitchReleasePoll();
+        if (debugLogsEnabled())
+            debugLog("[hymission] toggle switch cycle");
+        (void)moveSelectionCircular(1, "toggle-switch-cycle");
+        return {};
+    }
 
     return close();
 }
@@ -1734,21 +1977,31 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
 }
 
 void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) {
+    const auto keyboard = inputKeyboardWithState();
+    if (!keyboard || !keyboard->m_xkbState)
+        return;
+
+    if (m_toggleSwitchSessionActive)
+        updateToggleSwitchSessionReleaseTracking("keyboard");
+
     if (!shouldHandleInput())
         return;
 
-    if (m_state.phase == Phase::Closing || event.state != WL_KEYBOARD_KEY_STATE_PRESSED)
+    if (m_state.phase == Phase::Closing)
         return;
 
-    SP<IKeyboard> keyboard;
-    for (const auto& candidate : g_pInputManager->m_keyboards) {
-        if (candidate && candidate->m_xkbState) {
-            keyboard = candidate;
-            break;
+    if (m_toggleSwitchSessionActive && event.state == WL_KEYBOARD_KEY_STATE_RELEASED && isSwitchReleaseEvent(event, keyboard)) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] toggle switch release close key=" << switchReleaseKeyConfig() << " keycode=" << event.keycode << " modifiers=" << keyboard->getModifiers();
+            debugLog(out.str());
         }
+        beginClose(CloseMode::ActivateSelection);
+        info.cancelled = true;
+        return;
     }
 
-    if (!keyboard || !keyboard->m_xkbState)
+    if (event.state != WL_KEYBOARD_KEY_STATE_PRESSED)
         return;
 
     const xkb_keysym_t keysym = xkb_state_key_get_one_sym(keyboard->m_xkbState, event.keycode + 8);
@@ -2351,6 +2604,18 @@ bool OverviewController::focusFollowsMouseEnabled() const {
 
 bool OverviewController::multiWorkspaceSortRecentFirstEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:multi_workspace_sort_recent_first", 0) != 0;
+}
+
+bool OverviewController::toggleSwitchModeEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:toggle_switch_mode", 0) != 0;
+}
+
+bool OverviewController::switchToggleAutoNextEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:switch_toggle_auto_next", 1) != 0;
+}
+
+std::string OverviewController::switchReleaseKeyConfig() const {
+    return getConfigString(m_handle, "plugin:hymission:switch_release_key", "Alt_L");
 }
 
 bool OverviewController::gestureInvertVerticalEnabled() const {
@@ -6333,6 +6598,7 @@ CRegion OverviewController::transformRegionForWindow(const PHLWINDOW& window, co
 
 void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope) {
     setAnimationsEnabledOverride(false);
+    clearToggleSwitchSession();
 
     const auto buildStart = std::chrono::steady_clock::now();
     const double fromVisual = isVisible() ? visualProgress() : 0.0;
@@ -6439,6 +6705,7 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
         return;
 
     const ScopedFlag beginCloseGuard(m_beginCloseInProgress);
+    clearToggleSwitchSession();
 
     clearPendingWindowGeometryRetry();
     m_visibleStateRebuildScheduled = false;
@@ -6650,6 +6917,7 @@ void OverviewController::deactivate() {
     const auto focusMonitor = desiredFocus ? (previewMonitorForWindow(desiredFocus) ? previewMonitorForWindow(desiredFocus) : desiredFocus->m_monitor.lock()) : PHLMONITOR{};
     const auto visiblePoint = shouldPreserveExitFocus ? visiblePointForWindowOnMonitor(desiredFocus, focusMonitor, preferGoalVisiblePoint) : std::nullopt;
     const bool shouldWarpCursorForExitFocus = visiblePoint && desiredFocus != m_state.focusBeforeOpen;
+    clearToggleSwitchSession();
     m_primaryButtonPressed = false;
     m_hoverSelectionAnchorValid = false;
     m_hoverSelectionRetargetBlockedUntil = {};
@@ -7465,6 +7733,23 @@ void OverviewController::moveSelection(Direction direction) {
         syncFocusDuringOverviewFromSelection(true, "keyboard-nav");
         damageOwnedMonitors();
     }
+}
+
+bool OverviewController::moveSelectionCircular(int step, const char* source) {
+    if (m_state.windows.size() < 2)
+        return false;
+
+    if (!m_state.selectedIndex || *m_state.selectedIndex >= m_state.windows.size())
+        m_state.selectedIndex = 0;
+
+    const auto next = chooseCyclicIndex(m_state.windows.size(), *m_state.selectedIndex, step);
+    if (!next || *next == *m_state.selectedIndex)
+        return false;
+
+    m_state.selectedIndex = *next;
+    syncFocusDuringOverviewFromSelection(true, source);
+    damageOwnedMonitors();
+    return true;
 }
 
 void OverviewController::activateSelection() {

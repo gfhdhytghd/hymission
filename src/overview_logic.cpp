@@ -130,6 +130,21 @@ std::optional<std::size_t> chooseDirectionalNeighbor(const std::vector<Rect>& re
     return bestIndex;
 }
 
+std::optional<std::size_t> chooseCyclicIndex(std::size_t count, std::size_t currentIndex, int step) {
+    if (count < 2 || currentIndex >= count || step == 0)
+        return std::nullopt;
+
+    const auto countSigned = static_cast<long long>(count);
+    long long  normalized = static_cast<long long>(step) % countSigned;
+    if (normalized < 0)
+        normalized += countSigned;
+
+    if (normalized == 0)
+        return std::nullopt;
+
+    return static_cast<std::size_t>((static_cast<long long>(currentIndex) + normalized) % countSigned);
+}
+
 Rect lerpRect(const Rect& from, const Rect& to, double t) {
     const double clamped = clampUnit(t);
     return {

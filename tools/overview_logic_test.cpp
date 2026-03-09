@@ -59,6 +59,11 @@ int main() {
     ok &= expect(chooseDirectionalNeighbor(rects, 0, Direction::Down) == std::optional<std::size_t>{2}, "down neighbor from 0 should be 2");
     ok &= expect(chooseDirectionalNeighbor(rects, 3, Direction::Left) == std::optional<std::size_t>{2}, "left neighbor from 3 should be 2");
     ok &= expect(!chooseDirectionalNeighbor(rects, 0, Direction::Up).has_value(), "up neighbor from top row should be none");
+    ok &= expect(!chooseCyclicIndex(0, 0).has_value(), "cyclic selection should be empty for zero windows");
+    ok &= expect(!chooseCyclicIndex(1, 0).has_value(), "cyclic selection should be empty for one window");
+    ok &= expect(chooseCyclicIndex(4, 0) == std::optional<std::size_t>{1}, "cyclic selection should advance to the next window");
+    ok &= expect(chooseCyclicIndex(4, 3) == std::optional<std::size_t>{0}, "cyclic selection should wrap from the end to the start");
+    ok &= expect(chooseCyclicIndex(4, 0, -1) == std::optional<std::size_t>{3}, "cyclic selection should support reverse wrapping");
 
     const Rect middle = lerpRect({0, 0, 100, 100}, {100, 80, 50, 60}, 0.5);
     ok &= expect(middle.x == 50.0 && middle.y == 40.0 && middle.width == 75.0 && middle.height == 80.0, "lerpRect midpoint should be correct");

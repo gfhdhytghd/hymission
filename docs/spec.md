@@ -173,7 +173,9 @@ gesture-only 参数：
 
 约束：
 
-- `toggle,*` 在 overview 已可见时总是执行关闭，参数在关闭路径上忽略
+- 默认情况下，`toggle,*` 在 overview 已可见时执行关闭，参数在关闭路径上忽略
+- 当 `toggle_switch_mode = 1` 且当前 overview 处于由 `hymission:toggle` 打开的 switch session 时，可见状态下再次触发 `toggle` 必须改为循环切到下一个 overview target，而不是关闭；直到 `switch_release_key` 松开才提交并退出
+- 上述 switch mode 只作用于 `hymission:toggle`；`open` / `close` / gesture 路径不参与
 - `open,*` 在 overview 已可见时，如果 scope 与当前不同，应直接重建到新的 scope；如果 scope 相同，则 no-op
 - 未知参数必须返回 dispatcher error，不得静默回退
 
@@ -342,7 +344,7 @@ workspace 切换补充语义：
 以下能力明确不属于当前文档定义范围：
 
 - 搜索应用或窗口
-- 任务切换器式 Alt-Tab
+- 独立任务切换器式 Alt-Tab
 - 将窗口拖入新 workspace
 - 窗口堆叠分组的展开与聚合
 - 与外部 shell、dock、waybar 的深度集成

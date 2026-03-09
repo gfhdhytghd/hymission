@@ -55,6 +55,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("only_active_workspace", 0L);
     CONF("only_active_monitor", 0L);
     CONF("show_special", 0L);
+    CONF("toggle_switch_mode", 0L);
+    CONF("switch_toggle_auto_next", 1L);
     CONF("workspace_change_keeps_overview", 1L);
     CONF("workspace_strip_thickness", 160L);
     CONF("workspace_strip_gap", 24L);
@@ -71,6 +73,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 #undef CONF
     HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:workspace_strip_anchor", Hyprlang::STRING{"top"});
     HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:workspace_strip_empty_mode", Hyprlang::STRING{"existing"});
+    HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:switch_release_key", Hyprlang::STRING{"Alt_L"});
 
     g_overviewController = std::make_unique<hymission::OverviewController>(g_pluginHandle);
     if (!g_overviewController->initialize()) {
@@ -96,7 +99,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         .name = "hymission",
         .description = "Mission Control style overview prototype",
         .author = "wilf",
-        .version = "0.1.2",
+        .version = "0.2.0",
     };
 }
 
