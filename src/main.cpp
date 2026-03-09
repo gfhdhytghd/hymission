@@ -47,15 +47,15 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("min_slot_scale", 0.10F);
     CONF("layout_scale_weight", 1.0F);
     CONF("layout_space_weight", 0.10F);
-    CONF("expand_selected_window", 0L);
+    CONF("expand_selected_window", 1L);
     CONF("overview_focus_follows_mouse", 1L);
-    CONF("multi_workspace_sort_recent_first", 0L);
+    CONF("multi_workspace_sort_recent_first", 1L);
     CONF("gesture_invert_vertical", 0L);
     CONF("one_workspace_per_row", 0L);
     CONF("only_active_workspace", 0L);
     CONF("only_active_monitor", 0L);
     CONF("show_special", 0L);
-    CONF("toggle_switch_mode", 0L);
+    CONF("toggle_switch_mode", 1L);
     CONF("switch_toggle_auto_next", 1L);
     CONF("workspace_change_keeps_overview", 1L);
     CONF("workspace_strip_thickness", 160L);
@@ -71,9 +71,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("debug_logs", 0L);
     CONF("debug_surface_logs", 0L);
 #undef CONF
-    HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:workspace_strip_anchor", Hyprlang::STRING{"top"});
+    HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:workspace_strip_anchor", Hyprlang::STRING{"left"});
     HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:workspace_strip_empty_mode", Hyprlang::STRING{"existing"});
-    HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:switch_release_key", Hyprlang::STRING{"Alt_L"});
+    HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:switch_release_key", Hyprlang::STRING{"Super_L"});
 
     g_overviewController = std::make_unique<hymission::OverviewController>(g_pluginHandle);
     if (!g_overviewController->initialize()) {

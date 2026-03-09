@@ -119,17 +119,17 @@ Scope arguments:
 
 `toggle_switch_mode` only affects `hymission:toggle`.
 
-With a binding such as `bind = ALT, TAB, hymission:toggle` and:
+With a binding such as `bind = SUPER, TAB, hymission:toggle` and:
 
 ```conf
 toggle_switch_mode = 1
 switch_toggle_auto_next = 1
-switch_release_key = Alt_L
+switch_release_key = Super_L
 ```
 
-- the first `ALT+TAB` opens overview as a switch session
-- repeated `TAB` presses while `ALT` stays held cycle to the next overview target
-- releasing `ALT` commits the current selection and exits overview
+- the first `SUPER+TAB` opens overview as a switch session
+- repeated `TAB` presses while `SUPER` stays held cycle to the next overview target
+- releasing `SUPER` commits the current selection and exits overview
 
 `hymission:open`, `hymission:close`, and gesture paths keep their normal behavior. Toggle switch mode is meant for modifier-backed `hymission:toggle` bindings such as `ALT+TAB` / `SUPER+TAB`.
 
@@ -177,12 +177,12 @@ plugin {
         layout_scale_weight = 1.0
         layout_space_weight = 0.10
 
-        expand_selected_window = 0
+        expand_selected_window = 1
         overview_focus_follows_mouse = 1
-        multi_workspace_sort_recent_first = 0
-        toggle_switch_mode = 0
+        multi_workspace_sort_recent_first = 1
+        toggle_switch_mode = 1
         switch_toggle_auto_next = 1
-        switch_release_key = Alt_L
+        switch_release_key = Super_L
         gesture_invert_vertical = 0
         one_workspace_per_row = 0
         only_active_workspace = 0
@@ -190,7 +190,7 @@ plugin {
         show_special = 0
         workspace_change_keeps_overview = 1
 
-        workspace_strip_anchor = top
+        workspace_strip_anchor = left
         workspace_strip_empty_mode = existing
         workspace_strip_thickness = 160
         workspace_strip_gap = 24
@@ -232,12 +232,12 @@ plugin {
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `expand_selected_window` | bool | `0` | Enlarge the selected preview and push nearby previews away without reshuffling the whole overview grid. Uses the overview-selected target, which usually follows hover when `overview_focus_follows_mouse = 1`. |
+| `expand_selected_window` | bool | `1` | Enlarge the selected preview and push nearby previews away without reshuffling the whole overview grid. Uses the overview-selected target, which usually follows hover when `overview_focus_follows_mouse = 1`. |
 | `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. Hover retargeting is frame-coalesced for smoother animation, and multi-workspace overview stays visually anchored when real focus crosses workspaces. |
-| `multi_workspace_sort_recent_first` | bool | `0` | Multi-workspace overview only. When enabled, `forceall` and any default overview scope that spans multiple workspaces place more recently used windows earlier in the grid, filling left-to-right then top-to-bottom. |
-| `toggle_switch_mode` | bool | `0` | Turn `hymission:toggle` into a toggle-only switch session. Intended for modifier-backed bindings such as `ALT+TAB` / `SUPER+TAB`. |
+| `multi_workspace_sort_recent_first` | bool | `1` | Multi-workspace overview only. When enabled, `forceall` and any default overview scope that spans multiple workspaces place more recently used windows earlier in the grid, filling left-to-right then top-to-bottom. |
+| `toggle_switch_mode` | bool | `1` | Turn `hymission:toggle` into a toggle-only switch session. Intended for modifier-backed bindings such as `ALT+TAB` / `SUPER+TAB`. |
 | `switch_toggle_auto_next` | bool | `1` | Toggle switch mode only. When enabled, the first switch-mode `toggle` both opens overview and advances to the next target. |
-| `switch_release_key` | string | `Alt_L` | Toggle switch mode only. Release of this key commits the current selection and closes the switch session. Supports keysym names such as `Alt_L` / `Super_L` and `code:N`, and release tracking is resilient to missing per-window release events. |
+| `switch_release_key` | string | `Super_L` | Toggle switch mode only. Release of this key commits the current selection and closes the switch session. Supports keysym names such as `Alt_L` / `Super_L` and `code:N`, and release tracking is resilient to missing per-window release events. |
 | `gesture_invert_vertical` | bool | `0` | Invert the plugin-managed vertical overview gesture direction. |
 | `only_active_workspace` | bool | `0` | Restrict the default scope to the active regular workspace per participating monitor. |
 | `only_active_monitor` | bool | `0` | Restrict the default scope to the monitor under the cursor. |
@@ -255,7 +255,7 @@ Behavior notes:
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `workspace_strip_anchor` | string | `top` | Strip anchor. Supports `top`, `left`, and `right`. |
+| `workspace_strip_anchor` | string | `left` | Strip anchor. Supports `top`, `left`, and `right`. |
 | `workspace_strip_empty_mode` | string | `existing` | Empty-workspace strip policy. `existing` only shows real workspaces; `continuous` inserts the next missing numbered workspace in each positive-id gap without expanding named-workspace spans. |
 | `workspace_strip_thickness` | int | `160` | Strip thickness. |
 | `workspace_strip_gap` | int | `24` | Gap between the strip and the main overview content. |

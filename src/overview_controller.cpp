@@ -2595,7 +2595,7 @@ std::optional<OverviewController::ScopeOverride> OverviewController::parseScopeO
 }
 
 bool OverviewController::expandSelectedWindowEnabled() const {
-    return getConfigInt(m_handle, "plugin:hymission:expand_selected_window", 0) != 0;
+    return getConfigInt(m_handle, "plugin:hymission:expand_selected_window", 1) != 0;
 }
 
 bool OverviewController::focusFollowsMouseEnabled() const {
@@ -2603,11 +2603,11 @@ bool OverviewController::focusFollowsMouseEnabled() const {
 }
 
 bool OverviewController::multiWorkspaceSortRecentFirstEnabled() const {
-    return getConfigInt(m_handle, "plugin:hymission:multi_workspace_sort_recent_first", 0) != 0;
+    return getConfigInt(m_handle, "plugin:hymission:multi_workspace_sort_recent_first", 1) != 0;
 }
 
 bool OverviewController::toggleSwitchModeEnabled() const {
-    return getConfigInt(m_handle, "plugin:hymission:toggle_switch_mode", 0) != 0;
+    return getConfigInt(m_handle, "plugin:hymission:toggle_switch_mode", 1) != 0;
 }
 
 bool OverviewController::switchToggleAutoNextEnabled() const {
@@ -2615,7 +2615,7 @@ bool OverviewController::switchToggleAutoNextEnabled() const {
 }
 
 std::string OverviewController::switchReleaseKeyConfig() const {
-    return getConfigString(m_handle, "plugin:hymission:switch_release_key", "Alt_L");
+    return getConfigString(m_handle, "plugin:hymission:switch_release_key", "Super_L");
 }
 
 bool OverviewController::gestureInvertVerticalEnabled() const {
@@ -2730,7 +2730,7 @@ bool OverviewController::shouldOverrideWorkspaceNames(const State& state) const 
 }
 
 std::string OverviewController::workspaceStripAnchor() const {
-    switch (parseWorkspaceStripAnchor(getConfigString(m_handle, "plugin:hymission:workspace_strip_anchor", "top"))) {
+    switch (parseWorkspaceStripAnchor(getConfigString(m_handle, "plugin:hymission:workspace_strip_anchor", "left"))) {
         case WorkspaceStripAnchor::Left:
             return "left";
         case WorkspaceStripAnchor::Right:
