@@ -7,6 +7,7 @@
 
 > [!WARNING]
 > Hyprland plugins run inside the compositor process. Install plugins only from sources you trust.
+> `hymission` may not work correctly on NVIDIA GPUs/drivers.
 
 **Inspired By Apple Mission Control**
 
