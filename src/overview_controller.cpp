@@ -5491,8 +5491,17 @@ void OverviewController::refreshWorkspaceLayoutSnapshot(const PHLWORKSPACE& work
     }
 
     // Preserve the current scrolling offset when snapshotting overview geometry.
-    // Re-centering a hidden workspace to some remembered focus mutates real layout
-    // state and makes overview workspace switches inherit a shifted spot.
+    // CScrollingAlgorithm::recalculate() may hard-fit the focused column back
+    // into view; update target boxes directly so overview layout scrolling can
+    // travel across the whole tape instead of snapping around the focused window.
+    if (isScrollingWorkspace(workspace)) {
+        auto* const scrolling = scrollingAlgorithmForWorkspace(workspace);
+        if (scrolling && scrolling->m_scrollingData) {
+            scrolling->m_scrollingData->recalculate(true);
+            return;
+        }
+    }
+
     workspace->m_space->recalculate();
 }
 
