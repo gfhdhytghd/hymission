@@ -1207,6 +1207,9 @@ std::optional<Vector2D> expectedSurfaceSizeForUV(const PHLWINDOW& window, const 
     if (surface->m_current.viewport.hasSource)
         return (surface->m_current.viewport.source.size() * monitor->m_scale).round();
 
+    if (!canUseWindow)
+        return (surface->m_current.size * monitor->m_scale).round();
+
     if (windowSizeMisalign)
         return (surface->m_current.size * monitor->m_scale).round();
 
@@ -2488,8 +2491,14 @@ CBox OverviewController::surfaceTexBoxHook(void* surfacePassThisptr) {
     if (!m_surfaceTexBoxOriginal)
         return {};
 
-    if (m_surfaceRenderDataTransformDepth > 0)
-        return m_surfaceTexBoxOriginal(surfacePassThisptr);
+    if (m_surfaceRenderDataTransformDepth > 0) {
+        CBox box = m_surfaceTexBoxOriginal(surfacePassThisptr);
+        auto* renderData = surfaceRenderDataMutable(surfacePassThisptr);
+        auto  monitor = renderData ? renderData->pMonitor.lock() : PHLMONITOR{};
+        if (renderData && monitor)
+            adjustTransformedSurfaceBoxSize(*renderData, monitor, box);
+        return box;
+    }
 
     CSurfacePassElement::SRenderData* renderData = nullptr;
     PHLMONITOR                        monitor;
@@ -2498,7 +2507,8 @@ CBox OverviewController::surfaceTexBoxHook(void* surfacePassThisptr) {
         return m_surfaceTexBoxOriginal(surfacePassThisptr);
 
     ++m_surfaceRenderDataTransformDepth;
-    const CBox box = m_surfaceTexBoxOriginal(surfacePassThisptr);
+    CBox box = m_surfaceTexBoxOriginal(surfacePassThisptr);
+    adjustTransformedSurfaceBoxSize(*renderData, monitor, box);
     --m_surfaceRenderDataTransformDepth;
     restoreSurfaceRenderData(renderData, snapshot);
     return box;
@@ -2567,6 +2577,7 @@ CRegion OverviewController::surfaceVisibleRegionHook(void* surfacePassThisptr, b
 
     ++m_surfaceRenderDataTransformDepth;
     CBox fullBox = m_surfaceTexBoxOriginal(surfacePassThisptr);
+    adjustTransformedSurfaceBoxSize(*renderData, monitor, fullBox);
     --m_surfaceRenderDataTransformDepth;
     fullBox.scale(monitor->m_scale);
     fullBox.round();
@@ -5021,14 +5032,17 @@ std::optional<OverviewController::WindowTransform> OverviewController::windowTra
     } else {
         current = workspaceTransitionRectForWindow(window).value_or(currentPreviewRect(*managed));
     }
-    const Rect actual = surfaceRenderGlobalRectForWindow(window);
+    const Rect   actual = surfaceRenderGlobalRectForWindow(window);
     const double actualWidth = std::max(1.0, actual.width);
     const double actualHeight = std::max(1.0, actual.height);
+    const double uniformScale = std::max(0.0, std::min(current.width / actualWidth, current.height / actualHeight));
+    const Rect   fitted = makeRect(current.centerX() - actualWidth * uniformScale * 0.5, current.centerY() - actualHeight * uniformScale * 0.5,
+                                   actualWidth * uniformScale, actualHeight * uniformScale);
     return WindowTransform{
         .actualGlobal = actual,
-        .targetGlobal = current,
-        .scaleX = current.width / actualWidth,
-        .scaleY = current.height / actualHeight,
+        .targetGlobal = fitted,
+        .scaleX = uniformScale,
+        .scaleY = uniformScale,
     };
 }
 
@@ -5070,6 +5084,29 @@ bool OverviewController::transformSurfaceRenderDataForWindow(const PHLWINDOW& wi
     // Keep overview previews independent from normal-layout monitor clipping.
     renderData.clipBox = {};
 
+    return true;
+}
+
+bool OverviewController::adjustTransformedSurfaceBoxSize(const CSurfacePassElement::SRenderData& renderData, const PHLMONITOR& monitor, CBox& box) const {
+    if (renderData.mainSurface)
+        return false;
+
+    const auto transform = windowTransformFor(renderData.pWindow, monitor);
+    if (!transform)
+        return false;
+
+    Vector2D baseSize{box.width, box.height};
+    if (renderData.surface) {
+        if (renderData.surface->m_current.viewport.hasDestination)
+            baseSize = renderData.surface->m_current.viewport.destination;
+        else if (renderData.surface->m_current.viewport.hasSource)
+            baseSize = renderData.surface->m_current.viewport.source.size();
+        else
+            baseSize = renderData.surface->m_current.size;
+    }
+
+    box.width = std::max(1.0, baseSize.x * transform->scaleX);
+    box.height = std::max(1.0, baseSize.y * transform->scaleY);
     return true;
 }
 
@@ -5446,7 +5483,7 @@ bool OverviewController::shouldSuppressSurfaceBlur(void* surfacePassThisptr) con
 bool OverviewController::prepareSurfaceRenderData(void* surfacePassThisptr, const char* context, CSurfacePassElement::SRenderData*& renderData, PHLMONITOR& monitor,
                                                   SurfaceRenderDataSnapshot& snapshot) const {
     renderData = surfaceRenderDataMutable(surfacePassThisptr);
-    if (!renderData || !renderData->pWindow || renderData->popup)
+    if (!renderData || !renderData->pWindow)
         return false;
 
     monitor = renderData->pMonitor.lock();

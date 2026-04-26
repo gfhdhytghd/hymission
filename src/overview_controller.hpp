@@ -452,6 +452,8 @@ class OverviewController {
     [[nodiscard]] std::optional<WindowTransform> windowTransformFor(const PHLWINDOW& window, const PHLMONITOR& monitor) const;
     [[nodiscard]] bool                          transformSurfaceRenderDataForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor,
                                                                                    CSurfacePassElement::SRenderData& renderData) const;
+    bool                                        adjustTransformedSurfaceBoxSize(const CSurfacePassElement::SRenderData& renderData, const PHLMONITOR& monitor,
+                                                                               CBox& box) const;
     [[nodiscard]] double                        hiddenStripLayerProgress(const PHLLS& layer, const PHLMONITOR& monitor) const;
     void                                        clearHiddenStripLayerProxies();
     void                                        syncHiddenStripLayerProxies();
