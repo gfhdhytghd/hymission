@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cctype>
 #include <fstream>
+#include <limits>
 #include <linux/input-event-codes.h>
 #include <numeric>
 #include <optional>
@@ -1058,7 +1059,7 @@ Rect scrollingOverviewSourceGlobalRectForWindow(const PHLWINDOW& window, const R
         return fallbackGlobal;
 
     if (target->floating())
-        return rectFromBox(targetBox);
+        return fallbackGlobal;
 
     CBox layoutBox = targetBox;
     if (auto* scrolling = scrollingAlgorithmForWorkspace(window->m_workspace); scrolling) {
@@ -1067,6 +1068,21 @@ Rect scrollingOverviewSourceGlobalRectForWindow(const PHLWINDOW& window, const R
     }
 
     return centeredSurfaceRectInLayoutBox(layoutBox, fallbackGlobal);
+}
+
+Rect floatingOverviewSourceGlobalRectForWindow(const PHLWINDOW& window, const Rect& fallbackGlobal) {
+    if (!window)
+        return fallbackGlobal;
+
+    const auto target = window->layoutTarget();
+    if (!target || !target->floating())
+        return fallbackGlobal;
+
+    const CBox targetBox = target->position();
+    if (targetBox.width <= 1.0 || targetBox.height <= 1.0)
+        return fallbackGlobal;
+
+    return rectFromBox(targetBox);
 }
 
 std::string vectorToString(const Vector2D& value) {
@@ -1297,6 +1313,16 @@ bool containsHandle(const std::vector<T>& values, const T& value) {
 bool rectApproxEqual(const Rect& lhs, const Rect& rhs, double epsilon) {
     return std::abs(lhs.x - rhs.x) <= epsilon && std::abs(lhs.y - rhs.y) <= epsilon && std::abs(lhs.width - rhs.width) <= epsilon &&
         std::abs(lhs.height - rhs.height) <= epsilon;
+}
+
+bool rectContainsPoint(const Rect& rect, double x, double y) {
+    return x >= rect.x && y >= rect.y && x <= rect.x + rect.width && y <= rect.y + rect.height;
+}
+
+double rectCenterDistanceSquared(const Rect& rect, double x, double y) {
+    const double dx = rect.centerX() - x;
+    const double dy = rect.centerY() - y;
+    return dx * dx + dy * dy;
 }
 
 std::optional<Vector2D> visiblePointForRectOnMonitor(const Rect& windowRect, const PHLMONITOR& monitor) {
@@ -3135,6 +3161,7 @@ void OverviewController::refreshNiriScrollingOverviewAfterLayoutScroll(const cha
         managed.slot = it->slot;
         managed.targetGlobal = it->targetGlobal;
         managed.relayoutFromGlobal = managed.targetGlobal;
+        managed.isNiriFloatingOverlay = it->isNiriFloatingOverlay;
         m_state.slots.push_back(managed.slot);
         ++updated;
     }
@@ -6149,7 +6176,33 @@ void OverviewController::restoreSurfaceRenderData(CSurfacePassElement::SRenderDa
 }
 
 std::optional<std::size_t> OverviewController::hitTestTarget(double x, double y) const {
-    return hitTest(targetRects(), x, y);
+    const auto hitLayer = [&](bool floatingOverlay) -> std::optional<std::size_t> {
+        std::optional<std::size_t> bestIndex;
+        double                     bestDistance = std::numeric_limits<double>::infinity();
+
+        for (std::size_t index = 0; index < m_state.windows.size(); ++index) {
+            const auto& managed = m_state.windows[index];
+            if (managed.isNiriFloatingOverlay != floatingOverlay)
+                continue;
+
+            const Rect rect = currentPreviewRect(managed);
+            if (!rectContainsPoint(rect, x, y))
+                continue;
+
+            const double distance = rectCenterDistanceSquared(rect, x, y);
+            if (!bestIndex || distance < bestDistance) {
+                bestIndex = index;
+                bestDistance = distance;
+            }
+        }
+
+        return bestIndex;
+    };
+
+    if (const auto floating = hitLayer(true))
+        return floating;
+
+    return hitLayer(false);
 }
 
 std::optional<std::size_t> OverviewController::hitTestStripTarget(double x, double y) const {
@@ -6840,6 +6893,8 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
     for (std::size_t index = 0; index < m_state.windows.size(); ++index) {
         const auto& managed = m_state.windows[index];
         if (index == currentManagedIndex || managed.targetMonitor != currentManaged->targetMonitor)
+            continue;
+        if (managed.isNiriFloatingOverlay != currentManaged->isNiriFloatingOverlay)
             continue;
 
         const Rect base = baseTargets[index];
@@ -8392,6 +8447,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
             .previewAlpha = source.previewAlpha,
             .isFloating = source.isFloating,
             .isPinned = source.isPinned,
+            .isNiriFloatingOverlay = source.isNiriFloatingOverlay,
         });
     };
 
@@ -9691,7 +9747,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
     std::unordered_map<MONITORID, std::vector<WindowInput>> inputsByMonitor;
     std::unordered_map<MONITORID, std::vector<std::size_t>> indexesByMonitor;
-    std::unordered_map<MONITORID, std::size_t> directNiriScrollingWindowsByMonitor;
+    std::unordered_map<MONITORID, std::size_t> directNiriOverviewWindowsByMonitor;
     const bool useWorkspaceRows = workspaceRowsEnabled(m_handle);
     LayoutConfig config = loadLayoutConfig();
     config.preserveInputOrder = preserveExistingOrder || orderByRecentUse;
@@ -9713,8 +9769,8 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
         return state.managedWorkspaces.size();
     };
-    const auto niriScrollingOverviewSlotForWindow = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
-                                                        std::size_t windowIndex) -> std::optional<WindowSlot> {
+    const auto niriOverviewSlotForSource = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
+                                               std::size_t windowIndex) -> std::optional<WindowSlot> {
         if (state.collectionPolicy.requestedScope == ScopeOverride::ForceAll)
             return std::nullopt;
 
@@ -9726,7 +9782,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             return std::nullopt;
 
         auto* const scrolling = scrollingAlgorithmForWorkspace(window->m_workspace);
-        if (!scrolling || !scrolling->m_scrollingData || !scrolling->m_scrollingData->controller)
+        if (!scrolling || !scrolling->m_scrollingData)
             return std::nullopt;
 
         const Rect previewArea = overviewContentRectForMonitor(targetMonitor, state);
@@ -9737,11 +9793,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         if (workAreaBox.width <= 1.0 || workAreaBox.height <= 1.0)
             return std::nullopt;
 
-        const bool horizontal = scrolling->m_scrollingData->controller->isPrimaryHorizontal();
-        const double crossScale = horizontal ? previewArea.height / workAreaBox.height : previewArea.width / workAreaBox.width;
-        const double mainFitScale = horizontal ? previewArea.width / workAreaBox.width : previewArea.height / workAreaBox.height;
+        const double fitScale = std::min(previewArea.width / workAreaBox.width, previewArea.height / workAreaBox.height);
         const double maxScale = std::max(config.minSlotScale, config.maxPreviewScale);
-        const double scale = std::max(config.minSlotScale, std::min({crossScale, mainFitScale, maxScale}));
+        const double scale = std::max(config.minSlotScale, std::min(fitScale, maxScale));
         const double scaledViewportWidth = workAreaBox.width * scale;
         const double scaledViewportHeight = workAreaBox.height * scale;
         const double viewportX = previewArea.x + (previewArea.width - scaledViewportWidth) * 0.5;
@@ -9762,6 +9816,22 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             .scale = scale,
         };
     };
+    const auto niriFloatingOverviewSlotForWindow = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
+                                                       std::size_t windowIndex) -> std::optional<WindowSlot> {
+        const auto target = window ? window->layoutTarget() : nullptr;
+        if (!target || !target->floating())
+            return std::nullopt;
+
+        return niriOverviewSlotForSource(window, targetMonitor, sourceGlobal, windowIndex);
+    };
+    const auto niriScrollingOverviewSlotForWindow = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
+                                                        std::size_t windowIndex) -> std::optional<WindowSlot> {
+        const auto target = window ? window->layoutTarget() : nullptr;
+        if (!target || target->floating())
+            return std::nullopt;
+
+        return niriOverviewSlotForSource(window, targetMonitor, sourceGlobal, windowIndex);
+    };
 
     for (const auto& workspace : state.managedWorkspaces)
         refreshWorkspaceLayoutSnapshot(workspace);
@@ -9778,36 +9848,51 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         const Rect naturalGlobal = stateSnapshotGlobalRectForWindow(window, useGoalGeometry);
         const Rect layoutGlobal = layoutAnchorGlobalRectForWindow(window, useGoalGeometry);
         const std::size_t windowIndex = state.windows.size();
-        const Rect scrollingSourceGlobal = scrollingOverviewSourceGlobalRectForWindow(window, naturalGlobal);
-        const auto directNiriScrollingSlot = niriScrollingOverviewSlotForWindow(window, targetMonitor, scrollingSourceGlobal, windowIndex);
+        Rect directNiriSourceGlobal = naturalGlobal;
+        std::optional<WindowSlot> directNiriSlot;
+        bool directNiriFloatingOverlay = false;
+
+        const Rect floatingSourceGlobal = floatingOverviewSourceGlobalRectForWindow(window, naturalGlobal);
+        directNiriSlot = niriFloatingOverviewSlotForWindow(window, targetMonitor, floatingSourceGlobal, windowIndex);
+        if (directNiriSlot) {
+            directNiriSourceGlobal = floatingSourceGlobal;
+            directNiriFloatingOverlay = true;
+        } else {
+            const Rect scrollingSourceGlobal = scrollingOverviewSourceGlobalRectForWindow(window, naturalGlobal);
+            directNiriSlot = niriScrollingOverviewSlotForWindow(window, targetMonitor, scrollingSourceGlobal, windowIndex);
+            if (directNiriSlot)
+                directNiriSourceGlobal = scrollingSourceGlobal;
+        }
 
         state.windows.push_back({
             .window = window,
             .targetMonitor = targetMonitor,
             .title = window->m_title,
-            .naturalGlobal = directNiriScrollingSlot ? scrollingSourceGlobal : naturalGlobal,
-            .exitGlobal = directNiriScrollingSlot ? scrollingSourceGlobal : naturalGlobal,
+            .naturalGlobal = directNiriSlot ? directNiriSourceGlobal : naturalGlobal,
+            .exitGlobal = directNiriSlot ? directNiriSourceGlobal : naturalGlobal,
             .previewAlpha = std::clamp(window->m_activeInactiveAlpha->value(), 0.0F, 1.0F),
             .isFloating = window->m_isFloating,
             .isPinned = window->m_pinned,
+            .isNiriFloatingOverlay = directNiriFloatingOverlay,
         });
 
-        if (directNiriScrollingSlot) {
+        if (directNiriSlot) {
             auto& managed = state.windows.back();
-            managed.slot = *directNiriScrollingSlot;
-            managed.targetGlobal = makeRect(targetMonitor->m_position.x + directNiriScrollingSlot->target.x,
-                                            targetMonitor->m_position.y + directNiriScrollingSlot->target.y, directNiriScrollingSlot->target.width,
-                                            directNiriScrollingSlot->target.height);
+            managed.slot = *directNiriSlot;
+            managed.targetGlobal = makeRect(targetMonitor->m_position.x + directNiriSlot->target.x,
+                                            targetMonitor->m_position.y + directNiriSlot->target.y, directNiriSlot->target.width,
+                                            directNiriSlot->target.height);
             managed.relayoutFromGlobal = managed.targetGlobal;
-            state.slots.push_back(*directNiriScrollingSlot);
-            ++directNiriScrollingWindowsByMonitor[targetMonitor->m_id];
-            if (debugLogsEnabled() && directNiriScrollingWindowsByMonitor[targetMonitor->m_id] <= 8) {
+            state.slots.push_back(*directNiriSlot);
+            ++directNiriOverviewWindowsByMonitor[targetMonitor->m_id];
+            if (debugLogsEnabled() && directNiriOverviewWindowsByMonitor[targetMonitor->m_id] <= 8) {
                 std::ostringstream out;
-                out << "[hymission] niri scrolling overview direct window=" << debugWindowLabel(window)
+                out << "[hymission] niri " << (directNiriFloatingOverlay ? "floating overview overlay" : "scrolling overview direct")
+                    << " window=" << debugWindowLabel(window)
                     << " floating=" << (window->m_isFloating ? 1 : 0)
-                    << " source=" << rectToString(scrollingSourceGlobal)
+                    << " source=" << rectToString(directNiriSourceGlobal)
                     << " target=" << rectToString(managed.targetGlobal)
-                    << " scale=" << directNiriScrollingSlot->scale;
+                    << " scale=" << directNiriSlot->scale;
                 debugLog(out.str());
             }
             continue;
@@ -9836,11 +9921,11 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             continue;
 
         const auto inputsIt = inputsByMonitor.find(candidateMonitor->m_id);
-        const auto directIt = directNiriScrollingWindowsByMonitor.find(candidateMonitor->m_id);
-        const bool hasDirectNiriScrollingWindows = directIt != directNiriScrollingWindowsByMonitor.end() && directIt->second > 0;
+        const auto directIt = directNiriOverviewWindowsByMonitor.find(candidateMonitor->m_id);
+        const bool hasDirectNiriOverviewWindows = directIt != directNiriOverviewWindowsByMonitor.end() && directIt->second > 0;
         const bool hasStripWorkspace = workspaceStripEnabled(state) && static_cast<bool>(candidateMonitor->m_activeWorkspace);
         const bool keepMonitor = keepEmptyParticipatingMonitors && overrideForMonitor(candidateMonitor);
-        if ((inputsIt == inputsByMonitor.end() || inputsIt->second.empty()) && !hasDirectNiriScrollingWindows && !keepMonitor && !hasStripWorkspace)
+        if ((inputsIt == inputsByMonitor.end() || inputsIt->second.empty()) && !hasDirectNiriOverviewWindows && !keepMonitor && !hasStripWorkspace)
             continue;
 
         activeParticipatingMonitors.push_back(candidateMonitor);

@@ -158,6 +158,7 @@ class OverviewController {
         float        previewAlpha = 1.0F;
         bool         isFloating = false;
         bool         isPinned = false;
+        bool         isNiriFloatingOverlay = false;
     };
 
     struct WorkspaceStripEntry {
