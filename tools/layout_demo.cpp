@@ -69,6 +69,34 @@ struct StressResult {
     LayoutMetrics            metrics;
 };
 
+struct MetricSeries {
+    std::vector<double> values;
+    double              sum = 0.0;
+    double              max = 0.0;
+};
+
+struct StressSummary {
+    std::size_t cases = 0;
+    std::size_t overlapCases = 0;
+    std::size_t outOfBoundsCases = 0;
+    std::size_t unreadableShortEdgeCases = 0;
+    MetricSeries score;
+    MetricSeries gravityOffset;
+    MetricSeries heatMax;
+    MetricSeries heatStdDev;
+    MetricSeries heatImbalance;
+    MetricSeries averageMotion;
+    MetricSeries maxMotion;
+    MetricSeries minShortEdge;
+    MetricSeries averageShortEdge;
+    MetricSeries totalInversions;
+};
+
+struct StressReport {
+    StressResult  worst;
+    StressSummary summary;
+};
+
 void printSlots(const std::vector<WindowSlot>& slots);
 void printMetrics(const LayoutMetrics& metrics);
 
@@ -660,19 +688,68 @@ Scene randomStressScene(std::mt19937& rng, std::size_t caseIndex) {
     return scene;
 }
 
-StressResult runStress(const Options& options) {
+void recordMetric(MetricSeries& series, double value) {
+    series.values.push_back(value);
+    series.sum += value;
+    series.max = std::max(series.max, value);
+}
+
+double metricAverage(const MetricSeries& series) {
+    if (series.values.empty())
+        return 0.0;
+    return series.sum / static_cast<double>(series.values.size());
+}
+
+double metricPercentile(MetricSeries series, double percentile) {
+    if (series.values.empty())
+        return 0.0;
+
+    std::sort(series.values.begin(), series.values.end());
+    const double rank = std::clamp(percentile, 0.0, 1.0) * static_cast<double>(series.values.size() - 1);
+    const auto   lower = static_cast<std::size_t>(std::floor(rank));
+    const auto   upper = static_cast<std::size_t>(std::ceil(rank));
+    if (lower == upper)
+        return series.values[lower];
+
+    const double t = rank - static_cast<double>(lower);
+    return series.values[lower] * (1.0 - t) + series.values[upper] * t;
+}
+
+void recordStressMetrics(StressSummary& summary, const LayoutMetrics& metrics) {
+    ++summary.cases;
+    if (metrics.overlapArea > 0.5)
+        ++summary.overlapCases;
+    if (metrics.outOfBoundsArea > 0.5)
+        ++summary.outOfBoundsCases;
+    if (metrics.minShortEdge < 24.0)
+        ++summary.unreadableShortEdgeCases;
+
+    recordMetric(summary.score, metrics.score);
+    recordMetric(summary.gravityOffset, metrics.gravityOffset);
+    recordMetric(summary.heatMax, metrics.heatMax);
+    recordMetric(summary.heatStdDev, metrics.heatStdDev);
+    recordMetric(summary.heatImbalance, metrics.heatImbalance);
+    recordMetric(summary.averageMotion, metrics.averageMotion);
+    recordMetric(summary.maxMotion, metrics.maxMotion);
+    recordMetric(summary.minShortEdge, metrics.minShortEdge);
+    recordMetric(summary.averageShortEdge, metrics.averageShortEdge);
+    recordMetric(summary.totalInversions, static_cast<double>(metrics.xInversions + metrics.yInversions));
+}
+
+StressReport runStress(const Options& options) {
     std::mt19937          rng(options.seed);
     MissionControlLayout  engine;
     const auto            baseConfig = demoConfig(options);
-    StressResult          worst;
-    worst.metrics.score = -1.0;
+    StressReport          report;
+    report.worst.metrics.score = -1.0;
 
     for (std::size_t i = 0; i < options.stressCases; ++i) {
         auto scene = randomStressScene(rng, i);
         auto slots = engine.compute(scene.windows, scene.area, baseConfig);
         auto metrics = measureLayout(slots, insetArea(scene.area, baseConfig), scene.windows);
-        if (metrics.score > worst.metrics.score) {
-            worst = {
+        recordStressMetrics(report.summary, metrics);
+        if (metrics.score > report.worst.metrics.score) {
+            report.worst = {
                 .caseIndex = i,
                 .scene = std::move(scene),
                 .slots = std::move(slots),
@@ -681,7 +758,35 @@ StressResult runStress(const Options& options) {
         }
     }
 
-    return worst;
+    return report;
+}
+
+void printMetricSeries(std::string_view name, const MetricSeries& series) {
+    std::cout << "summary " << name
+              << " avg=" << std::fixed << std::setprecision(4) << metricAverage(series)
+              << " p50=" << metricPercentile(series, 0.50)
+              << " p95=" << metricPercentile(series, 0.95)
+              << " p99=" << metricPercentile(series, 0.99)
+              << " max=" << series.max
+              << '\n';
+}
+
+void printStressSummary(const StressSummary& summary) {
+    std::cout << "summary cases=" << summary.cases
+              << " overlapCases=" << summary.overlapCases
+              << " outOfBoundsCases=" << summary.outOfBoundsCases
+              << " unreadableShortEdgeCases=" << summary.unreadableShortEdgeCases
+              << '\n';
+    printMetricSeries("score", summary.score);
+    printMetricSeries("gravityOffset", summary.gravityOffset);
+    printMetricSeries("heatMax", summary.heatMax);
+    printMetricSeries("heatStdDev", summary.heatStdDev);
+    printMetricSeries("heatImbalance", summary.heatImbalance);
+    printMetricSeries("averageMotion", summary.averageMotion);
+    printMetricSeries("maxMotion", summary.maxMotion);
+    printMetricSeries("minShortEdge", summary.minShortEdge);
+    printMetricSeries("averageShortEdge", summary.averageShortEdge);
+    printMetricSeries("totalInversions", summary.totalInversions);
 }
 
 void printStressResult(const StressResult& result) {
@@ -847,10 +952,11 @@ int main(int argc, char** argv) {
 
     if (options.stressCases > 0) {
         const auto config = demoConfig(options);
-        auto       worst = runStress(options);
-        printStressResult(worst);
+        auto       report = runStress(options);
+        printStressSummary(report.summary);
+        printStressResult(report.worst);
         if (options.outputPath) {
-            writeSvg(*options.outputPath, worst.scene, config, worst.slots);
+            writeSvg(*options.outputPath, report.worst.scene, config, report.worst.slots);
             std::cout << "wrote " << *options.outputPath << '\n';
         }
         return EXIT_SUCCESS;
