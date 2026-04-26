@@ -531,6 +531,7 @@ class OverviewController {
     [[nodiscard]] bool          isSwitchReleaseEvent(const IKeyboard::SKeyEvent& event, const SP<IKeyboard>& keyboard) const;
     void                        updateToggleSwitchSessionReleaseTracking(const char* source = "?");
     void                        scheduleToggleSwitchReleasePoll();
+    void                        clearToggleSwitchReleasePollTimer();
     void                        clearToggleSwitchSession();
     void latchHoverSelectionAnchor(const Vector2D& pointer);
     [[nodiscard]] bool hoverSelectionRetargetLocked(const Vector2D& pointer, const std::optional<std::size_t>& hoveredIndex) const;

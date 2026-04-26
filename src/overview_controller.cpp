@@ -1385,6 +1385,7 @@ OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
 
 OverviewController::~OverviewController() {
     destroyGaussianBlurPipeline();
+    clearToggleSwitchReleasePollTimer();
     clearRegisteredTrackpadGestures();
     clearPostCloseForcedFocus();
     clearPostCloseDispatcher();
@@ -1634,11 +1635,20 @@ void OverviewController::scheduleToggleSwitchReleasePoll() {
     m_toggleSwitchReleasePollTimer->updateTimeout(TOGGLE_SWITCH_RELEASE_POLL_INTERVAL);
 }
 
+void OverviewController::clearToggleSwitchReleasePollTimer() {
+    if (!m_toggleSwitchReleasePollTimer)
+        return;
+
+    m_toggleSwitchReleasePollTimer->cancel();
+    if (g_pEventLoopManager)
+        g_pEventLoopManager->removeTimer(m_toggleSwitchReleasePollTimer);
+    m_toggleSwitchReleasePollTimer.reset();
+}
+
 void OverviewController::clearToggleSwitchSession() {
     m_toggleSwitchSessionActive = false;
     m_toggleSwitchReleaseArmed = false;
-    if (m_toggleSwitchReleasePollTimer)
-        m_toggleSwitchReleasePollTimer->updateTimeout(std::nullopt);
+    clearToggleSwitchReleasePollTimer();
 }
 
 SDispatchResult OverviewController::open(const std::string& args) {
