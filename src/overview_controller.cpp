@@ -1035,6 +1035,40 @@ Layout::Tiled::CScrollingAlgorithm* scrollingAlgorithmForWorkspace(const PHLWORK
     return dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(algorithm->tiledAlgo().get());
 }
 
+Rect rectFromBox(const CBox& box) {
+    return makeRect(box.x, box.y, box.width, box.height);
+}
+
+Rect centeredSurfaceRectInLayoutBox(const CBox& layoutBox, const Rect& surfaceGlobal) {
+    const double width = surfaceGlobal.width > 1.0 ? surfaceGlobal.width : layoutBox.width;
+    const double height = surfaceGlobal.height > 1.0 ? surfaceGlobal.height : layoutBox.height;
+    return makeRect(layoutBox.x + (layoutBox.width - width) * 0.5, layoutBox.y + (layoutBox.height - height) * 0.5, width, height);
+}
+
+Rect scrollingOverviewSourceGlobalRectForWindow(const PHLWINDOW& window, const Rect& fallbackGlobal) {
+    if (!window)
+        return fallbackGlobal;
+
+    const auto target = window->layoutTarget();
+    if (!target)
+        return fallbackGlobal;
+
+    const CBox targetBox = target->position();
+    if (targetBox.width <= 1.0 || targetBox.height <= 1.0)
+        return fallbackGlobal;
+
+    if (target->floating())
+        return rectFromBox(targetBox);
+
+    CBox layoutBox = targetBox;
+    if (auto* scrolling = scrollingAlgorithmForWorkspace(window->m_workspace); scrolling) {
+        if (const auto targetData = scrolling->dataFor(target); targetData && targetData->layoutBox.width > 1.0 && targetData->layoutBox.height > 1.0)
+            layoutBox = targetData->layoutBox;
+    }
+
+    return centeredSurfaceRectInLayoutBox(layoutBox, fallbackGlobal);
+}
+
 std::string vectorToString(const Vector2D& value) {
     std::ostringstream out;
     out << value.x << ',' << value.y;
@@ -9595,7 +9629,11 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
     std::unordered_map<MONITORID, std::vector<WindowInput>> inputsByMonitor;
     std::unordered_map<MONITORID, std::vector<std::size_t>> indexesByMonitor;
+    std::unordered_map<MONITORID, std::size_t> directNiriScrollingWindowsByMonitor;
     const bool useWorkspaceRows = workspaceRowsEnabled(m_handle);
+    LayoutConfig config = loadLayoutConfig();
+    config.preserveInputOrder = preserveExistingOrder || orderByRecentUse;
+    config.forceRowGroups = useWorkspaceRows;
     const auto rowGroupForWindow = [&](const PHLWINDOW& window) -> std::size_t {
         if (!useWorkspaceRows)
             return 0;
@@ -9613,6 +9651,48 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
         return state.managedWorkspaces.size();
     };
+    const auto niriScrollingOverviewSlotForWindow = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
+                                                        std::size_t windowIndex) -> std::optional<WindowSlot> {
+        if (!niriModeEnabled() || !state.collectionPolicy.onlyActiveWorkspace || !window || !targetMonitor || window->m_pinned || !window->m_workspace ||
+            !window->m_workspace->m_space || !isScrollingWorkspace(window->m_workspace))
+            return std::nullopt;
+
+        auto* const scrolling = scrollingAlgorithmForWorkspace(window->m_workspace);
+        if (!scrolling || !scrolling->m_scrollingData || !scrolling->m_scrollingData->controller)
+            return std::nullopt;
+
+        const Rect previewArea = overviewContentRectForMonitor(targetMonitor, state);
+        if (previewArea.width <= 1.0 || previewArea.height <= 1.0)
+            return std::nullopt;
+
+        const CBox workAreaBox = window->m_workspace->m_space->workArea();
+        if (workAreaBox.width <= 1.0 || workAreaBox.height <= 1.0)
+            return std::nullopt;
+
+        const bool horizontal = scrolling->m_scrollingData->controller->isPrimaryHorizontal();
+        const double crossScale = horizontal ? previewArea.height / workAreaBox.height : previewArea.width / workAreaBox.width;
+        const double maxScale = std::max(config.minSlotScale, config.maxPreviewScale);
+        const double scale = std::max(config.minSlotScale, std::min(crossScale, maxScale));
+        const double scaledViewportWidth = workAreaBox.width * scale;
+        const double scaledViewportHeight = workAreaBox.height * scale;
+        const double viewportX = previewArea.x + (previewArea.width - scaledViewportWidth) * 0.5;
+        const double viewportY = previewArea.y + (previewArea.height - scaledViewportHeight) * 0.5;
+        const Rect targetLocal = makeRect(viewportX + (sourceGlobal.x - workAreaBox.x) * scale, viewportY + (sourceGlobal.y - workAreaBox.y) * scale,
+                                          sourceGlobal.width * scale, sourceGlobal.height * scale);
+
+        return WindowSlot{
+            .index = windowIndex,
+            .natural =
+                {
+                    sourceGlobal.x - targetMonitor->m_position.x,
+                    sourceGlobal.y - targetMonitor->m_position.y,
+                    sourceGlobal.width,
+                    sourceGlobal.height,
+                },
+            .target = targetLocal,
+            .scale = scale,
+        };
+    };
 
     for (const auto& workspace : state.managedWorkspaces)
         refreshWorkspaceLayoutSnapshot(workspace);
@@ -9629,6 +9709,40 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         const Rect naturalGlobal = stateSnapshotGlobalRectForWindow(window, useGoalGeometry);
         const Rect layoutGlobal = layoutAnchorGlobalRectForWindow(window, useGoalGeometry);
         const std::size_t windowIndex = state.windows.size();
+        const Rect scrollingSourceGlobal = scrollingOverviewSourceGlobalRectForWindow(window, naturalGlobal);
+        const auto directNiriScrollingSlot = niriScrollingOverviewSlotForWindow(window, targetMonitor, scrollingSourceGlobal, windowIndex);
+
+        state.windows.push_back({
+            .window = window,
+            .targetMonitor = targetMonitor,
+            .title = window->m_title,
+            .naturalGlobal = directNiriScrollingSlot ? scrollingSourceGlobal : naturalGlobal,
+            .exitGlobal = directNiriScrollingSlot ? scrollingSourceGlobal : naturalGlobal,
+            .previewAlpha = std::clamp(window->m_activeInactiveAlpha->value(), 0.0F, 1.0F),
+            .isFloating = window->m_isFloating,
+            .isPinned = window->m_pinned,
+        });
+
+        if (directNiriScrollingSlot) {
+            auto& managed = state.windows.back();
+            managed.slot = *directNiriScrollingSlot;
+            managed.targetGlobal = makeRect(targetMonitor->m_position.x + directNiriScrollingSlot->target.x,
+                                            targetMonitor->m_position.y + directNiriScrollingSlot->target.y, directNiriScrollingSlot->target.width,
+                                            directNiriScrollingSlot->target.height);
+            managed.relayoutFromGlobal = managed.targetGlobal;
+            state.slots.push_back(*directNiriScrollingSlot);
+            ++directNiriScrollingWindowsByMonitor[targetMonitor->m_id];
+            if (debugLogsEnabled() && directNiriScrollingWindowsByMonitor[targetMonitor->m_id] <= 8) {
+                std::ostringstream out;
+                out << "[hymission] niri scrolling overview direct window=" << debugWindowLabel(window)
+                    << " floating=" << (window->m_isFloating ? 1 : 0)
+                    << " source=" << rectToString(scrollingSourceGlobal)
+                    << " target=" << rectToString(managed.targetGlobal)
+                    << " scale=" << directNiriScrollingSlot->scale;
+                debugLog(out.str());
+            }
+            continue;
+        }
 
         inputsByMonitor[targetMonitor->m_id].push_back({
             .index = windowIndex,
@@ -9644,32 +9758,20 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             .layoutEmphasis = 1.0,
         });
         indexesByMonitor[targetMonitor->m_id].push_back(windowIndex);
-
-        state.windows.push_back({
-            .window = window,
-            .targetMonitor = targetMonitor,
-            .title = window->m_title,
-            .naturalGlobal = naturalGlobal,
-            .exitGlobal = naturalGlobal,
-            .previewAlpha = std::clamp(window->m_activeInactiveAlpha->value(), 0.0F, 1.0F),
-            .isFloating = window->m_isFloating,
-            .isPinned = window->m_pinned,
-        });
     }
 
     std::vector<PHLMONITOR> activeParticipatingMonitors;
     MissionControlLayout engine;
-    LayoutConfig config = loadLayoutConfig();
-    config.preserveInputOrder = preserveExistingOrder || orderByRecentUse;
-    config.forceRowGroups = useWorkspaceRows;
     for (const auto& candidateMonitor : state.participatingMonitors) {
         if (!candidateMonitor)
             continue;
 
         const auto inputsIt = inputsByMonitor.find(candidateMonitor->m_id);
+        const auto directIt = directNiriScrollingWindowsByMonitor.find(candidateMonitor->m_id);
+        const bool hasDirectNiriScrollingWindows = directIt != directNiriScrollingWindowsByMonitor.end() && directIt->second > 0;
         const bool hasStripWorkspace = workspaceStripEnabled(state) && static_cast<bool>(candidateMonitor->m_activeWorkspace);
         const bool keepMonitor = keepEmptyParticipatingMonitors && overrideForMonitor(candidateMonitor);
-        if ((inputsIt == inputsByMonitor.end() || inputsIt->second.empty()) && !keepMonitor && !hasStripWorkspace)
+        if ((inputsIt == inputsByMonitor.end() || inputsIt->second.empty()) && !hasDirectNiriScrollingWindows && !keepMonitor && !hasStripWorkspace)
             continue;
 
         activeParticipatingMonitors.push_back(candidateMonitor);
