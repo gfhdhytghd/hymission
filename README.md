@@ -307,10 +307,15 @@ Useful commands:
 
 ```sh
 ./build-cmake/hymission-layout-demo
+./build-cmake/hymission-layout-demo --list-scenes
+./build-cmake/hymission-layout-demo --scene forceall --engine natural --output /tmp/hymission-forceall-natural.svg
+./build-cmake/hymission-layout-demo --scene forceall --engine grid --output /tmp/hymission-forceall-grid.svg
 ./build-cmake/hymission-mission-layout-test
 ./build-cmake/hymission-overview-logic-test
 hyprctl dispatch hymission:debug_current_layout
 ```
+
+`hymission-layout-demo` runs the geometry solver without loading the Hyprland plugin. In SVG output, dashed rectangles are source window geometry and solid rectangles are overview targets. Built-in scenes include `forceall`, `default`, `stacked`, `right-biased`, and `workspace-rows`.
 
 Project docs:
 
