@@ -143,17 +143,17 @@ gesture = 4, vertical, dispatcher, hymission:toggle,forceall
 gesture = 4, vertical, dispatcher, hymission:toggle,recommand
 gesture = 4, vertical, dispatcher, hymission:open,onlycurrentworkspace
 gesture = 3, horizontal, dispatcher, hymission:scroll,layout
-gesture = 3, vertical, dispatcher, hymission:scroll,workspace
-gesture = 3, swipe, dispatcher, hymission:scroll,both
+gesture = 3, vertical, workspace
 ```
 
 Gesture notes:
 
-- `vertical` and `horizontal` are supported for plugin-managed overview gestures; `hymission:scroll` also supports `swipe`
+- `vertical` and `horizontal` are supported for plugin-managed overview gestures; `hymission:scroll,layout` also supports `swipe`
 - unofficial shorthand such as `gesture = ..., hymission:toggle,...` is not supported
 - default gesture semantics are state-aware: hidden overview opens in the configured direction, and visible `hymission:toggle,*` overview can close in either swipe direction
 - `recommand` is gesture-only and is only valid with `hymission:toggle`
-- `hymission:scroll` is intended for `niri_mode = 1`; `layout` continuously drives Hyprland's scrolling layout, `workspace` uses Hymission's overview workspace transition when overview is visible and native workspace swipe otherwise, and `both` prioritizes workspace swipes in overview and layout scrolls outside overview when the gesture axis matches `scrolling:direction`
+- `hymission:scroll,layout` continuously drives Hyprland's scrolling layout when the gesture axis matches `scrolling:direction`
+- workspace swipes should use Hyprland's standard `gesture = ..., workspace`; Hymission already intercepts that path while overview is visible
 - in `recommand` mode, one side opens `forceall` and the other side opens `onlycurrentworkspace`
 - switching from one visible `recommand` side to the other only works in the side-changing direction; it must pass through hidden state and then cross a small transfer gap before the opposite side starts opening
 - swiping the other visible `recommand` direction only exits overview back to hidden and does not continue into the opposite side
@@ -246,7 +246,7 @@ plugin {
 | `expand_selected_window` | bool | `1` | Enlarge the selected preview and push nearby previews away without reshuffling the whole overview grid. Uses the overview-selected target, which usually follows hover when `overview_focus_follows_mouse = 1`. |
 | `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. Hover retargeting is frame-coalesced for smoother animation, and multi-workspace overview stays visually anchored when real focus crosses workspaces. |
 | `multi_workspace_sort_recent_first` | bool | `1` | Multi-workspace overview only. When enabled, `forceall` and any default overview scope that spans multiple workspaces place more recently used windows earlier in the grid, filling left-to-right then top-to-bottom. |
-| `niri_mode` | bool | `0` | Enable the niri-like gesture/strip integration. This is opt-in and does not change existing overview gestures unless the matching `hymission:scroll` gestures are configured. |
+| `niri_mode` | bool | `0` | Enable the niri-like workspace strip layout. This is opt-in and does not change existing overview gestures. |
 | `niri_scroll_pixels_per_delta` | float | `1.0` | Multiplier for `hymission:scroll,layout` continuous scrolling-layout movement. |
 | `toggle_switch_mode` | bool | `1` | Turn `hymission:toggle` into a toggle-only switch session. Intended for modifier-backed bindings such as `ALT+TAB` / `SUPER+TAB`. |
 | `switch_toggle_auto_next` | bool | `1` | Toggle switch mode only. When enabled, the first switch-mode `toggle` both opens overview and advances to the next target. |

@@ -268,13 +268,11 @@ class OverviewController {
     enum class ScrollGestureRoute {
         None,
         Layout,
-        OverviewWorkspace,
-        Blocked,
     };
 
     struct ScrollGestureSession {
         bool                      active = false;
-        HymissionScrollMode       mode = HymissionScrollMode::Both;
+        HymissionScrollMode       mode = HymissionScrollMode::Layout;
         ScrollGestureRoute        route = ScrollGestureRoute::None;
         eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_HORIZONTAL;
         float                     deltaScale = 1.0F;

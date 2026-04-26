@@ -1177,17 +1177,11 @@ class CHymissionScrollTrackpadGesture final : public ITrackpadGesture {
 
     void begin(const STrackpadGestureBegin& e) override {
         m_tracking = false;
-        m_nativeTracking = false;
 
         const auto gestureDirection = e.direction != TRACKPAD_GESTURE_DIR_NONE ? e.direction : m_direction;
         if (g_controller && e.swipe && g_controller->beginScrollGesture(m_mode, gestureDirection, *e.swipe, e.scale)) {
             m_tracking = true;
             return;
-        }
-
-        if (shouldDelegateNative()) {
-            m_nativeGesture.begin(e);
-            m_nativeTracking = true;
         }
     }
 
@@ -1198,8 +1192,6 @@ class CHymissionScrollTrackpadGesture final : public ITrackpadGesture {
             return;
         }
 
-        if (m_nativeTracking)
-            m_nativeGesture.update(e);
     }
 
     void end(const STrackpadGestureEnd& e) override {
@@ -1209,11 +1201,6 @@ class CHymissionScrollTrackpadGesture final : public ITrackpadGesture {
                 g_controller->endScrollGesture(e.swipe ? e.swipe->cancelled : true);
             return;
         }
-
-        if (m_nativeTracking) {
-            m_nativeTracking = false;
-            m_nativeGesture.end(e);
-        }
     }
 
     bool isDirectionSensitive() override {
@@ -1221,15 +1208,9 @@ class CHymissionScrollTrackpadGesture final : public ITrackpadGesture {
     }
 
   private:
-    [[nodiscard]] bool shouldDelegateNative() const {
-        return m_mode == HymissionScrollMode::Workspace || m_mode == HymissionScrollMode::Both;
-    }
-
-    CWorkspaceSwipeGesture   m_nativeGesture;
-    HymissionScrollMode      m_mode = HymissionScrollMode::Both;
+    HymissionScrollMode      m_mode = HymissionScrollMode::Layout;
     eTrackpadGestureDirection m_direction = TRACKPAD_GESTURE_DIR_HORIZONTAL;
     bool                     m_tracking = false;
-    bool                     m_nativeTracking = false;
 };
 
 template <typename T>
@@ -2854,9 +2835,6 @@ ScrollingLayoutDirection OverviewController::scrollingLayoutDirection() const {
 }
 
 bool OverviewController::canScrollActiveLayoutWithGesture(eTrackpadGestureDirection direction) const {
-    if (!niriModeEnabled())
-        return false;
-
     if (!isScrollingWorkspace(activeLayoutWorkspace()))
         return false;
 
@@ -3267,7 +3245,7 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
     if (dispatcher == "hymission:scroll") {
         const auto scrollMode = parseHymissionScrollMode(trimmedDispatcherArgs);
         if (!scrollMode)
-            return "hymission:scroll requires layout, workspace, or both";
+            return "hymission:scroll only supports layout; use gesture = ..., workspace for workspace swipes";
 
         const bool disableInhibit = flags.contains('p');
         g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
@@ -3743,54 +3721,13 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
 bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction, const IPointer::SSwipeUpdateEvent& event, float deltaScale) {
     m_scrollGestureSession = {};
 
-    if (!niriModeEnabled() || m_gestureSession.active || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
+    if (mode != HymissionScrollMode::Layout || m_gestureSession.active || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
         return false;
-
-    const bool wantsWorkspace = mode == HymissionScrollMode::Workspace || mode == HymissionScrollMode::Both;
-    const bool wantsLayout = mode == HymissionScrollMode::Layout || mode == HymissionScrollMode::Both;
-
-    if (wantsWorkspace && isVisible()) {
-        if (blocksWorkspaceSwitchInOverviewForGestures()) {
-            m_scrollGestureSession = {
-                .active = true,
-                .mode = mode,
-                .route = ScrollGestureRoute::Blocked,
-                .direction = direction,
-                .deltaScale = deltaScale,
-            };
-            return true;
-        }
-
-        if (allowsWorkspaceSwitchInOverviewForGestures()) {
-            if (beginOverviewWorkspaceSwipeGesture(direction)) {
-                m_scrollGestureSession = {
-                    .active = true,
-                    .mode = mode,
-                    .route = ScrollGestureRoute::OverviewWorkspace,
-                    .direction = direction,
-                    .deltaScale = deltaScale,
-                };
-                updateScrollGesture(event);
-                return true;
-            }
-
-            m_scrollGestureSession = {
-                .active = true,
-                .mode = mode,
-                .route = ScrollGestureRoute::Blocked,
-                .direction = direction,
-                .deltaScale = deltaScale,
-            };
-            return true;
-        }
-
-        return false;
-    }
 
     if (isVisible())
         return false;
 
-    if (wantsLayout && canScrollActiveLayoutWithGesture(direction)) {
+    if (canScrollActiveLayoutWithGesture(direction)) {
         m_scrollGestureSession = {
             .active = true,
             .mode = mode,
@@ -3813,10 +3750,6 @@ void OverviewController::updateScrollGesture(const IPointer::SSwipeUpdateEvent& 
         case ScrollGestureRoute::Layout:
             (void)scrollActiveLayoutByGestureDelta(event, m_scrollGestureSession.direction, m_scrollGestureSession.deltaScale);
             break;
-        case ScrollGestureRoute::OverviewWorkspace:
-            updateOverviewWorkspaceSwipeGesture(scrollLayoutPrimaryDelta(event, m_scrollGestureSession.direction, m_scrollGestureSession.deltaScale));
-            break;
-        case ScrollGestureRoute::Blocked:
         case ScrollGestureRoute::None:
         default:
             break;
@@ -3827,11 +3760,8 @@ void OverviewController::endScrollGesture(bool cancelled) {
     if (!m_scrollGestureSession.active)
         return;
 
-    const auto route = m_scrollGestureSession.route;
     m_scrollGestureSession = {};
-
-    if (route == ScrollGestureRoute::OverviewWorkspace)
-        endOverviewWorkspaceSwipeGesture(cancelled);
+    (void)cancelled;
 }
 
 bool OverviewController::beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction) {

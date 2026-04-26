@@ -120,7 +120,7 @@
 - trackpad gesture hook：
   - 官方 `gesture = ..., dispatcher, hymission:*`
   - overview 内部对 workspace swipe 的接管与复用
-  - `hymission:scroll` 的连续 gesture：overview 内走 workspace transition，普通状态按 scrolling layout 方向发 `layoutMsg move`
+  - `hymission:scroll,layout` 的连续 gesture：普通状态按 scrolling layout 方向发 `layoutMsg move`
 
 结论仍然不变：`hymission` 以 render hook 为主路径，而不是 `IWindowTransformer`。
 

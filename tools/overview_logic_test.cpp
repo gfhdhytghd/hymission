@@ -127,10 +127,8 @@ int main() {
     ok &= expect(parseWorkspaceStripEmptyMode("unexpected") == WorkspaceStripEmptyMode::Existing, "invalid empty-mode should fall back to existing");
 
     ok &= expect(parseHymissionScrollMode("layout") == std::optional<HymissionScrollMode>{HymissionScrollMode::Layout}, "layout niri scroll mode should parse");
-    ok &= expect(parseHymissionScrollMode(" workspace ") == std::optional<HymissionScrollMode>{HymissionScrollMode::Workspace},
-                 "workspace niri scroll mode parsing should ignore whitespace");
-    ok &= expect(parseHymissionScrollMode("Both") == std::optional<HymissionScrollMode>{HymissionScrollMode::Both},
-                 "both niri scroll mode parsing should ignore case");
+    ok &= expect(!parseHymissionScrollMode(" workspace ").has_value(), "workspace should stay on Hyprland's standard workspace gesture");
+    ok &= expect(!parseHymissionScrollMode("Both").has_value(), "combined layout/workspace scroll mode should not parse");
     ok &= expect(!parseHymissionScrollMode("unexpected").has_value(), "invalid niri scroll mode should fail");
 
     ok &= expect(parseScrollingLayoutDirection("left") == ScrollingLayoutDirection::Left, "left scrolling direction should parse");
@@ -227,6 +225,13 @@ int main() {
     ok &= expectRect(niriSideSlots[0], {8, 177, 84, 42}, "niri side strip should use monitor aspect thumbnails");
     ok &= expectRect(niriSideSlots[1], {8, 229, 84, 42}, "niri side strip active slot should be centered in the band");
     ok &= expectRect(niriSideSlots[2], {8, 281, 84, 42}, "niri side strip should advance vertically by thumbnail height plus gap");
+
+    const auto niriOverflowSlots =
+        layoutNiriWorkspaceStripSlots({0, 0, 500, 80}, WorkspaceStripAnchor::Top, 6, std::optional<std::size_t>{3}, 10, 8, 2.0);
+    ok &= expect(niriOverflowSlots.size() == 6, "niri overflowing strip layout should keep all slots");
+    ok &= expectRect(niriOverflowSlots[0], {-228, 8, 128, 64}, "niri overflowing strip should allow slots before the screen");
+    ok &= expectRect(niriOverflowSlots[3], {186, 8, 128, 64}, "niri overflowing strip should keep active slot centered");
+    ok &= expectRect(niriOverflowSlots[5], {462, 8, 128, 64}, "niri overflowing strip should allow slots after the screen");
 
     ok &= expect(hitTestWorkspaceStrip(topSlots, 120, 10) == std::optional<std::size_t>{1}, "strip hit-test should find the matching slot");
     ok &= expect(!hitTestWorkspaceStrip(topSlots, 100, 10).has_value(), "strip hit-test should miss strip gaps");

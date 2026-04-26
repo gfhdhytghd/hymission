@@ -242,10 +242,6 @@ std::optional<HymissionScrollMode> parseHymissionScrollMode(std::string_view val
 
     if (equalsAsciiInsensitive(value, "layout"))
         return HymissionScrollMode::Layout;
-    if (equalsAsciiInsensitive(value, "workspace"))
-        return HymissionScrollMode::Workspace;
-    if (equalsAsciiInsensitive(value, "both"))
-        return HymissionScrollMode::Both;
 
     return std::nullopt;
 }
@@ -408,26 +404,21 @@ std::vector<Rect> layoutNiriWorkspaceStripSlots(const Rect& stripBand, Workspace
     const double availableCross = std::max(1.0, crossLength - safePadding * 2.0);
     const double aspect = std::max(0.05, workspaceAspectRatio);
 
-    double slotCross = availableCross;
-    double slotMain = horizontal ? slotCross * aspect : slotCross / aspect;
-    double effectiveGap = slotCount > 1 ? safeGap : 0.0;
-    double contentMain = slotMain * static_cast<double>(slotCount) + effectiveGap * static_cast<double>(slotCount - 1);
-
-    if (contentMain > availableMain) {
-        const double fitScale = availableMain / std::max(1.0, contentMain);
-        slotMain = std::max(1.0, slotMain * fitScale);
-        slotCross = std::max(1.0, slotCross * fitScale);
-        effectiveGap *= fitScale;
-        contentMain = slotMain * static_cast<double>(slotCount) + effectiveGap * static_cast<double>(slotCount - 1);
-    }
+    const double slotCross = availableCross;
+    const double slotMain = horizontal ? slotCross * aspect : slotCross / aspect;
+    const double effectiveGap = slotCount > 1 ? safeGap : 0.0;
+    const double contentMain = slotMain * static_cast<double>(slotCount) + effectiveGap * static_cast<double>(slotCount - 1);
 
     const double minStart = mainStart + safePadding;
     const double maxStart = mainStart + mainLength - safePadding - contentMain;
     double       cursor = minStart + std::max(0.0, (availableMain - contentMain) * 0.5);
-    if (activeIndex && *activeIndex < slotCount && contentMain <= availableMain) {
+    if (activeIndex && *activeIndex < slotCount) {
         const double activeCenterInContent = static_cast<double>(*activeIndex) * (slotMain + effectiveGap) + slotMain * 0.5;
-        const double desired = mainStart + mainLength * 0.5 - activeCenterInContent;
-        cursor = std::clamp(desired, minStart, std::max(minStart, maxStart));
+        cursor = mainStart + mainLength * 0.5 - activeCenterInContent;
+        if (contentMain <= availableMain)
+            cursor = std::clamp(cursor, minStart, std::max(minStart, maxStart));
+    } else if (contentMain > availableMain) {
+        cursor = mainStart + (mainLength - contentMain) * 0.5;
     }
 
     const double cross = crossStart + (crossLength - slotCross) * 0.5;

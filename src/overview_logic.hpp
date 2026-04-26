@@ -36,8 +36,6 @@ enum class WorkspaceStripEmptyMode {
 
 enum class HymissionScrollMode {
     Layout,
-    Workspace,
-    Both,
 };
 
 enum class GestureAxis {
