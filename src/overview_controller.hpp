@@ -281,6 +281,8 @@ class OverviewController {
         float                     deltaScale = 1.0F;
         std::size_t               debugSamples = 0;
         bool                      skipNextUpdate = false;
+        bool                      restoreInputFollowMouse = false;
+        bool                      restoreScrollingFollowFocus = false;
     };
 
     struct WorkspaceNameBackup {

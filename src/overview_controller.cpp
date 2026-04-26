@@ -3967,6 +3967,11 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
     if (!isScrollingWorkspace(activeLayoutWorkspace()))
         return reject("active-workspace-not-scrolling");
 
+    const bool inputFollowMouseWasOverridden = m_inputFollowMouseOverridden;
+    const bool scrollingFollowFocusWasOverridden = m_scrollingFollowFocusOverridden;
+    setInputFollowMouseOverride(true);
+    setScrollingFollowFocusOverride(true);
+
     m_scrollGestureSession = {
         .active = true,
         .mode = mode,
@@ -3974,11 +3979,15 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
         .direction = direction,
         .deltaScale = deltaScale,
         .skipNextUpdate = true,
+        .restoreInputFollowMouse = !inputFollowMouseWasOverridden && m_inputFollowMouseOverridden,
+        .restoreScrollingFollowFocus = !scrollingFollowFocusWasOverridden && m_scrollingFollowFocusOverridden,
     };
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
-        out << "[hymission] scroll gesture accepted route=layout dir=" << trackpadDirectionName(direction) << " scale=" << deltaScale;
+        out << "[hymission] scroll gesture accepted route=layout dir=" << trackpadDirectionName(direction) << " scale=" << deltaScale
+            << " suppressInputFollowMouse=" << (m_scrollGestureSession.restoreInputFollowMouse ? 1 : 0)
+            << " suppressScrollingFollowFocus=" << (m_scrollGestureSession.restoreScrollingFollowFocus ? 1 : 0);
         debugLog(out.str());
     }
 
@@ -4013,13 +4022,23 @@ void OverviewController::endScrollGesture(bool cancelled) {
     if (!m_scrollGestureSession.active)
         return;
 
+    const bool restoreInputFollowMouse = m_scrollGestureSession.restoreInputFollowMouse;
+    const bool restoreScrollingFollowFocus = m_scrollGestureSession.restoreScrollingFollowFocus;
+
     if (debugLogsEnabled()) {
         std::ostringstream out;
-        out << "[hymission] scroll gesture end cancelled=" << (cancelled ? 1 : 0) << " samples=" << m_scrollGestureSession.debugSamples;
+        out << "[hymission] scroll gesture end cancelled=" << (cancelled ? 1 : 0) << " samples=" << m_scrollGestureSession.debugSamples
+            << " restoreInputFollowMouse=" << (restoreInputFollowMouse ? 1 : 0)
+            << " restoreScrollingFollowFocus=" << (restoreScrollingFollowFocus ? 1 : 0);
         debugLog(out.str());
     }
 
     m_scrollGestureSession = {};
+
+    if (restoreScrollingFollowFocus)
+        setScrollingFollowFocusOverride(false);
+    if (restoreInputFollowMouse)
+        setInputFollowMouseOverride(false);
 }
 
 bool OverviewController::beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction) {
@@ -4558,7 +4577,7 @@ void OverviewController::setInputFollowMouseOverride(bool disable) {
 }
 
 void OverviewController::setScrollingFollowFocusOverride(bool disable) {
-    if (!hasScrollingWorkspace())
+    if (!hasScrollingWorkspace() && !isScrollingWorkspace(activeLayoutWorkspace()))
         return;
 
     const auto* value = HyprlandAPI::getConfigValue(m_handle, "scrolling:follow_focus");
