@@ -191,6 +191,54 @@ std::vector<PreparedWindow> prepareWindows(const std::vector<WindowInput>& windo
     return prepared;
 }
 
+std::vector<PreparedWindow> applyNaturalScaleFlex(std::vector<PreparedWindow> prepared, const Rect& area, const LayoutConfig& config) {
+    if (prepared.size() < 2)
+        return prepared;
+
+    const double countScale = config.rankScaleByInputOrder ? std::clamp(12.0 / static_cast<double>(prepared.size()), 0.25, 1.0) : 0.10;
+    const double flex = std::clamp(config.naturalScaleFlex, 0.0, 0.25) * countScale;
+    if (flex <= 0.0)
+        return prepared;
+
+    std::vector<double> bias(prepared.size(), 0.0);
+    if (config.rankScaleByInputOrder) {
+        const double denom = std::max(1.0, static_cast<double>(prepared.size() - 1));
+        for (std::size_t i = 0; i < prepared.size(); ++i)
+            bias[i] = 1.0 - 2.0 * static_cast<double>(i) / denom;
+    } else {
+        std::vector<double> density(prepared.size(), 0.0);
+        const double        normX = std::max(1.0, area.width);
+        const double        normY = std::max(1.0, area.height);
+        for (std::size_t i = 0; i < prepared.size(); ++i) {
+            for (std::size_t j = 0; j < prepared.size(); ++j) {
+                if (i == j)
+                    continue;
+
+                const double dx = (prepared[i].input.natural.centerX() - prepared[j].input.natural.centerX()) / normX;
+                const double dy = (prepared[i].input.natural.centerY() - prepared[j].input.natural.centerY()) / normY;
+                const double distanceSq = dx * dx + dy * dy;
+                density[i] += std::exp(-distanceSq / 0.10);
+            }
+        }
+
+        const auto [minIt, maxIt] = std::minmax_element(density.begin(), density.end());
+        const double range = *maxIt - *minIt;
+        if (range > 0.000001) {
+            for (std::size_t i = 0; i < prepared.size(); ++i)
+                bias[i] = std::clamp(((*maxIt + *minIt) * 0.5 - density[i]) / (range * 0.5), -1.0, 1.0);
+        }
+    }
+
+    for (std::size_t i = 0; i < prepared.size(); ++i) {
+        const double multiplier = std::clamp(1.0 + bias[i] * flex, 1.0 - flex, 1.0 + flex);
+        prepared[i].weightScale *= multiplier;
+        prepared[i].scaledWidth = prepared[i].layoutWidth * prepared[i].weightScale;
+        prepared[i].scaledHeight = prepared[i].layoutHeight * prepared[i].weightScale;
+    }
+
+    return prepared;
+}
+
 void finalizeCandidate(LayoutCandidate& candidate, const Rect& area, const LayoutConfig& config) {
     if (candidate.rows.empty())
         return;
@@ -836,6 +884,44 @@ std::vector<WindowSlot> materializeNaturalSlots(std::vector<NaturalItem> items, 
     return slots;
 }
 
+void shrinkSlotScale(WindowSlot& slot, double scale, const Rect& area, const LayoutConfig& config) {
+    if (slot.scale <= 0.0 || scale >= slot.scale)
+        return;
+
+    const double naturalShortEdge = std::min(slot.natural.width, slot.natural.height);
+    if (naturalShortEdge > 0.0)
+        scale = std::max(scale, normalizedMinPreviewShortEdge(config, area) / naturalShortEdge);
+    scale = std::max(scale, normalizedMinSlotScale(config));
+    if (scale >= slot.scale)
+        return;
+
+    const double ratio = std::max(0.0, scale) / slot.scale;
+    const double centerX = slot.target.centerX();
+    const double centerY = slot.target.centerY();
+    slot.target = {
+        std::floor(centerX - slot.target.width * ratio / 2.0),
+        std::floor(centerY - slot.target.height * ratio / 2.0),
+        slot.target.width * ratio,
+        slot.target.height * ratio,
+    };
+    slot.scale = scale;
+    clampRectToArea(slot.target, area);
+}
+
+void enforceInputOrderScaleGradient(std::vector<WindowSlot>& slots, const Rect& area, const LayoutConfig& config) {
+    if (!config.rankScaleByInputOrder || slots.size() < 2)
+        return;
+
+    double previousScale = std::numeric_limits<double>::infinity();
+    for (auto& slot : slots) {
+        if (std::isfinite(previousScale) && slot.scale >= previousScale) {
+            const double nextScale = std::max(normalizedMinSlotScale(config), previousScale * 0.995);
+            shrinkSlotScale(slot, nextScale, area, config);
+        }
+        previousScale = slot.scale;
+    }
+}
+
 double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area) {
     if (slots.empty())
         return std::numeric_limits<double>::infinity();
@@ -848,12 +934,14 @@ double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area)
     double weightedX = 0.0;
     double weightedY = 0.0;
     double averageScale = 0.0;
+    double minShortEdge = std::numeric_limits<double>::infinity();
 
     for (const auto& slot : slots) {
         minX = std::min(minX, slot.target.x);
         minY = std::min(minY, slot.target.y);
         maxX = std::max(maxX, slot.target.x + slot.target.width);
         maxY = std::max(maxY, slot.target.y + slot.target.height);
+        minShortEdge = std::min(minShortEdge, std::min(slot.target.width, slot.target.height));
 
         const double targetArea = slot.target.width * slot.target.height;
         totalArea += targetArea;
@@ -932,9 +1020,10 @@ double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area)
     const double heatImbalance = std::abs(leftHeat - rightHeat) + std::abs(topHeat - bottomHeat);
     const double sparsePenalty = targetAreaRatio < 0.18 ? (0.18 - targetAreaRatio) : 0.0;
     const double boundsSparsePenalty = boundsFillRatio < 0.72 ? (0.72 - boundsFillRatio) : 0.0;
+    const double readabilityPenalty = minShortEdge < 24.0 ? (24.0 - minShortEdge) / 24.0 : 0.0;
 
-    return heatStdDev * 2.4 + heatImbalance * 0.42 + gravityOffset * 3.0 + edgeBalance * 2.0 + edgeWhitespace * 0.45 + sparsePenalty * 2.0 +
-        boundsSparsePenalty * 0.9 - targetAreaRatio * 0.85 - averageScale * 0.24;
+    return heatStdDev * 2.4 + heatImbalance * 0.42 + gravityOffset * 3.0 + edgeBalance * 2.0 + edgeWhitespace * 0.9 + sparsePenalty * 2.0 +
+        boundsSparsePenalty * 1.4 + readabilityPenalty * 6.0 - targetAreaRatio * 1.3 - averageScale * 0.30;
 }
 
 std::optional<std::vector<WindowSlot>> computeNaturalLayoutWithProfile(const std::vector<PreparedWindow>& prepared,
@@ -995,6 +1084,7 @@ std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<Pr
         if (candidate.empty())
             return;
 
+        enforceInputOrderScaleGradient(candidate, area, config);
         const double cost = naturalVisualCost(candidate, area) + costBias;
         if (!bestSlots || cost < bestCost) {
             bestCost = cost;
@@ -1013,12 +1103,12 @@ std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<Pr
     if (!config.forceRowGroups && prepared.size() >= 4) {
         LayoutConfig visualPackConfig = config;
         visualPackConfig.forceRowGroups = false;
-        visualPackConfig.preserveInputOrder = false;
+        visualPackConfig.preserveInputOrder = config.preserveInputOrder;
         visualPackConfig.layoutSpaceWeight = std::max(visualPackConfig.layoutSpaceWeight, 0.18);
 
         auto visualPack = computeGridLayout(prepared, area, visualPackConfig);
         centerNaturalTargets(visualPack, area);
-        consider(std::move(visualPack), -0.04);
+        consider(std::move(visualPack), -0.08);
     }
 
     return bestSlots;
@@ -1113,10 +1203,11 @@ std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowIn
         return {};
 
     const Rect inner = insetArea(area, config);
-    const auto prepared = prepareWindows(windows, inner, config);
+    auto       prepared = prepareWindows(windows, inner, config);
 
     if (config.engine == LayoutEngine::Natural) {
         const Rect naturalInner = insetNaturalEdgeArea(inner, config);
+        prepared = applyNaturalScaleFlex(std::move(prepared), naturalInner, config);
         if (config.forceRowGroups) {
             if (auto groupedNatural = computeNaturalRowGroupLayout(prepared, naturalInner, config))
                 return *groupedNatural;

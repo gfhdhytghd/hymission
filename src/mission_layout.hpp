@@ -56,8 +56,10 @@ struct LayoutConfig {
     double layoutSpaceWeight = 0.10;
     double layoutScaleWeight = 1.0;
     double minSlotScale = 0.10;
+    double naturalScaleFlex = 0.02;
     bool   preserveInputOrder = false;
     bool   forceRowGroups = false;
+    bool   rankScaleByInputOrder = false;
 };
 
 class MissionControlLayout {

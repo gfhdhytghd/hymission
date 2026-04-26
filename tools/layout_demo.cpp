@@ -36,7 +36,10 @@ struct Options {
     std::size_t              stressCases = 0;
     unsigned                 seed = 0xC0FFEE;
     double                   minPreviewShortEdge = 32.0;
+    std::optional<double>    naturalScaleFlex;
     bool                     forceRowGroups = false;
+    bool                     preserveInputOrder = false;
+    bool                     rankScaleByInputOrder = false;
     bool                     listScenes = false;
     bool                     help = false;
 };
@@ -374,7 +377,11 @@ LayoutConfig demoConfig(const Options& options) {
     config.rowSpacing = 32.0;
     config.columnSpacing = 32.0;
     config.minPreviewShortEdge = options.minPreviewShortEdge;
+    if (options.naturalScaleFlex)
+        config.naturalScaleFlex = *options.naturalScaleFlex;
     config.forceRowGroups = options.forceRowGroups;
+    config.preserveInputOrder = options.preserveInputOrder || options.rankScaleByInputOrder;
+    config.rankScaleByInputOrder = options.rankScaleByInputOrder;
     return config;
 }
 
@@ -396,9 +403,12 @@ void printUsage(const char* argv0) {
               << "  --output PATH.svg           Render an SVG visual diff\n"
               << "  --width PX --height PX      Override scene monitor size\n"
               << "  --min-preview-short-edge PX Minimum preview short edge. Default: 32\n"
+              << "  --natural-scale-flex N      Override natural free-scale range\n"
               << "  --stress COUNT              Run random pathological cases and report the worst one\n"
               << "  --seed N                    Seed for --stress. Default: 12648430\n"
               << "  --force-row-groups          Enable row-group fallback behavior\n"
+              << "  --preserve-input-order      Preserve input order in row materialization\n"
+              << "  --rank-scale-by-input-order Make earlier input windows larger in natural layout\n"
               << "  --list-scenes               Print built-in scene names\n"
               << "  --help                      Show this help\n";
 }
@@ -430,12 +440,18 @@ Options parseOptions(int argc, char** argv, Scene& scene) {
             heightOverride = parseDouble(requireValue("--height"), "--height");
         } else if (arg == "--min-preview-short-edge") {
             options.minPreviewShortEdge = parseDouble(requireValue("--min-preview-short-edge"), "--min-preview-short-edge");
+        } else if (arg == "--natural-scale-flex") {
+            options.naturalScaleFlex = parseDouble(requireValue("--natural-scale-flex"), "--natural-scale-flex");
         } else if (arg == "--stress") {
             options.stressCases = parseSize(requireValue("--stress"), "--stress");
         } else if (arg == "--seed") {
             options.seed = parseUnsigned(requireValue("--seed"), "--seed");
         } else if (arg == "--force-row-groups") {
             options.forceRowGroups = true;
+        } else if (arg == "--preserve-input-order") {
+            options.preserveInputOrder = true;
+        } else if (arg == "--rank-scale-by-input-order") {
+            options.rankScaleByInputOrder = true;
         } else if (arg == "--list-scenes") {
             options.listScenes = true;
         } else if (arg == "--help" || arg == "-h") {
