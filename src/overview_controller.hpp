@@ -105,6 +105,9 @@ class OverviewController {
     void                       workspaceSwipeBeginHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e);
     void                       workspaceSwipeUpdateHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e);
     void                       workspaceSwipeEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e);
+    void                       dispatcherGestureBeginHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e);
+    void                       dispatcherGestureUpdateHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e);
+    void                       dispatcherGestureEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e);
   private:
     friend class OverviewOverlayPassElement;
 
@@ -276,6 +279,7 @@ class OverviewController {
         ScrollGestureRoute        route = ScrollGestureRoute::None;
         eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_HORIZONTAL;
         float                     deltaScale = 1.0F;
+        std::size_t               debugSamples = 0;
     };
 
     struct WorkspaceNameBackup {
@@ -362,6 +366,9 @@ class OverviewController {
     using WorkspaceSwipeBeginFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureBegin&);
     using WorkspaceSwipeUpdateFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureUpdate&);
     using WorkspaceSwipeEndFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureEnd&);
+    using DispatcherGestureBeginFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureBegin&);
+    using DispatcherGestureUpdateFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureUpdate&);
+    using DispatcherGestureEndFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureEnd&);
     using HandleGestureFn = std::optional<std::string> (*)(void*, const std::string&, const std::string&);
     [[nodiscard]] LayoutConfig loadLayoutConfig() const;
     [[nodiscard]] CollectionPolicy loadCollectionPolicy(ScopeOverride requestedScope) const;
@@ -604,6 +611,9 @@ class OverviewController {
     CFunctionHook*            m_workspaceSwipeBeginFunctionHook = nullptr;
     CFunctionHook*            m_workspaceSwipeUpdateFunctionHook = nullptr;
     CFunctionHook*            m_workspaceSwipeEndFunctionHook = nullptr;
+    CFunctionHook*            m_dispatcherGestureBeginFunctionHook = nullptr;
+    CFunctionHook*            m_dispatcherGestureUpdateFunctionHook = nullptr;
+    CFunctionHook*            m_dispatcherGestureEndFunctionHook = nullptr;
     CFunctionHook*            m_handleGestureHook = nullptr;
     SurfaceGetTexBoxFn        m_surfaceTexBoxOriginal = nullptr;
     SurfaceBoundingBoxFn      m_surfaceBoundingBoxOriginal = nullptr;
@@ -624,6 +634,9 @@ class OverviewController {
     WorkspaceSwipeBeginFn     m_workspaceSwipeBeginOriginal = nullptr;
     WorkspaceSwipeUpdateFn    m_workspaceSwipeUpdateOriginal = nullptr;
     WorkspaceSwipeEndFn       m_workspaceSwipeEndOriginal = nullptr;
+    DispatcherGestureBeginFn  m_dispatcherGestureBeginOriginal = nullptr;
+    DispatcherGestureUpdateFn m_dispatcherGestureUpdateOriginal = nullptr;
+    DispatcherGestureEndFn    m_dispatcherGestureEndOriginal = nullptr;
     HandleGestureFn           m_handleGestureOriginal = nullptr;
     bool                      m_hooksActive = false;
     bool                      m_inputFollowMouseOverridden = false;
