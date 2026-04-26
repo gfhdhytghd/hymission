@@ -280,6 +280,7 @@ class OverviewController {
         eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_HORIZONTAL;
         float                     deltaScale = 1.0F;
         std::size_t               debugSamples = 0;
+        bool                      skipNextUpdate = false;
     };
 
     struct WorkspaceNameBackup {

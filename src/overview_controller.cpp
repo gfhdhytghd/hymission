@@ -3000,12 +3000,6 @@ double OverviewController::scrollLayoutPrimaryDelta(const IPointer::SSwipeUpdate
 }
 
 bool OverviewController::scrollActiveLayoutByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) {
-    if (!g_layoutManager) {
-        if (debugLogsEnabled())
-            debugLog("[hymission] niri layout scroll skipped: layout manager unavailable");
-        return false;
-    }
-
     if (!canScrollActiveLayoutWithGesture(direction)) {
         if (debugLogsEnabled()) {
             const auto layoutDirection = scrollingLayoutDirection();
@@ -3013,6 +3007,18 @@ bool OverviewController::scrollActiveLayoutByGestureDelta(const IPointer::SSwipe
             out << "[hymission] niri layout scroll skipped: axis mismatch gestureDir=" << trackpadDirectionName(direction)
                 << " gestureAxis=" << gestureAxisName(gestureAxisForDirection(direction)) << " layoutDir=" << scrollingDirectionName(layoutDirection)
                 << " layoutAxis=" << gestureAxisName(axisForScrollingLayoutDirection(layoutDirection));
+            debugLog(out.str());
+        }
+        return false;
+    }
+
+    const auto workspace = activeLayoutWorkspace();
+    auto* const scrolling = scrollingAlgorithmForWorkspace(workspace);
+    if (!scrolling || !scrolling->m_scrollingData || !scrolling->m_scrollingData->controller) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] niri layout scroll skipped: scrolling algorithm unavailable workspace="
+                << (workspace ? workspace->m_name : std::string{"<none>"});
             debugLog(out.str());
         }
         return false;
@@ -3035,18 +3041,40 @@ bool OverviewController::scrollActiveLayoutByGestureDelta(const IPointer::SSwipe
         return true;
     }
 
-    std::ostringstream message;
-    message << "move " << std::showpos << amount;
-    const auto result = g_layoutManager->layoutMsg(message.str());
-    if (traceMove || (!result && debugLogsEnabled())) {
+    auto& data = scrolling->m_scrollingData;
+    auto* const controller = data->controller.get();
+    const CBox usable = scrolling->usableArea();
+    const bool fullscreenOnOne = getConfigInt(m_handle, "scrolling:fullscreen_on_one_column", 1) != 0;
+    const double viewportLength =
+        axisForScrollingLayoutDirection(scrollingDirection) == GestureAxis::Vertical ? static_cast<double>(usable.h) : static_cast<double>(usable.w);
+    const double maxExtent = controller->calculateMaxExtent(usable, fullscreenOnOne);
+    const double maxOffset = std::max(0.0, maxExtent - std::max(1.0, viewportLength));
+    const double offsetBefore = controller->getOffset();
+    const double requestedOffset = offsetBefore - amount;
+    const double offsetAfter = std::clamp(requestedOffset, 0.0, maxOffset);
+
+    if (std::abs(offsetAfter - offsetBefore) >= 0.001) {
+        controller->setOffset(offsetAfter);
+        data->recalculate(true);
+        if (workspace) {
+            if (const auto monitor = workspace->m_monitor.lock())
+                g_layoutManager->recalculateMonitor(monitor);
+        }
+        if (g_pAnimationManager)
+            g_pAnimationManager->frameTick();
+    }
+
+    if (traceMove) {
         std::ostringstream out;
-        out << "[hymission] niri layout scroll move message=\"" << message.str() << "\" dir=" << trackpadDirectionName(direction)
+        out << "[hymission] niri layout direct scroll dir=" << trackpadDirectionName(direction)
             << " layoutDir=" << scrollingDirectionName(scrollingDirection) << " delta=" << vectorToString(event.delta) << " primary=" << primaryDelta
-            << " amount=" << amount << " result=" << (result ? "ok" : result.error());
+            << " amount=" << amount << " offsetBefore=" << offsetBefore << " requested=" << requestedOffset << " offsetAfter=" << offsetAfter
+            << " maxOffset=" << maxOffset << " maxExtent=" << maxExtent << " viewport=" << viewportLength
+            << " result=" << (std::abs(offsetAfter - offsetBefore) >= 0.001 ? "moved" : "clamped");
         debugLog(out.str());
     }
 
-    return result.has_value();
+    return true;
 }
 
 double OverviewController::gestureSwipeDistance() const {
@@ -3945,6 +3973,7 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
         .route = ScrollGestureRoute::Layout,
         .direction = direction,
         .deltaScale = deltaScale,
+        .skipNextUpdate = true,
     };
 
     if (debugLogsEnabled()) {
@@ -3964,6 +3993,11 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
 void OverviewController::updateScrollGesture(const IPointer::SSwipeUpdateEvent& event) {
     if (!m_scrollGestureSession.active)
         return;
+
+    if (m_scrollGestureSession.skipNextUpdate) {
+        m_scrollGestureSession.skipNextUpdate = false;
+        return;
+    }
 
     switch (m_scrollGestureSession.route) {
         case ScrollGestureRoute::Layout:
