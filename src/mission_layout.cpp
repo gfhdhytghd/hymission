@@ -86,6 +86,12 @@ double pointToRectDistance(double x, double y, const Rect& rect) {
     return std::hypot(dx, dy);
 }
 
+double rectDistance(const Rect& lhs, const Rect& rhs) {
+    const double dx = std::max({rhs.x - (lhs.x + lhs.width), lhs.x - (rhs.x + rhs.width), 0.0});
+    const double dy = std::max({rhs.y - (lhs.y + lhs.height), lhs.y - (rhs.y + rhs.height), 0.0});
+    return std::hypot(dx, dy);
+}
+
 double clampAdditionalScale(double value) {
     return std::clamp(value, 0.0, 1.0);
 }
@@ -1013,16 +1019,39 @@ double edgeBalancePixels(const std::vector<WindowSlot>& slots, const Rect& area)
     return std::abs(edgeLeft - edgeRight) + std::abs(edgeTop - edgeBottom);
 }
 
+std::pair<double, double> nearestGapMetrics(const std::vector<WindowSlot>& slots) {
+    if (slots.size() < 2)
+        return {0.0, 0.0};
+
+    double totalNearest = 0.0;
+    double maxNearest = 0.0;
+    for (std::size_t i = 0; i < slots.size(); ++i) {
+        double nearest = std::numeric_limits<double>::infinity();
+        for (std::size_t j = 0; j < slots.size(); ++j) {
+            if (i == j)
+                continue;
+            nearest = std::min(nearest, rectDistance(slots[i].target, slots[j].target));
+        }
+        if (std::isfinite(nearest)) {
+            totalNearest += nearest;
+            maxNearest = std::max(maxNearest, nearest);
+        }
+    }
+
+    return {totalNearest / static_cast<double>(slots.size()), maxNearest};
+}
+
 double cornerVoidCost(const std::vector<WindowSlot>& slots, const Rect& area) {
     if (slots.empty())
         return 0.0;
 
     const auto distances = nearestCornerDistances(slots, area);
     const auto [minIt, maxIt] = std::minmax_element(distances.begin(), distances.end());
+    const auto [averageGap, maxGap] = nearestGapMetrics(slots);
     const double averageEdge = averageEdgeMargin(slots, area);
     const double overflow = std::max(0.0, *maxIt - averageEdge * 5.0);
     const double balance = *maxIt - *minIt;
-    return overflow * 12.0 + balance * 0.8 + *maxIt * 0.08 + edgeBalancePixels(slots, area) * 2.4;
+    return overflow * 12.0 + balance * 0.8 + *maxIt * 0.08 + edgeBalancePixels(slots, area) * 2.4 + averageGap * 1.8 + maxGap * 0.7;
 }
 
 bool canPlaceSlotTarget(const std::vector<WindowSlot>& slots, std::size_t movingIndex, const Rect& target, const Rect& area, const LayoutConfig& config) {
@@ -1043,53 +1072,6 @@ bool canPlaceSlotTarget(const std::vector<WindowSlot>& slots, std::size_t moving
     }
 
     return true;
-}
-
-void relaxCornerRatioByUniformInset(std::vector<WindowSlot>& slots, const Rect& area, const LayoutConfig& config) {
-    if (slots.size() < 2)
-        return;
-
-    double bestCost = cornerVoidCost(slots, area);
-    std::vector<WindowSlot> bestSlots;
-    const double minShortEdge = normalizedMinPreviewShortEdge(config, area);
-    const double minSlotScale = normalizedMinSlotScale(config);
-
-    for (double factor = 0.96; factor >= 0.76; factor -= 0.04) {
-        auto candidate = slots;
-        bool readable = true;
-        for (auto& slot : candidate) {
-            const double centerX = area.centerX() + (slot.target.centerX() - area.centerX()) * factor;
-            const double centerY = area.centerY() + (slot.target.centerY() - area.centerY()) * factor;
-            const double width = slot.target.width * factor;
-            const double height = slot.target.height * factor;
-            const double scale = slot.scale * factor;
-            if (std::min(width, height) < minShortEdge || scale < minSlotScale) {
-                readable = false;
-                break;
-            }
-
-            slot.target = {
-                std::floor(centerX - width / 2.0),
-                std::floor(centerY - height / 2.0),
-                width,
-                height,
-            };
-            slot.scale = scale;
-            clampRectToArea(slot.target, area);
-        }
-
-        if (!readable)
-            continue;
-
-        const double cost = cornerVoidCost(candidate, area);
-        if (cost < bestCost - 0.5) {
-            bestCost = cost;
-            bestSlots = std::move(candidate);
-        }
-    }
-
-    if (!bestSlots.empty())
-        slots = std::move(bestSlots);
 }
 
 void relieveCornerVoids(std::vector<WindowSlot>& slots, const Rect& area, const LayoutConfig& config) {
@@ -1163,11 +1145,6 @@ void relieveCornerVoids(std::vector<WindowSlot>& slots, const Rect& area, const 
 
         slots = std::move(bestSlots);
     }
-
-    const auto distances = nearestCornerDistances(slots, area);
-    const auto maxIt = std::max_element(distances.begin(), distances.end());
-    if (maxIt != distances.end() && *maxIt > averageEdgeMargin(slots, area) * 5.0)
-        relaxCornerRatioByUniformInset(slots, area, config);
 }
 
 double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area) {
@@ -1219,6 +1196,10 @@ double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area)
     const double cornerBalance = (*maxCornerIt - *minCornerIt) / std::max(1.0, std::hypot(area.width, area.height));
     const double cornerWhitespace = *maxCornerIt / std::max(1.0, std::hypot(area.width, area.height));
     const double cornerEdgeOverflow = std::max(0.0, *maxCornerIt - averageEdge * 5.0) / std::max(1.0, std::hypot(area.width, area.height));
+    const auto [averageNearestGap, maxNearestGap] = nearestGapMetrics(slots);
+    const double gapBasis = std::max(1.0, std::min(area.width, area.height));
+    const double averageGapOverflow = std::max(0.0, averageNearestGap / gapBasis - 0.075);
+    const double maxGapOverflow = std::max(0.0, maxNearestGap / gapBasis - 0.16);
 
     constexpr int columns = 4;
     constexpr int rows = 3;
@@ -1276,9 +1257,9 @@ double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area)
     const double boundsSparsePenalty = boundsFillRatio < 0.72 ? (0.72 - boundsFillRatio) : 0.0;
     const double readabilityPenalty = minShortEdge < 24.0 ? (24.0 - minShortEdge) / 24.0 : 0.0;
 
-    return heatStdDev * 2.4 + heatImbalance * 0.42 + gravityOffset * 3.0 + edgeBalance * 2.0 + edgeWhitespace * 0.9 + cornerBalance * 1.5 +
-        cornerWhitespace * 0.45 + cornerEdgeOverflow * 8.0 + sparsePenalty * 2.0 + boundsSparsePenalty * 1.4 + readabilityPenalty * 6.0 -
-        targetAreaRatio * 1.3 - averageScale * 0.30;
+    return heatStdDev * 2.4 + heatImbalance * 0.42 + gravityOffset * 3.0 + edgeBalance * 2.0 + edgeWhitespace * 1.8 + cornerBalance * 1.5 +
+        cornerWhitespace * 0.45 + cornerEdgeOverflow * 8.0 + averageGapOverflow * 5.0 + maxGapOverflow * 3.5 + sparsePenalty * 2.8 +
+        boundsSparsePenalty * 2.4 + readabilityPenalty * 6.0 - targetAreaRatio * 1.6 - averageScale * 0.35;
 }
 
 std::optional<std::vector<WindowSlot>> computeNaturalLayoutWithProfile(const std::vector<PreparedWindow>& prepared,

@@ -73,6 +73,10 @@ struct LayoutMetrics {
     double averageCornerDistance = 0.0;
     double cornerBalance = 0.0;
     double cornerEdgeRatio = 0.0;
+    double averageNearestGap = 0.0;
+    double maxNearestGap = 0.0;
+    double averageNearestGapRatio = 0.0;
+    double maxNearestGapRatio = 0.0;
     double averageMotion = 0.0;
     double maxMotion = 0.0;
     double heatMax = 0.0;
@@ -122,6 +126,10 @@ struct StressSummary {
     MetricSeries averageCornerDistance;
     MetricSeries cornerBalance;
     MetricSeries cornerEdgeRatio;
+    MetricSeries averageNearestGap;
+    MetricSeries maxNearestGap;
+    MetricSeries averageNearestGapRatio;
+    MetricSeries maxNearestGapRatio;
     MetricSeries heatMax;
     MetricSeries heatStdDev;
     MetricSeries heatImbalance;
@@ -541,6 +549,12 @@ double pointToRectDistance(double x, double y, const Rect& rect) {
     return std::hypot(dx, dy);
 }
 
+double rectDistance(const Rect& lhs, const Rect& rhs) {
+    const double dx = std::max({rhs.x - (lhs.x + lhs.width), lhs.x - (rhs.x + rhs.width), 0.0});
+    const double dy = std::max({rhs.y - (lhs.y + lhs.height), lhs.y - (rhs.y + rhs.height), 0.0});
+    return std::hypot(dx, dy);
+}
+
 std::array<double, 4> nearestCornerDistances(const std::vector<WindowSlot>& slots, const Rect& area) {
     const std::array<std::pair<double, double>, 4> corners{{
         {area.x, area.y},
@@ -651,6 +665,24 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
         metrics.averageCornerDistance = (cornerDistances[0] + cornerDistances[1] + cornerDistances[2] + cornerDistances[3]) / 4.0;
         metrics.cornerBalance = metrics.maxCornerDistance - metrics.minCornerDistance;
         metrics.cornerEdgeRatio = metrics.maxCornerDistance / std::max(1.0, metrics.averageEdgeMargin);
+
+        for (std::size_t i = 0; i < slots.size(); ++i) {
+            double nearest = std::numeric_limits<double>::infinity();
+            for (std::size_t j = 0; j < slots.size(); ++j) {
+                if (i == j)
+                    continue;
+                nearest = std::min(nearest, rectDistance(slots[i].target, slots[j].target));
+            }
+            if (std::isfinite(nearest)) {
+                metrics.averageNearestGap += nearest;
+                metrics.maxNearestGap = std::max(metrics.maxNearestGap, nearest);
+            }
+        }
+        if (slots.size() > 1)
+            metrics.averageNearestGap /= static_cast<double>(slots.size());
+        const double gapBasis = std::max(1.0, std::min(area.width, area.height));
+        metrics.averageNearestGapRatio = metrics.averageNearestGap / gapBasis;
+        metrics.maxNearestGapRatio = metrics.maxNearestGap / gapBasis;
     } else {
         metrics.minScale = 0.0;
         metrics.minShortEdge = 0.0;
@@ -671,6 +703,10 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
         metrics.averageCornerDistance = 0.0;
         metrics.cornerBalance = 0.0;
         metrics.cornerEdgeRatio = 0.0;
+        metrics.averageNearestGap = 0.0;
+        metrics.maxNearestGap = 0.0;
+        metrics.averageNearestGapRatio = 0.0;
+        metrics.maxNearestGapRatio = 0.0;
     }
 
     const double areaPixels = std::max(1.0, area.width * area.height);
@@ -731,6 +767,10 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
     metrics.score += metrics.cornerBalance * 30.0;
     if (metrics.cornerEdgeRatio > 5.0)
         metrics.score += (metrics.cornerEdgeRatio - 5.0) * 70000.0;
+    if (metrics.averageNearestGapRatio > 0.075)
+        metrics.score += (metrics.averageNearestGapRatio - 0.075) * 90000.0;
+    if (metrics.maxNearestGapRatio > 0.16)
+        metrics.score += (metrics.maxNearestGapRatio - 0.16) * 70000.0;
     metrics.score += static_cast<double>(metrics.xInversions + metrics.yInversions) * 400.0;
     metrics.score += metrics.averageMotion * 3000.0;
 
@@ -911,6 +951,10 @@ void recordStressMetrics(StressSummary& summary, const LayoutMetrics& metrics) {
     recordMetric(summary.averageCornerDistance, metrics.averageCornerDistance);
     recordMetric(summary.cornerBalance, metrics.cornerBalance);
     recordMetric(summary.cornerEdgeRatio, metrics.cornerEdgeRatio);
+    recordMetric(summary.averageNearestGap, metrics.averageNearestGap);
+    recordMetric(summary.maxNearestGap, metrics.maxNearestGap);
+    recordMetric(summary.averageNearestGapRatio, metrics.averageNearestGapRatio);
+    recordMetric(summary.maxNearestGapRatio, metrics.maxNearestGapRatio);
     recordMetric(summary.heatMax, metrics.heatMax);
     recordMetric(summary.heatStdDev, metrics.heatStdDev);
     recordMetric(summary.heatImbalance, metrics.heatImbalance);
@@ -985,6 +1029,10 @@ void printStressSummary(const StressSummary& summary) {
     printMetricSeries("averageCornerDistance", summary.averageCornerDistance);
     printMetricSeries("cornerBalance", summary.cornerBalance);
     printMetricSeries("cornerEdgeRatio", summary.cornerEdgeRatio);
+    printMetricSeries("averageNearestGap", summary.averageNearestGap);
+    printMetricSeries("maxNearestGap", summary.maxNearestGap);
+    printMetricSeries("averageNearestGapRatio", summary.averageNearestGapRatio);
+    printMetricSeries("maxNearestGapRatio", summary.maxNearestGapRatio);
     printMetricSeries("heatMax", summary.heatMax);
     printMetricSeries("heatStdDev", summary.heatStdDev);
     printMetricSeries("heatImbalance", summary.heatImbalance);
@@ -1107,6 +1155,7 @@ void writeSvg(const std::string& path, const Scene& scene, const LayoutConfig& c
         << " edgeBalance(x/y)=" << metrics.edgeBalanceX << "/" << metrics.edgeBalanceY
         << " corner(tl/tr/bl/br)=" << metrics.cornerDistanceTopLeft << "/" << metrics.cornerDistanceTopRight << "/" << metrics.cornerDistanceBottomLeft << "/"
         << metrics.cornerDistanceBottomRight << " cornerBalance=" << metrics.cornerBalance << " cornerEdgeRatio=" << metrics.cornerEdgeRatio
+        << " gap(avg/max)=" << metrics.averageNearestGap << "/" << metrics.maxNearestGap
         << " motion(avg/max)=" << metrics.averageMotion << "/" << metrics.maxMotion << " inv(x/y)=" << metrics.xInversions << "/" << metrics.yInversions
         << "</text>\n";
     out << "</svg>\n";
@@ -1142,6 +1191,8 @@ void printMetrics(const LayoutMetrics& metrics) {
               << " cornerMinMaxAvg=" << metrics.minCornerDistance << "/" << metrics.maxCornerDistance << "/" << metrics.averageCornerDistance
               << " cornerBalance=" << metrics.cornerBalance
               << " cornerEdgeRatio=" << metrics.cornerEdgeRatio
+              << " nearestGap(avg/max)=" << metrics.averageNearestGap << "/" << metrics.maxNearestGap
+              << " nearestGapRatio(avg/max)=" << metrics.averageNearestGapRatio << "/" << metrics.maxNearestGapRatio
               << " targetAreaRatio=" << metrics.targetAreaRatio
               << " gravityOffset=" << metrics.gravityOffset
               << " centroid=" << static_cast<int>(metrics.targetCentroidX) << "," << static_cast<int>(metrics.targetCentroidY)
