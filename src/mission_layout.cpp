@@ -74,6 +74,7 @@ struct NaturalProfile {
 };
 
 void clampRectToArea(Rect& rect, const Rect& area);
+std::vector<WindowSlot> computeGridLayout(const std::vector<PreparedWindow>& prepared, const Rect& inner, const LayoutConfig& config);
 
 double clampPositive(double value) {
     return std::max(0.0, value);
@@ -509,13 +510,15 @@ std::vector<NaturalBandAnchor> buildNaturalBandAnchors(const std::vector<Prepare
     for (std::size_t i = 0; i < count; ++i)
         ordered[i] = i;
 
-    std::stable_sort(ordered.begin(), ordered.end(), [&](std::size_t a, std::size_t b) {
-        const double ay = prepared[a].input.natural.centerY();
-        const double by = prepared[b].input.natural.centerY();
-        if (std::abs(ay - by) > 0.5)
-            return ay < by;
-        return prepared[a].input.natural.centerX() < prepared[b].input.natural.centerX();
-    });
+    if (visualBias < 0.85) {
+        std::stable_sort(ordered.begin(), ordered.end(), [&](std::size_t a, std::size_t b) {
+            const double ay = prepared[a].input.natural.centerY();
+            const double by = prepared[b].input.natural.centerY();
+            if (std::abs(ay - by) > 0.5)
+                return ay < by;
+            return prepared[a].input.natural.centerX() < prepared[b].input.natural.centerX();
+        });
+    }
 
     const double legacyUsedWidth = 0.76;
     const double visualUsedWidth = std::clamp(0.74 + static_cast<double>(count) * 0.004, 0.76, 0.84);
@@ -533,13 +536,15 @@ std::vector<NaturalBandAnchor> buildNaturalBandAnchors(const std::vector<Prepare
             break;
 
         std::vector<std::size_t> band(ordered.begin() + static_cast<std::ptrdiff_t>(begin), ordered.begin() + static_cast<std::ptrdiff_t>(end));
-        std::stable_sort(band.begin(), band.end(), [&](std::size_t a, std::size_t b) {
-            const double ax = prepared[a].input.natural.centerX();
-            const double bx = prepared[b].input.natural.centerX();
-            if (std::abs(ax - bx) > 0.5)
-                return ax < bx;
-            return prepared[a].input.natural.centerY() < prepared[b].input.natural.centerY();
-        });
+        if (visualBias < 0.85) {
+            std::stable_sort(band.begin(), band.end(), [&](std::size_t a, std::size_t b) {
+                const double ax = prepared[a].input.natural.centerX();
+                const double bx = prepared[b].input.natural.centerX();
+                if (std::abs(ax - bx) > 0.5)
+                    return ax < bx;
+                return prepared[a].input.natural.centerY() < prepared[b].input.natural.centerY();
+            });
+        }
 
         const double y = rows == 1 ? area.centerY() : top + usedHeight * (static_cast<double>(row) + 0.5) / static_cast<double>(rows);
         for (std::size_t column = 0; column < band.size(); ++column) {
@@ -870,6 +875,8 @@ double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area)
     const double edgeTop = minY - area.y;
     const double edgeBottom = area.y + area.height - maxY;
     const double edgeBalance = std::abs(edgeLeft - edgeRight) / std::max(1.0, area.width) + std::abs(edgeTop - edgeBottom) / std::max(1.0, area.height);
+    const double edgeWhitespace = (edgeLeft + edgeRight) / std::max(1.0, area.width) + (edgeTop + edgeBottom) / std::max(1.0, area.height);
+    const double boundsFillRatio = ((maxX - minX) * (maxY - minY)) / areaPixels;
 
     constexpr int columns = 4;
     constexpr int rows = 3;
@@ -924,9 +931,10 @@ double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area)
 
     const double heatImbalance = std::abs(leftHeat - rightHeat) + std::abs(topHeat - bottomHeat);
     const double sparsePenalty = targetAreaRatio < 0.18 ? (0.18 - targetAreaRatio) : 0.0;
+    const double boundsSparsePenalty = boundsFillRatio < 0.72 ? (0.72 - boundsFillRatio) : 0.0;
 
-    return heatStdDev * 2.4 + heatImbalance * 0.42 + gravityOffset * 3.0 + edgeBalance * 2.0 + sparsePenalty * 2.0 - targetAreaRatio * 0.55 -
-        averageScale * 0.16;
+    return heatStdDev * 2.4 + heatImbalance * 0.42 + gravityOffset * 3.0 + edgeBalance * 2.0 + edgeWhitespace * 0.45 + sparsePenalty * 2.0 +
+        boundsSparsePenalty * 0.9 - targetAreaRatio * 0.85 - averageScale * 0.24;
 }
 
 std::optional<std::vector<WindowSlot>> computeNaturalLayoutWithProfile(const std::vector<PreparedWindow>& prepared,
@@ -983,16 +991,34 @@ std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<Pr
     std::optional<std::vector<WindowSlot>> bestSlots;
     double                                 bestCost = std::numeric_limits<double>::infinity();
 
+    const auto consider = [&](std::vector<WindowSlot> candidate, double costBias = 0.0) {
+        if (candidate.empty())
+            return;
+
+        const double cost = naturalVisualCost(candidate, area) + costBias;
+        if (!bestSlots || cost < bestCost) {
+            bestCost = cost;
+            bestSlots = std::move(candidate);
+        }
+    };
+
     for (const auto& profile : profiles) {
         auto candidate = computeNaturalLayoutWithProfile(prepared, area, config, profile);
         if (!candidate)
             continue;
 
-        const double cost = naturalVisualCost(*candidate, area);
-        if (!bestSlots || cost < bestCost) {
-            bestCost = cost;
-            bestSlots = std::move(candidate);
-        }
+        consider(std::move(*candidate));
+    }
+
+    if (!config.forceRowGroups && prepared.size() >= 4) {
+        LayoutConfig visualPackConfig = config;
+        visualPackConfig.forceRowGroups = false;
+        visualPackConfig.preserveInputOrder = false;
+        visualPackConfig.layoutSpaceWeight = std::max(visualPackConfig.layoutSpaceWeight, 0.18);
+
+        auto visualPack = computeGridLayout(prepared, area, visualPackConfig);
+        centerNaturalTargets(visualPack, area);
+        consider(std::move(visualPack), -0.04);
     }
 
     return bestSlots;

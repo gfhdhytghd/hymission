@@ -335,6 +335,24 @@ std::vector<Scene> scenes() {
                     {.index = 7, .natural = {230, 60, 1198, 828}, .label = "dolphin ws2"},
                 },
         },
+        {
+            .name = "live-right-heavy-11",
+            .area = {0, 0, 2880, 1800},
+            .windows =
+                {
+                    {.index = 0, .natural = {576, 60, 852, 540}, .label = "calendar special"},
+                    {.index = 1, .natural = {12, 60, 1198, 828}, .label = "chrome ws2"},
+                    {.index = 2, .natural = {1224, 60, 1193, 828}, .label = "ghostty hyprv ws1"},
+                    {.index = 3, .natural = {180, 60, 1080, 225}, .label = "dropdown special"},
+                    {.index = 4, .natural = {1224, 60, 1193, 828}, .label = "ghostty hymission ws2"},
+                    {.index = 5, .natural = {1070, 60, 360, 828}, .label = "ai hub special"},
+                    {.index = 6, .natural = {2431, 60, 1193, 828}, .label = "dolphin screenshots ws1"},
+                    {.index = 7, .natural = {12, 60, 1416, 828}, .label = "discord ws4"},
+                    {.index = 8, .natural = {1224, 60, 1193, 828}, .label = "dolphin videos ws3"},
+                    {.index = 9, .natural = {12, 60, 1198, 828}, .label = "qq ws3"},
+                    {.index = 10, .natural = {12, 60, 1198, 828}, .label = "ghostty active ws1"},
+                },
+        },
     };
 }
 
