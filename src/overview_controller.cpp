@@ -9715,6 +9715,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     };
     const auto niriScrollingOverviewSlotForWindow = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
                                                         std::size_t windowIndex) -> std::optional<WindowSlot> {
+        if (state.collectionPolicy.requestedScope == ScopeOverride::ForceAll)
+            return std::nullopt;
+
         if (!niriModeEnabled() || !window || !targetMonitor || window->m_pinned || !window->m_workspace || !window->m_workspace->m_space ||
             !isScrollingWorkspace(window->m_workspace))
             return std::nullopt;
