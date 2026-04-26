@@ -336,7 +336,7 @@ workspace 切换补充语义：
 - `expand_selected_window` 让 overview 当前选中项在布局阶段获得额外权重，从而放大并挤开相邻 preview；它依赖 `selectedIndex`，因此在 `overview_focus_follows_mouse = 1` 时通常也会跟随 hover 触发 relayout
 - `overview_focus_follows_mouse` 控制 overview 内部选中项是否跟随鼠标，以及在允许时是否把当前选中项实时同步到真实 focus；当 overview 打开前 `input:follow_mouse = 0` 时，它退化为“只改 overview 内部选中项 + 退出时提交”
 - `niri_mode` 默认关闭；打开后只改变边缘 workspace strip 的排布：active-centered、monitor aspect ratio、允许缩略图列表溢出屏幕
-- `niri_scroll_pixels_per_delta` 影响 `hymission:scroll,layout` 在 overview 外连续发送 `layoutMsg move` 的幅度
+- `niri_scroll_pixels_per_delta` 影响 `hymission:scroll,layout` 在 overview 外连续发送 `layoutMsg move` 的幅度；默认 `1.0` 表示约把一次 `gestures:workspace_swipe_distance` 的手指位移映射为一个 viewport 的 scrolling-layout 位移
 - `niri_workspace_scale` 控制 niri mode 下 strip 内 workspace preview 相对 strip cross-axis 的缩放，默认 `1.0`，范围 `0.05..1.0`
 - `gesture_invert_vertical` 只影响被插件接管的 vertical overview gesture；它不改变普通 dispatcher、键盘输入或 Hyprland 其他 gesture 的方向
 - 如果退出 overview 时提交的真实目标窗口仍不在屏内，允许临时保持该窗口为真实 focus，直到下一次真实鼠标事件；只有当目标窗口在当前 monitor 上存在可见区域时，才允许顺带移动光标去对齐真实 focus

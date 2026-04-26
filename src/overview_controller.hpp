@@ -394,6 +394,7 @@ class OverviewController {
     [[nodiscard]] GestureAxis  gestureAxisForDirection(eTrackpadGestureDirection direction) const;
     [[nodiscard]] ScrollingLayoutDirection scrollingLayoutDirection() const;
     [[nodiscard]] bool         canScrollActiveLayoutWithGesture(eTrackpadGestureDirection direction) const;
+    [[nodiscard]] double       scrollLayoutPixelsPerGestureDelta(ScrollingLayoutDirection direction) const;
     [[nodiscard]] double       scrollLayoutPrimaryDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) const;
     [[nodiscard]] bool         scrollActiveLayoutByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale);
     [[nodiscard]] bool         shouldSyncRealFocusDuringOverview() const;

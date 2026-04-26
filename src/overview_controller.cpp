@@ -2842,6 +2842,19 @@ bool OverviewController::canScrollActiveLayoutWithGesture(eTrackpadGestureDirect
     return scrollingLayoutGestureAxisMatches(scrollingLayoutDirection(), gestureAxisForDirection(direction));
 }
 
+double OverviewController::scrollLayoutPixelsPerGestureDelta(ScrollingLayoutDirection direction) const {
+    const double swipeDistance = gestureSwipeDistance();
+    if (swipeDistance <= 0.0)
+        return std::max(0.0, niriScrollPixelsPerDelta());
+
+    double viewportLength = swipeDistance;
+    if (const auto monitor = Desktop::focusState()->monitor(); monitor)
+        viewportLength = axisForScrollingLayoutDirection(direction) == GestureAxis::Vertical ? static_cast<double>(monitor->m_size.y) :
+                                                                                               static_cast<double>(monitor->m_size.x);
+
+    return std::max(0.0, niriScrollPixelsPerDelta()) * std::max(1.0, viewportLength) / swipeDistance;
+}
+
 double OverviewController::scrollLayoutPrimaryDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) const {
     bool vertical = false;
     switch (direction) {
@@ -2870,7 +2883,7 @@ bool OverviewController::scrollActiveLayoutByGestureDelta(const IPointer::SSwipe
 
     const auto scrollingDirection = scrollingLayoutDirection();
     const double primaryDelta = scrollLayoutPrimaryDelta(event, direction, deltaScale);
-    const double amount = scrollingLayoutMoveAmount(scrollingDirection, primaryDelta, niriScrollPixelsPerDelta());
+    const double amount = scrollingLayoutMoveAmount(scrollingDirection, primaryDelta, scrollLayoutPixelsPerGestureDelta(scrollingDirection));
     if (std::abs(amount) < 0.001)
         return true;
 
