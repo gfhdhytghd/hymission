@@ -29,6 +29,13 @@ bool rectsOverlap(const Rect& lhs, const Rect& rhs) {
     return lhs.x < rhs.x + rhs.width && lhs.x + lhs.width > rhs.x && lhs.y < rhs.y + rhs.height && lhs.y + lhs.height > rhs.y;
 }
 
+bool rectInside(const Rect& rect, const Rect& area) {
+    constexpr double epsilon = 0.0001;
+    return rect.x + epsilon >= area.x && rect.y + epsilon >= area.y &&
+           rect.x + rect.width <= area.x + area.width + epsilon &&
+           rect.y + rect.height <= area.y + area.height + epsilon;
+}
+
 bool expectSlot(const WindowSlot& actual, const Rect& expectedTarget, double expectedScale, const char* message) {
     return expect(closeEnough(actual.target.x, expectedTarget.x) && closeEnough(actual.target.y, expectedTarget.y) &&
                       closeEnough(actual.target.width, expectedTarget.width) && closeEnough(actual.target.height, expectedTarget.height) &&
@@ -255,6 +262,50 @@ int main() {
 
         const double centerX = (minX + maxX) / 2.0;
         ok &= expect(centerX > 560.0 && centerX < 840.0, "natural engine should center the final target cloud");
+    }
+
+    {
+        LayoutConfig config = deterministicConfig();
+        config.engine = LayoutEngine::Natural;
+        config.rowSpacing = 32.0;
+        config.columnSpacing = 32.0;
+
+        const Rect area{0, 0, 1440, 900};
+        const std::vector<WindowInput> windows = {
+            {.index = 0, .natural = {0, 60, 3800, 150}, .label = "ultra-wide-a"},
+            {.index = 1, .natural = {-600, 355, 4200, 140}, .label = "ultra-wide-b"},
+            {.index = 2, .natural = {900, 120, 2900, 160}, .label = "ultra-wide-c"},
+            {.index = 3, .natural = {80, -900, 180, 3600}, .label = "ultra-tall-a"},
+            {.index = 4, .natural = {560, 20, 160, 2800}, .label = "ultra-tall-b"},
+        };
+
+        const auto slots = engine.compute(windows, area, config);
+        ok &= expect(slots.size() == windows.size(), "natural engine should keep extreme-aspect windows");
+        for (const auto& slot : slots)
+            ok &= expect(rectInside(slot.target, area), "natural engine should fit extreme-aspect targets inside the area");
+    }
+
+    {
+        LayoutConfig config = deterministicConfig();
+        config.engine = LayoutEngine::Natural;
+        config.rowSpacing = 8.0;
+        config.columnSpacing = 8.0;
+        config.minSlotScale = 0.05;
+
+        const Rect area{0, 0, 1440, 900};
+        std::vector<WindowInput> windows;
+        for (std::size_t i = 0; i < 120; ++i) {
+            const double x = static_cast<double>((i * 73) % 1320);
+            const double y = static_cast<double>((i * 47) % 780);
+            const double width = 60.0 + static_cast<double>((i * 19) % 160);
+            const double height = 50.0 + static_cast<double>((i * 23) % 130);
+            windows.push_back({.index = i, .natural = {x, y, width, height}, .label = "dense"});
+        }
+
+        const auto slots = engine.compute(windows, area, config);
+        ok &= expect(slots.size() == windows.size(), "dense natural requests should fall back without dropping windows");
+        for (const auto& slot : slots)
+            ok &= expect(rectInside(slot.target, area), "dense fallback should keep targets inside the area");
     }
 
     {

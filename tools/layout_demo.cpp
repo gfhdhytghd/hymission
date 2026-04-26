@@ -3,7 +3,9 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -30,10 +32,30 @@ struct Options {
     std::string              sceneName = "forceall";
     LayoutEngine             engine = LayoutEngine::Natural;
     std::optional<std::string> outputPath;
+    std::size_t              stressCases = 0;
+    unsigned                 seed = 0xC0FFEE;
     bool                     forceRowGroups = false;
     bool                     listScenes = false;
     bool                     help = false;
 };
+
+struct LayoutMetrics {
+    double overlapArea = 0.0;
+    double outOfBoundsArea = 0.0;
+    double minScale = std::numeric_limits<double>::infinity();
+    double averageScale = 0.0;
+    double targetAreaRatio = 0.0;
+    double score = 0.0;
+};
+
+struct StressResult {
+    std::size_t              caseIndex = 0;
+    Scene                    scene;
+    std::vector<WindowSlot>  slots;
+    LayoutMetrics            metrics;
+};
+
+void printSlots(const std::vector<WindowSlot>& slots);
 
 std::string escapeXml(std::string_view value) {
     std::string escaped;
@@ -56,6 +78,24 @@ double parseDouble(const std::string& value, const char* optionName) {
         return std::stod(value);
     } catch (const std::exception&) {
         std::cerr << "Invalid number for " << optionName << ": " << value << '\n';
+        std::exit(EXIT_FAILURE);
+    }
+}
+
+std::size_t parseSize(const std::string& value, const char* optionName) {
+    try {
+        return static_cast<std::size_t>(std::stoull(value));
+    } catch (const std::exception&) {
+        std::cerr << "Invalid integer for " << optionName << ": " << value << '\n';
+        std::exit(EXIT_FAILURE);
+    }
+}
+
+unsigned parseUnsigned(const std::string& value, const char* optionName) {
+    try {
+        return static_cast<unsigned>(std::stoul(value));
+    } catch (const std::exception&) {
+        std::cerr << "Invalid integer for " << optionName << ": " << value << '\n';
         std::exit(EXIT_FAILURE);
     }
 }
@@ -175,6 +215,8 @@ void printUsage(const char* argv0) {
               << "  --scene NAME                Built-in scene. Default: forceall\n"
               << "  --output PATH.svg           Render an SVG visual diff\n"
               << "  --width PX --height PX      Override scene monitor size\n"
+              << "  --stress COUNT              Run random pathological cases and report the worst one\n"
+              << "  --seed N                    Seed for --stress. Default: 12648430\n"
               << "  --force-row-groups          Enable row-group fallback behavior\n"
               << "  --list-scenes               Print built-in scene names\n"
               << "  --help                      Show this help\n";
@@ -205,6 +247,10 @@ Options parseOptions(int argc, char** argv, Scene& scene) {
             widthOverride = parseDouble(requireValue("--width"), "--width");
         } else if (arg == "--height") {
             heightOverride = parseDouble(requireValue("--height"), "--height");
+        } else if (arg == "--stress") {
+            options.stressCases = parseSize(requireValue("--stress"), "--stress");
+        } else if (arg == "--seed") {
+            options.seed = parseUnsigned(requireValue("--seed"), "--seed");
         } else if (arg == "--force-row-groups") {
             options.forceRowGroups = true;
         } else if (arg == "--list-scenes") {
@@ -217,7 +263,7 @@ Options parseOptions(int argc, char** argv, Scene& scene) {
         }
     }
 
-    if (options.help || options.listScenes)
+    if (options.help || options.listScenes || options.stressCases > 0)
         return options;
 
     auto found = findScene(options.sceneName);
@@ -250,6 +296,213 @@ std::string colorFor(std::size_t index) {
         "#5b8def", "#24a36b", "#f59e0b", "#d946ef", "#ef4444", "#14b8a6", "#8b5cf6", "#64748b",
     };
     return std::string(colors[index % std::size(colors)]);
+}
+
+double intersectionArea(const Rect& lhs, const Rect& rhs) {
+    const double width = std::min(lhs.x + lhs.width, rhs.x + rhs.width) - std::max(lhs.x, rhs.x);
+    const double height = std::min(lhs.y + lhs.height, rhs.y + rhs.height) - std::max(lhs.y, rhs.y);
+    return std::max(0.0, width) * std::max(0.0, height);
+}
+
+double outsideArea(const Rect& rect, const Rect& area) {
+    const double insideWidth = std::max(0.0, std::min(rect.x + rect.width, area.x + area.width) - std::max(rect.x, area.x));
+    const double insideHeight = std::max(0.0, std::min(rect.y + rect.height, area.y + area.height) - std::max(rect.y, area.y));
+    return std::max(0.0, rect.width * rect.height - insideWidth * insideHeight);
+}
+
+LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& area) {
+    LayoutMetrics metrics;
+    double        totalTargetArea = 0.0;
+
+    for (std::size_t i = 0; i < slots.size(); ++i) {
+        metrics.minScale = std::min(metrics.minScale, slots[i].scale);
+        metrics.averageScale += slots[i].scale;
+        totalTargetArea += slots[i].target.width * slots[i].target.height;
+        metrics.outOfBoundsArea += outsideArea(slots[i].target, area);
+
+        for (std::size_t j = i + 1; j < slots.size(); ++j)
+            metrics.overlapArea += intersectionArea(slots[i].target, slots[j].target);
+    }
+
+    if (!slots.empty()) {
+        metrics.averageScale /= static_cast<double>(slots.size());
+    } else {
+        metrics.minScale = 0.0;
+    }
+
+    const double areaPixels = std::max(1.0, area.width * area.height);
+    metrics.targetAreaRatio = totalTargetArea / areaPixels;
+    metrics.score = metrics.overlapArea * 200.0 + metrics.outOfBoundsArea * 200.0;
+    if (metrics.minScale < 0.08)
+        metrics.score += (0.08 - metrics.minScale) * 1000000.0;
+    if (metrics.averageScale < 0.18)
+        metrics.score += (0.18 - metrics.averageScale) * 250000.0;
+    if (metrics.targetAreaRatio < 0.12 && slots.size() <= 10)
+        metrics.score += (0.12 - metrics.targetAreaRatio) * 100000.0;
+
+    return metrics;
+}
+
+double randomDouble(std::mt19937& rng, double minValue, double maxValue) {
+    return std::uniform_real_distribution<double>(minValue, maxValue)(rng);
+}
+
+int randomInt(std::mt19937& rng, int minValue, int maxValue) {
+    return std::uniform_int_distribution<int>(minValue, maxValue)(rng);
+}
+
+WindowInput makeWindow(std::size_t index, Rect natural, std::string label) {
+    return {
+        .index = index,
+        .natural = natural,
+        .label = std::move(label),
+    };
+}
+
+Scene randomStressScene(std::mt19937& rng, std::size_t caseIndex) {
+    Scene scene;
+    scene.name = "stress-" + std::to_string(caseIndex);
+    scene.area = {0, 0, randomDouble(rng, 900.0, 2400.0), randomDouble(rng, 600.0, 1500.0)};
+
+    const int mode = static_cast<int>(caseIndex % 7);
+    std::size_t count = 0;
+    switch (mode) {
+        case 0: count = static_cast<std::size_t>(randomInt(rng, 4, 14)); break;
+        case 1: count = static_cast<std::size_t>(randomInt(rng, 3, 8)); break;
+        case 2: count = static_cast<std::size_t>(randomInt(rng, 8, 30)); break;
+        case 3: count = static_cast<std::size_t>(randomInt(rng, 4, 12)); break;
+        case 4: count = static_cast<std::size_t>(randomInt(rng, 3, 10)); break;
+        case 5: count = static_cast<std::size_t>(randomInt(rng, 6, 18)); break;
+        default: count = static_cast<std::size_t>(randomInt(rng, 4, 16)); break;
+    }
+
+    scene.windows.reserve(count);
+    const double areaW = scene.area.width;
+    const double areaH = scene.area.height;
+    const double clusterX = randomDouble(rng, -areaW * 0.25, areaW * 1.05);
+    const double clusterY = randomDouble(rng, -areaH * 0.25, areaH * 1.05);
+
+    for (std::size_t i = 0; i < count; ++i) {
+        Rect        natural;
+        std::string label;
+
+        switch (mode) {
+            case 0:
+                natural = {
+                    randomDouble(rng, -areaW * 0.25, areaW * 1.15),
+                    randomDouble(rng, -areaH * 0.25, areaH * 1.15),
+                    randomDouble(rng, 60.0, areaW * 0.85),
+                    randomDouble(rng, 60.0, areaH * 0.85),
+                };
+                label = "random";
+                break;
+            case 1:
+                natural = {
+                    clusterX + randomDouble(rng, -40.0, 40.0),
+                    clusterY + randomDouble(rng, -40.0, 40.0),
+                    randomDouble(rng, areaW * 0.45, areaW * 0.95),
+                    randomDouble(rng, areaH * 0.35, areaH * 0.85),
+                };
+                label = "stacked";
+                break;
+            case 2:
+                natural = {
+                    randomDouble(rng, -areaW * 0.10, areaW * 0.95),
+                    randomDouble(rng, -areaH * 0.10, areaH * 0.95),
+                    randomDouble(rng, 24.0, 240.0),
+                    randomDouble(rng, 24.0, 220.0),
+                };
+                label = "many-small";
+                break;
+            case 3:
+                natural = {
+                    randomDouble(rng, -areaW * 0.20, areaW),
+                    randomDouble(rng, -areaH * 0.20, areaH),
+                    i % 2 == 0 ? randomDouble(rng, areaW * 0.75, areaW * 1.35) : randomDouble(rng, 40.0, 180.0),
+                    i % 2 == 0 ? randomDouble(rng, 40.0, 150.0) : randomDouble(rng, areaH * 0.55, areaH * 1.20),
+                };
+                label = "extreme-aspect";
+                break;
+            case 4:
+                natural = {
+                    i % 2 == 0 ? randomDouble(rng, -areaW * 0.35, 60.0) : randomDouble(rng, areaW * 0.85, areaW * 1.25),
+                    randomDouble(rng, -areaH * 0.20, areaH * 1.05),
+                    randomDouble(rng, 160.0, areaW * 0.55),
+                    randomDouble(rng, 120.0, areaH * 0.65),
+                };
+                label = "edge";
+                break;
+            case 5:
+                natural = {
+                    randomDouble(rng, areaW * 0.25, areaW * 0.65) + randomDouble(rng, -60.0, 60.0),
+                    randomDouble(rng, areaH * 0.25, areaH * 0.65) + randomDouble(rng, -60.0, 60.0),
+                    i % 3 == 0 ? randomDouble(rng, areaW * 0.55, areaW * 1.10) : randomDouble(rng, 80.0, 360.0),
+                    i % 3 == 1 ? randomDouble(rng, areaH * 0.55, areaH * 1.10) : randomDouble(rng, 80.0, 360.0),
+                };
+                label = "mixed-cluster";
+                break;
+            default:
+                natural = {
+                    randomDouble(rng, areaW * 0.70, areaW * 1.35),
+                    randomDouble(rng, areaH * 0.60, areaH * 1.35),
+                    randomDouble(rng, 120.0, areaW * 0.55),
+                    randomDouble(rng, 100.0, areaH * 0.55),
+                };
+                label = "offscreen-cloud";
+                break;
+        }
+
+        label += "-" + std::to_string(i);
+        scene.windows.push_back(makeWindow(i, natural, label));
+    }
+
+    return scene;
+}
+
+StressResult runStress(const Options& options) {
+    std::mt19937          rng(options.seed);
+    MissionControlLayout  engine;
+    const auto            baseConfig = demoConfig(options);
+    StressResult          worst;
+    worst.metrics.score = -1.0;
+
+    for (std::size_t i = 0; i < options.stressCases; ++i) {
+        auto scene = randomStressScene(rng, i);
+        auto slots = engine.compute(scene.windows, scene.area, baseConfig);
+        auto metrics = measureLayout(slots, insetArea(scene.area, baseConfig));
+        if (metrics.score > worst.metrics.score) {
+            worst = {
+                .caseIndex = i,
+                .scene = std::move(scene),
+                .slots = std::move(slots),
+                .metrics = metrics,
+            };
+        }
+    }
+
+    return worst;
+}
+
+void printStressResult(const StressResult& result) {
+    std::cout << "worst case #" << result.caseIndex << " scene=" << result.scene.name << '\n'
+              << "windows=" << result.scene.windows.size() << " area="
+              << static_cast<int>(result.scene.area.width) << 'x' << static_cast<int>(result.scene.area.height) << '\n'
+              << "score=" << std::fixed << std::setprecision(2) << result.metrics.score
+              << " overlapArea=" << result.metrics.overlapArea
+              << " outOfBoundsArea=" << result.metrics.outOfBoundsArea
+              << " minScale=" << std::setprecision(3) << result.metrics.minScale
+              << " averageScale=" << result.metrics.averageScale
+              << " targetAreaRatio=" << result.metrics.targetAreaRatio << '\n';
+
+    for (const auto& window : result.scene.windows) {
+        std::cout << "input #" << window.index << ' '
+                  << static_cast<int>(window.natural.x) << ','
+                  << static_cast<int>(window.natural.y) << ' '
+                  << static_cast<int>(window.natural.width) << 'x'
+                  << static_cast<int>(window.natural.height) << ' '
+                  << window.label << '\n';
+    }
+    printSlots(result.slots);
 }
 
 void writeSvg(const std::string& path, const Scene& scene, const LayoutConfig& config, const std::vector<WindowSlot>& slots) {
@@ -346,6 +599,17 @@ int main(int argc, char** argv) {
     if (options.listScenes) {
         for (const auto& available : scenes())
             std::cout << available.name << '\n';
+        return EXIT_SUCCESS;
+    }
+
+    if (options.stressCases > 0) {
+        const auto config = demoConfig(options);
+        auto       worst = runStress(options);
+        printStressResult(worst);
+        if (options.outputPath) {
+            writeSvg(*options.outputPath, worst.scene, config, worst.slots);
+            std::cout << "wrote " << *options.outputPath << '\n';
+        }
         return EXIT_SUCCESS;
     }
 

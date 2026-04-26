@@ -53,6 +53,8 @@ struct NaturalAnchorMap {
     double scale = 1.0;
 };
 
+void clampRectToArea(Rect& rect, const Rect& area);
+
 double clampPositive(double value) {
     return std::max(0.0, value);
 }
@@ -67,6 +69,16 @@ double normalizedMaxPreviewScale(const LayoutConfig& config) {
 
 double normalizedMinSlotScale(const LayoutConfig& config) {
     return std::clamp(config.minSlotScale, 0.0, normalizedMaxPreviewScale(config));
+}
+
+double naturalFitScaleForWindow(const PreparedWindow& window, const Rect& area) {
+    const double widthFit = area.width / std::max(1.0, window.input.natural.width);
+    const double heightFit = area.height / std::max(1.0, window.input.natural.height);
+    return std::max(0.0, std::min(widthFit, heightFit));
+}
+
+bool naturalSolverAllowedForCount(std::size_t count) {
+    return count <= 80;
 }
 
 double clampLayoutScale(double value, const LayoutConfig& config) {
@@ -292,10 +304,18 @@ std::vector<WindowSlot> materializeSlots(LayoutCandidate candidate, const Rect& 
             const double previewY = std::floor(candidate.rows.size() == 1 ? rowY + (rowHeight - previewHeight) / 2.0
                                                                            : rowY + rowHeight - cellHeight);
 
+            Rect target{
+                previewX,
+                previewY,
+                previewWidth,
+                previewHeight,
+            };
+            clampRectToArea(target, area);
+
             slots.push_back({
                 .index = window.input.index,
                 .natural = window.input.natural,
-                .target = {previewX, previewY, previewWidth, previewHeight},
+                .target = target,
                 .scale = scale,
             });
 
@@ -436,7 +456,7 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
 
     for (std::size_t order = 0; order < prepared.size(); ++order) {
         const auto&  window = prepared[order];
-        const double scale = std::clamp(baseScale * window.weightScale, 0.0, normalizedMaxPreviewScale(config));
+        const double scale = std::clamp(baseScale * window.weightScale, 0.0, std::min(normalizedMaxPreviewScale(config), naturalFitScaleForWindow(window, area)));
         const double cellWidth = std::max(1.0, window.layoutWidth * scale);
         const double cellHeight = std::max(1.0, window.layoutHeight * scale);
         const double previewWidth = std::max(0.0, window.input.natural.width * scale);
@@ -576,8 +596,6 @@ void centerNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
 
     const double boundsWidth = maxX - minX;
     const double boundsHeight = maxY - minY;
-    if (boundsWidth >= area.width && boundsHeight >= area.height)
-        return;
 
     const double desiredDx = area.centerX() - (minX + maxX) / 2.0;
     const double desiredDy = area.centerY() - (minY + maxY) / 2.0;
@@ -591,6 +609,7 @@ void centerNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
     for (auto& slot : slots) {
         slot.target.x = std::floor(slot.target.x + dx);
         slot.target.y = std::floor(slot.target.y + dy);
+        clampRectToArea(slot.target, area);
     }
 }
 
@@ -620,11 +639,14 @@ std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<Pr
         return std::vector<WindowSlot>{};
 
     double maxWeight = 1.0;
-    for (const auto& window : prepared)
+    double fitLimitedBaseScale = normalizedMaxPreviewScale(config);
+    for (const auto& window : prepared) {
         maxWeight = std::max(maxWeight, window.weightScale);
+        fitLimitedBaseScale = std::min(fitLimitedBaseScale, naturalFitScaleForWindow(window, area) / std::max(0.000001, window.weightScale));
+    }
 
     double lo = 0.0;
-    double hi = normalizedMaxPreviewScale(config) / maxWeight;
+    double hi = std::min(normalizedMaxPreviewScale(config) / maxWeight, fitLimitedBaseScale);
     std::optional<std::vector<NaturalItem>> best;
 
     for (int step = 0; step < 24; ++step) {
@@ -679,7 +701,7 @@ std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowIn
     const Rect inner = insetArea(area, config);
     const auto prepared = prepareWindows(windows, inner, config);
 
-    if (config.engine == LayoutEngine::Natural && !config.forceRowGroups) {
+    if (config.engine == LayoutEngine::Natural && !config.forceRowGroups && naturalSolverAllowedForCount(prepared.size())) {
         if (auto natural = computeNaturalLayout(prepared, inner, config))
             return *natural;
     }
