@@ -248,10 +248,11 @@ int main() {
             {.index = 1, .natural = {120, 140, 56, 680}, .label = "thin-tall"},
             {.index = 2, .natural = {260, 260, 1300, 64}, .label = "thin-wide-2"},
             {.index = 3, .natural = {560, 70, 64, 720}, .label = "thin-tall-2"},
+            {.index = 4, .natural = {460, 420, 28, 26}, .label = "tiny"},
         };
 
         const auto slots = engine.compute(windows, {0, 0, 1100, 700}, config);
-        ok &= expect(slots.size() == 4, "natural engine should keep extreme-aspect windows");
+        ok &= expect(slots.size() == 5, "natural engine should keep extreme-aspect windows");
         for (const auto& slot : slots) {
             ok &= expect(rectInside(slot.target, {0, 0, 1100, 700}), "extreme-aspect previews should stay inside the monitor");
             ok &= expect(std::min(slot.target.width, slot.target.height) >= 31.9,

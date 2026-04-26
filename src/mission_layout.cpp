@@ -113,13 +113,10 @@ std::pair<double, double> previewSizeWithShortEdgeFloor(const PreparedWindow& wi
     if (width <= 0.0 || height <= 0.0)
         return {width, height};
 
-    const double shortEdge = std::min(width, height);
     const double floor = std::min(normalizedMinPreviewShortEdge(config, area), std::max(0.0, shortEdgeCap));
-    if (floor > shortEdge) {
-        if (width < height)
-            width = std::min(floor, area.width);
-        else
-            height = std::min(floor, area.height);
+    if (floor > 0.0) {
+        width = std::max(width, std::min(floor, area.width));
+        height = std::max(height, std::min(floor, area.height));
     }
 
     return {width, height};
@@ -492,7 +489,8 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
     std::vector<NaturalItem> items;
     items.reserve(prepared.size());
 
-    constexpr double anchorSpread = 0.62;
+    const double     density = std::clamp((static_cast<double>(prepared.size()) - 6.0) / 24.0, 0.0, 1.0);
+    const double     anchorSpread = lerp(0.62, 0.72, density);
     const auto       anchorMap = buildNaturalAnchorMap(prepared, area);
     const auto       overlapOffsets = buildNaturalOverlapOffsets(prepared, area);
     const double     areaCenterX = area.centerX();
