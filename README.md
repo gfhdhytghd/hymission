@@ -228,7 +228,7 @@ plugin {
 | `small_window_boost` | float | `1.35` | Weight boost applied to smaller windows during layout. |
 | `max_preview_scale` | float | `0.95` | Maximum preview scale. |
 | `min_slot_scale` | float | `0.10` | Minimum allowed slot scale. |
-| `layout_engine` | string | `grid` | Geometry solver. `grid` keeps the existing row-search layout; `natural`, `apple`, `expose`, and `mission-control` enable the Apple-like natural solver that tries to preserve original window positions while removing overlap. |
+| `layout_engine` | string | `grid` | Geometry solver. `grid` keeps the existing row-search layout; `natural`, `apple`, `expose`, and `mission-control` enable the Apple-like natural solver that tries to preserve original window positions while removing overlap. The natural engine attempts every window count and only uses row-search as an emergency fallback if solving fails. |
 | `layout_scale_weight` | float | `1.0` | Weight of preview scale in the layout scoring pass. |
 | `layout_space_weight` | float | `0.10` | Weight of space utilization in the layout scoring pass. |
 | `one_workspace_per_row` | bool | `0` | Keep each workspace on its own row instead of searching for the best row count. |

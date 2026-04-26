@@ -54,6 +54,12 @@ struct NaturalAnchorMap {
     double scale = 1.0;
 };
 
+struct NaturalOverlapOffset {
+    bool   active = false;
+    double x = 0.0;
+    double y = 0.0;
+};
+
 void clampRectToArea(Rect& rect, const Rect& area);
 
 double clampPositive(double value) {
@@ -80,10 +86,6 @@ double naturalFitScaleForWindow(const PreparedWindow& window, const Rect& area) 
     const double widthFit = area.width / std::max(1.0, window.input.natural.width);
     const double heightFit = area.height / std::max(1.0, window.input.natural.height);
     return std::max(0.0, std::min(widthFit, heightFit));
-}
-
-bool naturalSolverAllowedForCount(std::size_t count) {
-    return count <= 12;
 }
 
 double clampLayoutScale(double value, const LayoutConfig& config) {
@@ -409,9 +411,9 @@ NaturalAnchorMap buildNaturalAnchorMap(const std::vector<PreparedWindow>& prepar
     };
 }
 
-std::vector<int> buildNaturalOverlapRanks(const std::vector<PreparedWindow>& prepared) {
-    std::vector<int> ranks(prepared.size(), -1);
-    int              nextRank = 0;
+std::vector<NaturalOverlapOffset> buildNaturalOverlapOffsets(const std::vector<PreparedWindow>& prepared, const Rect& area) {
+    std::vector<NaturalOverlapOffset> offsets(prepared.size());
+    std::vector<std::size_t>          overlapping;
 
     for (std::size_t i = 0; i < prepared.size(); ++i) {
         bool overlapsPeer = false;
@@ -425,26 +427,46 @@ std::vector<int> buildNaturalOverlapRanks(const std::vector<PreparedWindow>& pre
         }
 
         if (overlapsPeer)
-            ranks[i] = nextRank++;
+            overlapping.push_back(i);
     }
 
-    return ranks;
-}
+    if (overlapping.size() <= 1)
+        return offsets;
 
-std::pair<double, double> naturalOverlapOffset(int rank, int count, const Rect& area) {
-    if (rank < 0 || count <= 1)
-        return {0.0, 0.0};
+    auto byX = overlapping;
+    auto byY = overlapping;
+    std::stable_sort(byX.begin(), byX.end(), [&](std::size_t a, std::size_t b) {
+        const double ac = prepared[a].input.natural.centerX();
+        const double bc = prepared[b].input.natural.centerX();
+        if (std::abs(ac - bc) > 0.5)
+            return ac < bc;
+        return prepared[a].input.natural.centerY() < prepared[b].input.natural.centerY();
+    });
+    std::stable_sort(byY.begin(), byY.end(), [&](std::size_t a, std::size_t b) {
+        const double ac = prepared[a].input.natural.centerY();
+        const double bc = prepared[b].input.natural.centerY();
+        if (std::abs(ac - bc) > 0.5)
+            return ac < bc;
+        return prepared[a].input.natural.centerX() < prepared[b].input.natural.centerX();
+    });
 
-    const int    columns = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(count))));
-    const int    rows = static_cast<int>(std::ceil(static_cast<double>(count) / static_cast<double>(columns)));
-    const int    row = rank / columns;
-    const int    column = rank % columns;
-    const double stepX = area.width * 0.16;
-    const double stepY = area.height * 0.14;
-    return {
-        (static_cast<double>(column) - static_cast<double>(columns - 1) / 2.0) * stepX,
-        (static_cast<double>(row) - static_cast<double>(rows - 1) / 2.0) * stepY,
-    };
+    const double denom = std::max(1.0, static_cast<double>(overlapping.size() - 1));
+    const double spanX = area.width * 0.34;
+    const double spanY = area.height * 0.30;
+
+    for (std::size_t rank = 0; rank < byX.size(); ++rank) {
+        auto& offset = offsets[byX[rank]];
+        offset.active = true;
+        offset.x = (static_cast<double>(rank) / denom - 0.5) * spanX;
+    }
+
+    for (std::size_t rank = 0; rank < byY.size(); ++rank) {
+        auto& offset = offsets[byY[rank]];
+        offset.active = true;
+        offset.y = (static_cast<double>(rank) / denom - 0.5) * spanY;
+    }
+
+    return offsets;
 }
 
 double maxOverlap(const std::vector<NaturalItem>& items, const LayoutConfig& config) {
@@ -472,12 +494,7 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
 
     constexpr double anchorSpread = 0.62;
     const auto       anchorMap = buildNaturalAnchorMap(prepared, area);
-    const auto       overlapRanks = buildNaturalOverlapRanks(prepared);
-    int              overlapCount = 0;
-    for (const auto rank : overlapRanks) {
-        if (rank >= 0)
-            overlapCount = std::max(overlapCount, rank + 1);
-    }
+    const auto       overlapOffsets = buildNaturalOverlapOffsets(prepared, area);
     const double     areaCenterX = area.centerX();
     const double     areaCenterY = area.centerY();
 
@@ -490,10 +507,9 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
 
         double anchorX = areaCenterX + (window.input.natural.centerX() - anchorMap.sourceCenterX) * anchorSpread * anchorMap.scale;
         double anchorY = areaCenterY + (window.input.natural.centerY() - anchorMap.sourceCenterY) * anchorSpread * anchorMap.scale;
-        if (overlapRanks[order] >= 0) {
-            const auto [offsetX, offsetY] = naturalOverlapOffset(overlapRanks[order], overlapCount, area);
-            anchorX += offsetX;
-            anchorY += offsetY;
+        if (overlapOffsets[order].active) {
+            anchorX += overlapOffsets[order].x;
+            anchorY += overlapOffsets[order].y;
         }
         anchorX = std::clamp(anchorX, area.x + cellWidth / 2.0, area.x + area.width - cellWidth / 2.0);
         anchorY = std::clamp(anchorY, area.y + cellHeight / 2.0, area.y + area.height - cellHeight / 2.0);
@@ -772,10 +788,8 @@ std::optional<std::vector<WindowSlot>> computeNaturalRowGroupLayout(const std::v
         };
 
         std::vector<WindowSlot> groupSlots;
-        if (naturalSolverAllowedForCount(group.size())) {
-            if (auto natural = computeNaturalLayout(group, band, groupConfig))
-                groupSlots = std::move(*natural);
-        }
+        if (auto natural = computeNaturalLayout(group, band, groupConfig))
+            groupSlots = std::move(*natural);
 
         if (groupSlots.empty())
             groupSlots = computeGridLayout(group, band, groupConfig);
@@ -806,7 +820,7 @@ std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowIn
         if (config.forceRowGroups) {
             if (auto groupedNatural = computeNaturalRowGroupLayout(prepared, inner, config))
                 return *groupedNatural;
-        } else if (naturalSolverAllowedForCount(prepared.size())) {
+        } else {
             if (auto natural = computeNaturalLayout(prepared, inner, config))
                 return *natural;
         }
