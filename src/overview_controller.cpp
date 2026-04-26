@@ -10117,14 +10117,14 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                         const double moveDown = obstacle.y + obstacle.height - scaledDesired.y;
                         const double moveUp = obstacle.y - (scaledDesired.y + scaledDesired.height);
 
-                        if (std::abs(moveRight) <= maxNudge + 0.5)
-                            appendOffset(moveRight, 0.0);
-                        if (std::abs(moveLeft) <= maxNudge + 0.5)
-                            appendOffset(moveLeft, 0.0);
-                        if (std::abs(moveDown) <= maxNudge + 0.5)
-                            appendOffset(0.0, moveDown);
-                        if (std::abs(moveUp) <= maxNudge + 0.5)
-                            appendOffset(0.0, moveUp);
+                        appendOffset(moveRight, 0.0);
+                        appendOffset(moveLeft, 0.0);
+                        appendOffset(0.0, moveDown);
+                        appendOffset(0.0, moveUp);
+                        appendOffset(moveRight, moveDown);
+                        appendOffset(moveRight, moveUp);
+                        appendOffset(moveLeft, moveDown);
+                        appendOffset(moveLeft, moveUp);
                     }
                     for (const auto& [dx, dy] : offsets) {
                         appendCandidate(makeRect(clampedDesired.centerX() + dx - width * 0.5, clampedDesired.centerY() + dy - height * 0.5, width, height), scale);
