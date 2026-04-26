@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cctype>
 #include <fstream>
+#include <limits>
 #include <linux/input-event-codes.h>
 #include <numeric>
 #include <optional>
@@ -2768,7 +2769,7 @@ double OverviewController::niriScrollPixelsPerDelta() const {
 }
 
 double OverviewController::niriWorkspaceScale() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_workspace_scale", 0.35), 0.12, 0.60);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_workspace_scale", 0.5), 0.0001, 0.75);
 }
 
 bool OverviewController::debugLogsEnabled() const {
@@ -2883,17 +2884,16 @@ bool OverviewController::scrollActiveLayoutByGestureDelta(const IPointer::SSwipe
     return result.has_value();
 }
 
-bool OverviewController::scrollNiriWorkspaceStripByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) {
-    if (!niriModeEnabled() || !workspaceStripEnabled(m_state) || m_state.stripEntries.empty())
-        return false;
+bool OverviewController::canUseNiriWorkspaceOverviewGesture(const PHLMONITOR& monitor) const {
+    return niriModeEnabled() && monitor && workspaceStripEnabled(m_state) && !m_state.stripEntries.empty();
+}
 
-    const double delta = scrollLayoutPrimaryDelta(event, direction, deltaScale) * niriScrollPixelsPerDelta();
-    if (std::abs(delta) < 0.001)
-        return true;
-
-    m_niriWorkspaceStripScrollOffset += delta;
+void OverviewController::scrollNiriWorkspaceOverview(double delta) {
+    if (std::abs(delta) < 0.001 || !workspaceStripEnabled(m_state) || m_state.stripEntries.empty())
+        return;
 
     const bool horizontal = isWorkspaceStripHorizontal(parseWorkspaceStripAnchor(workspaceStripAnchor()));
+    m_niriWorkspaceStripScrollOffset += delta;
     for (auto& entry : m_state.stripEntries) {
         if (horizontal)
             entry.rect.x += delta;
@@ -2902,7 +2902,32 @@ bool OverviewController::scrollNiriWorkspaceStripByGestureDelta(const IPointer::
     }
 
     damageOwnedMonitors();
-    return true;
+}
+
+std::optional<std::size_t> OverviewController::centeredNiriWorkspaceIndex(const PHLMONITOR& monitor) const {
+    if (!monitor || m_state.stripEntries.empty())
+        return std::nullopt;
+
+    const bool horizontal = isWorkspaceStripHorizontal(parseWorkspaceStripAnchor(workspaceStripAnchor()));
+    const double center = horizontal ? (monitor->m_position.x + static_cast<double>(monitor->m_size.x) * 0.5) :
+                                      (monitor->m_position.y + static_cast<double>(monitor->m_size.y) * 0.5);
+
+    std::optional<std::size_t> bestIndex;
+    double bestDistance = std::numeric_limits<double>::max();
+    for (std::size_t index = 0; index < m_state.stripEntries.size(); ++index) {
+        const auto& entry = m_state.stripEntries[index];
+        if (!entry.monitor || entry.monitor != monitor || entry.newWorkspaceSlot)
+            continue;
+
+        const double entryCenter = horizontal ? entry.rect.centerX() : entry.rect.centerY();
+        const double distance = std::abs(entryCenter - center);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestIndex = index;
+        }
+    }
+
+    return bestIndex;
 }
 
 double OverviewController::gestureSwipeDistance() const {
@@ -2966,13 +2991,12 @@ double OverviewController::workspaceStripThickness(const PHLMONITOR& monitor) co
     if (!monitor)
         return raw;
 
+    if (niriModeEnabled())
+        return std::max(static_cast<double>(monitor->m_size.x), static_cast<double>(monitor->m_size.y));
+
     const bool horizontal = workspaceStripAnchor() == "top";
     const double crossLength = horizontal ? static_cast<double>(monitor->m_size.y) : static_cast<double>(monitor->m_size.x);
-    if (niriModeEnabled())
-        raw = std::max(raw, crossLength * niriWorkspaceScale() + 16.0);
-
-    const double limitRatio = niriModeEnabled() ? 0.60 : 0.35;
-    const double limit = crossLength * limitRatio;
+    const double limit = crossLength * 0.35;
     return std::clamp(raw, 64.0, std::max(64.0, limit));
 }
 
@@ -3751,21 +3775,8 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
     if (mode != HymissionScrollMode::Layout || m_gestureSession.active || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
         return false;
 
-    if (isVisible()) {
-        if (niriModeEnabled() && workspaceStripEnabled(m_state) && !m_state.stripEntries.empty()) {
-            m_scrollGestureSession = {
-                .active = true,
-                .mode = mode,
-                .route = ScrollGestureRoute::NiriWorkspaceStrip,
-                .direction = direction,
-                .deltaScale = deltaScale,
-            };
-            (void)scrollNiriWorkspaceStripByGestureDelta(event, direction, deltaScale);
-            return true;
-        }
-
+    if (isVisible())
         return false;
-    }
 
     if (canScrollActiveLayoutWithGesture(direction)) {
         m_scrollGestureSession = {
@@ -3790,9 +3801,6 @@ void OverviewController::updateScrollGesture(const IPointer::SSwipeUpdateEvent& 
         case ScrollGestureRoute::Layout:
             (void)scrollActiveLayoutByGestureDelta(event, m_scrollGestureSession.direction, m_scrollGestureSession.deltaScale);
             break;
-        case ScrollGestureRoute::NiriWorkspaceStrip:
-            (void)scrollNiriWorkspaceStripByGestureDelta(event, m_scrollGestureSession.direction, m_scrollGestureSession.deltaScale);
-            break;
         case ScrollGestureRoute::None:
         default:
             break;
@@ -3816,6 +3824,24 @@ bool OverviewController::beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDire
         monitor = m_state.ownerMonitor;
     if (!monitor)
         return false;
+
+    if (canUseNiriWorkspaceOverviewGesture(monitor)) {
+        m_workspaceSwipeGesture = {
+            .active = true,
+            .monitor = monitor,
+            .direction = direction,
+            .niriOverview = true,
+        };
+
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] niri overview workspace gesture begin monitor=" << monitor->m_name << " dir="
+                << (direction == TRACKPAD_GESTURE_DIR_HORIZONTAL ? "horizontal" : direction == TRACKPAD_GESTURE_DIR_VERTICAL ? "vertical" : "other");
+            debugLog(out.str());
+        }
+
+        return true;
+    }
 
     m_workspaceSwipeGesture = {
         .active = true,
@@ -3953,6 +3979,11 @@ void OverviewController::updateOverviewWorkspaceSwipeGesture(double delta) {
     if (std::abs(signedDelta) < 0.0001)
         return;
 
+    if (m_workspaceSwipeGesture.niriOverview) {
+        scrollNiriWorkspaceOverview(signedDelta);
+        return;
+    }
+
     const double candidateTotal = (m_workspaceTransition.active ? m_workspaceTransition.delta : 0.0) + signedDelta;
     if (std::abs(candidateTotal) < 0.0001) {
         if (m_workspaceTransition.active) {
@@ -3998,6 +4029,31 @@ void OverviewController::updateOverviewWorkspaceSwipeGesture(double delta) {
 }
 
 void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
+    if (m_workspaceSwipeGesture.niriOverview) {
+        const auto monitor = m_workspaceSwipeGesture.monitor;
+        const auto activeIndex = [&]() -> std::optional<std::size_t> {
+            for (std::size_t index = 0; index < m_state.stripEntries.size(); ++index) {
+                const auto& entry = m_state.stripEntries[index];
+                if (entry.monitor == monitor && entry.active)
+                    return index;
+            }
+            return std::nullopt;
+        };
+
+        const auto targetIndex = cancelled ? activeIndex() : centeredNiriWorkspaceIndex(monitor);
+        if (targetIndex && *targetIndex < m_state.stripEntries.size()) {
+            const bool horizontal = isWorkspaceStripHorizontal(parseWorkspaceStripAnchor(workspaceStripAnchor()));
+            const double center = horizontal ? (monitor->m_position.x + static_cast<double>(monitor->m_size.x) * 0.5) :
+                                              (monitor->m_position.y + static_cast<double>(monitor->m_size.y) * 0.5);
+            const double entryCenter = horizontal ? m_state.stripEntries[*targetIndex].rect.centerX() : m_state.stripEntries[*targetIndex].rect.centerY();
+            scrollNiriWorkspaceOverview(center - entryCenter);
+            activateStripTarget(*targetIndex);
+        }
+
+        m_workspaceSwipeGesture = {};
+        return;
+    }
+
     m_workspaceSwipeGesture.active = false;
 
     if (!m_workspaceTransition.active)
@@ -4983,6 +5039,9 @@ Rect OverviewController::workspaceStripBandRectForMonitor(const PHLMONITOR& moni
     if (!monitor || !workspaceStripEnabled(state))
         return {};
 
+    if (niriModeEnabled())
+        return makeRect(monitor->m_position.x, monitor->m_position.y, monitor->m_size.x, monitor->m_size.y);
+
     const auto reservation =
         reserveWorkspaceStripBand(makeRect(monitor->m_position.x, monitor->m_position.y, monitor->m_size.x, monitor->m_size.y),
                                   parseWorkspaceStripAnchor(workspaceStripAnchor()), workspaceStripThickness(monitor), workspaceStripGap());
@@ -4994,6 +5053,9 @@ Rect OverviewController::overviewContentRectForMonitor(const PHLMONITOR& monitor
         return {};
 
     if (!workspaceStripEnabled(state))
+        return makeRect(0.0, 0.0, monitor->m_size.x, monitor->m_size.y);
+
+    if (niriModeEnabled())
         return makeRect(0.0, 0.0, monitor->m_size.x, monitor->m_size.y);
 
     const auto reservation = reserveWorkspaceStripBand(makeRect(0.0, 0.0, monitor->m_size.x, monitor->m_size.y),
@@ -9032,8 +9094,11 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
             }
 
             const double aspect = monitor->m_size.y > 0.0 ? static_cast<double>(monitor->m_size.x) / static_cast<double>(monitor->m_size.y) : (16.0 / 9.0);
+            const double scale = niriWorkspaceScale();
+            const double mainLength = horizontal ? static_cast<double>(monitor->m_size.x) : static_cast<double>(monitor->m_size.y);
+            const double gap = mainLength * 0.1 * scale;
             const auto slots =
-                layoutNiriWorkspaceStripSlots(band, parseWorkspaceStripAnchor(anchor), monitorEntries.size(), activeIndex, stripGap, 8.0, aspect);
+                layoutNiriWorkspaceStripSlots(band, parseWorkspaceStripAnchor(anchor), monitorEntries.size(), activeIndex, gap, 0.0, aspect, scale);
             for (std::size_t index = 0; index < std::min(slots.size(), monitorEntries.size()); ++index) {
                 monitorEntries[index].rect = slots[index];
                 if (horizontal)

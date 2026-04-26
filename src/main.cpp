@@ -53,7 +53,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("multi_workspace_sort_recent_first", 1L);
     CONF("niri_mode", 0L);
     CONF("niri_scroll_pixels_per_delta", 1.0F);
-    CONF("niri_workspace_scale", 0.35F);
+    CONF("niri_workspace_scale", 0.5F);
     CONF("gesture_invert_vertical", 0L);
     CONF("one_workspace_per_row", 0L);
     CONF("only_active_workspace", 0L);

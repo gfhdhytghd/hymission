@@ -385,7 +385,7 @@ std::vector<Rect> layoutWorkspaceStripSlots(const Rect& stripBand, WorkspaceStri
 }
 
 std::vector<Rect> layoutNiriWorkspaceStripSlots(const Rect& stripBand, WorkspaceStripAnchor anchor, std::size_t slotCount, std::optional<std::size_t> activeIndex,
-                                                double gap, double padding, double workspaceAspectRatio) {
+                                                double gap, double padding, double workspaceAspectRatio, double workspaceScale) {
     std::vector<Rect> slots;
     slots.reserve(slotCount);
 
@@ -403,8 +403,9 @@ std::vector<Rect> layoutNiriWorkspaceStripSlots(const Rect& stripBand, Workspace
     const double availableMain = std::max(1.0, mainLength - safePadding * 2.0);
     const double availableCross = std::max(1.0, crossLength - safePadding * 2.0);
     const double aspect = std::max(0.05, workspaceAspectRatio);
+    const double scale = std::clamp(workspaceScale, 0.05, 1.0);
 
-    const double slotCross = availableCross;
+    const double slotCross = availableCross * scale;
     const double slotMain = horizontal ? slotCross * aspect : slotCross / aspect;
     const double effectiveGap = slotCount > 1 ? safeGap : 0.0;
     const double contentMain = slotMain * static_cast<double>(slotCount) + effectiveGap * static_cast<double>(slotCount - 1);

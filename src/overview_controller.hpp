@@ -268,7 +268,6 @@ class OverviewController {
     enum class ScrollGestureRoute {
         None,
         Layout,
-        NiriWorkspaceStrip,
     };
 
     struct ScrollGestureSession {
@@ -330,6 +329,7 @@ class OverviewController {
         bool                      active = false;
         PHLMONITOR                monitor;
         eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_NONE;
+        bool                      niriOverview = false;
     };
 
     struct StripPreviewContext {
@@ -397,7 +397,9 @@ class OverviewController {
     [[nodiscard]] bool         canScrollActiveLayoutWithGesture(eTrackpadGestureDirection direction) const;
     [[nodiscard]] double       scrollLayoutPrimaryDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) const;
     [[nodiscard]] bool         scrollActiveLayoutByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale);
-    [[nodiscard]] bool         scrollNiriWorkspaceStripByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale);
+    [[nodiscard]] bool         canUseNiriWorkspaceOverviewGesture(const PHLMONITOR& monitor) const;
+    void                       scrollNiriWorkspaceOverview(double delta);
+    [[nodiscard]] std::optional<std::size_t> centeredNiriWorkspaceIndex(const PHLMONITOR& monitor) const;
     [[nodiscard]] bool         shouldSyncRealFocusDuringOverview() const;
     [[nodiscard]] bool         allowsWorkspaceSwitchInOverview() const;
     [[nodiscard]] bool         shouldBlockWorkspaceSwitchInOverview() const;

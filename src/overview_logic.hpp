@@ -87,7 +87,7 @@ struct WorkspaceStripReservation {
 [[nodiscard]] std::vector<Rect>    layoutWorkspaceStripSlots(const Rect& stripBand, WorkspaceStripAnchor anchor, std::size_t slotCount, double gap);
 [[nodiscard]] std::vector<Rect>    layoutNiriWorkspaceStripSlots(const Rect& stripBand, WorkspaceStripAnchor anchor, std::size_t slotCount,
                                                                   std::optional<std::size_t> activeIndex, double gap, double padding,
-                                                                  double workspaceAspectRatio);
+                                                                  double workspaceAspectRatio, double workspaceScale = 1.0);
 [[nodiscard]] std::optional<std::size_t> hitTestWorkspaceStrip(const std::vector<Rect>& rects, double x, double y);
 
 } // namespace hymission

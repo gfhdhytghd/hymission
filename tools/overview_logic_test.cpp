@@ -226,6 +226,12 @@ int main() {
     ok &= expectRect(niriSideSlots[1], {8, 229, 84, 42}, "niri side strip active slot should be centered in the band");
     ok &= expectRect(niriSideSlots[2], {8, 281, 84, 42}, "niri side strip should advance vertically by thumbnail height plus gap");
 
+    const auto niriScaledSideSlots =
+        layoutNiriWorkspaceStripSlots({0, 0, 1000, 1000}, WorkspaceStripAnchor::Left, 3, std::optional<std::size_t>{1}, 50, 0, 16.0 / 9.0, 0.5);
+    ok &= expect(niriScaledSideSlots.size() == 3, "niri scaled strip layout should return one rect per slot");
+    ok &= expectRect(niriScaledSideSlots[0], {250, 28.125, 500, 281.25}, "niri scaled strip should keep monitor ratio at configured overview zoom");
+    ok &= expectRect(niriScaledSideSlots[1], {250, 359.375, 500, 281.25}, "niri scaled strip should center active workspace without fitting all slots");
+
     const auto niriOverflowSlots =
         layoutNiriWorkspaceStripSlots({0, 0, 500, 80}, WorkspaceStripAnchor::Top, 6, std::optional<std::size_t>{3}, 10, 8, 2.0);
     ok &= expect(niriOverflowSlots.size() == 6, "niri overflowing strip layout should keep all slots");
