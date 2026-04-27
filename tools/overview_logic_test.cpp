@@ -9,8 +9,11 @@
 namespace {
 
 using hymission::Direction;
+using hymission::GestureAxis;
+using hymission::HymissionScrollMode;
 using hymission::Rect;
 using hymission::RecommandVisibleGestureMode;
+using hymission::ScrollingLayoutDirection;
 using hymission::WorkspaceStripAnchor;
 using hymission::WorkspaceStripEmptyMode;
 using hymission::WorkspaceStripReservation;
@@ -123,6 +126,35 @@ int main() {
                  "continuous empty-mode parsing should ignore case and whitespace");
     ok &= expect(parseWorkspaceStripEmptyMode("unexpected") == WorkspaceStripEmptyMode::Existing, "invalid empty-mode should fall back to existing");
 
+    ok &= expect(parseHymissionScrollMode("layout") == std::optional<HymissionScrollMode>{HymissionScrollMode::Layout}, "layout niri scroll mode should parse");
+    ok &= expect(!parseHymissionScrollMode(" workspace ").has_value(), "workspace should stay on Hyprland's standard workspace gesture");
+    ok &= expect(!parseHymissionScrollMode("Both").has_value(), "combined layout/workspace scroll mode should not parse");
+    ok &= expect(!parseHymissionScrollMode("unexpected").has_value(), "invalid niri scroll mode should fail");
+
+    ok &= expect(parseScrollingLayoutDirection("left") == ScrollingLayoutDirection::Left, "left scrolling direction should parse");
+    ok &= expect(parseScrollingLayoutDirection("DOWN") == ScrollingLayoutDirection::Down, "down scrolling direction parsing should ignore case");
+    ok &= expect(parseScrollingLayoutDirection(" up ") == ScrollingLayoutDirection::Up, "up scrolling direction parsing should ignore whitespace");
+    ok &= expect(parseScrollingLayoutDirection("unexpected") == ScrollingLayoutDirection::Right, "invalid scrolling direction should fall back to right");
+
+    ok &= expect(axisForScrollingLayoutDirection(ScrollingLayoutDirection::Right) == GestureAxis::Horizontal, "right scrolling direction should use horizontal gestures");
+    ok &= expect(axisForScrollingLayoutDirection(ScrollingLayoutDirection::Left) == GestureAxis::Horizontal, "left scrolling direction should use horizontal gestures");
+    ok &= expect(axisForScrollingLayoutDirection(ScrollingLayoutDirection::Down) == GestureAxis::Vertical, "down scrolling direction should use vertical gestures");
+    ok &= expect(axisForScrollingLayoutDirection(ScrollingLayoutDirection::Up) == GestureAxis::Vertical, "up scrolling direction should use vertical gestures");
+    ok &= expect(scrollingLayoutGestureAxisMatches(ScrollingLayoutDirection::Down, GestureAxis::Vertical),
+                 "vertical gestures should match down scrolling layouts");
+    ok &= expect(!scrollingLayoutGestureAxisMatches(ScrollingLayoutDirection::Down, GestureAxis::Horizontal),
+                 "horizontal gestures should not match down scrolling layouts");
+    ok &= expect(closeEnough(scrollingLayoutMoveAmount(ScrollingLayoutDirection::Right, -12.0, 2.0), -24.0),
+                 "right scrolling move amount should preserve gesture sign");
+    ok &= expect(closeEnough(scrollingLayoutMoveAmount(ScrollingLayoutDirection::Left, -12.0, 2.0), 24.0),
+                 "left scrolling move amount should invert gesture sign");
+    ok &= expect(closeEnough(scrollingLayoutMoveAmount(ScrollingLayoutDirection::Down, 5.0, 3.0), 15.0),
+                 "down scrolling move amount should preserve gesture sign");
+    ok &= expect(closeEnough(scrollingLayoutMoveAmount(ScrollingLayoutDirection::Up, 5.0, 3.0), -15.0),
+                 "up scrolling move amount should invert gesture sign");
+    ok &= expect(closeEnough(scrollingLayoutMoveAmount(ScrollingLayoutDirection::Right, 5.0, -3.0), 0.0),
+                 "negative niri scroll sensitivity should clamp to zero");
+
     ok &= expect(isWorkspaceStripHorizontal(WorkspaceStripAnchor::Top), "top strip should be horizontal");
     ok &= expect(!isWorkspaceStripHorizontal(WorkspaceStripAnchor::Left), "left strip should be vertical");
     ok &= expect(!isWorkspaceStripHorizontal(WorkspaceStripAnchor::Right), "right strip should be vertical");
@@ -181,6 +213,31 @@ int main() {
     ok &= expectRect(sideSlots[1], {12, 129, 48, 90}, "side strip second slot should advance along y");
     ok &= expectRect(sideSlots[2], {12, 234, 48, 90}, "side strip third slot should end at bottom edge");
     ok &= expect(layoutWorkspaceStripSlots({0, 0, 120, 20}, WorkspaceStripAnchor::Top, 0, 10).empty(), "zero-slot strip layout should be empty");
+
+    const auto niriTopSlots = layoutNiriWorkspaceStripSlots({0, 0, 500, 80}, WorkspaceStripAnchor::Top, 3, std::optional<std::size_t>{1}, 10, 8, 2.0);
+    ok &= expect(niriTopSlots.size() == 3, "niri top strip layout should return one rect per slot");
+    ok &= expectRect(niriTopSlots[0], {48, 8, 128, 64}, "niri top strip should keep active slot centered");
+    ok &= expectRect(niriTopSlots[1], {186, 8, 128, 64}, "niri top strip active slot should be centered in the band");
+    ok &= expectRect(niriTopSlots[2], {324, 8, 128, 64}, "niri top strip should advance by workspace aspect plus gap");
+
+    const auto niriSideSlots = layoutNiriWorkspaceStripSlots({0, 0, 100, 500}, WorkspaceStripAnchor::Left, 3, std::optional<std::size_t>{1}, 10, 8, 2.0);
+    ok &= expect(niriSideSlots.size() == 3, "niri side strip layout should return one rect per slot");
+    ok &= expectRect(niriSideSlots[0], {8, 177, 84, 42}, "niri side strip should use monitor aspect thumbnails");
+    ok &= expectRect(niriSideSlots[1], {8, 229, 84, 42}, "niri side strip active slot should be centered in the band");
+    ok &= expectRect(niriSideSlots[2], {8, 281, 84, 42}, "niri side strip should advance vertically by thumbnail height plus gap");
+
+    const auto niriScaledSideSlots =
+        layoutNiriWorkspaceStripSlots({0, 0, 1000, 1000}, WorkspaceStripAnchor::Left, 3, std::optional<std::size_t>{1}, 50, 0, 16.0 / 9.0, 0.5);
+    ok &= expect(niriScaledSideSlots.size() == 3, "niri scaled strip layout should return one rect per slot");
+    ok &= expectRect(niriScaledSideSlots[0], {250, 28.125, 500, 281.25}, "niri scaled strip should keep monitor ratio at configured strip scale");
+    ok &= expectRect(niriScaledSideSlots[1], {250, 359.375, 500, 281.25}, "niri scaled strip should center active workspace without fitting all slots");
+
+    const auto niriOverflowSlots =
+        layoutNiriWorkspaceStripSlots({0, 0, 500, 80}, WorkspaceStripAnchor::Top, 6, std::optional<std::size_t>{3}, 10, 8, 2.0);
+    ok &= expect(niriOverflowSlots.size() == 6, "niri overflowing strip layout should keep all slots");
+    ok &= expectRect(niriOverflowSlots[0], {-228, 8, 128, 64}, "niri overflowing strip should allow slots before the screen");
+    ok &= expectRect(niriOverflowSlots[3], {186, 8, 128, 64}, "niri overflowing strip should keep active slot centered");
+    ok &= expectRect(niriOverflowSlots[5], {462, 8, 128, 64}, "niri overflowing strip should allow slots after the screen");
 
     ok &= expect(hitTestWorkspaceStrip(topSlots, 120, 10) == std::optional<std::size_t>{1}, "strip hit-test should find the matching slot");
     ok &= expect(!hitTestWorkspaceStrip(topSlots, 100, 10).has_value(), "strip hit-test should miss strip gaps");

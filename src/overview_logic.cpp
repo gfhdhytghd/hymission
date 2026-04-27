@@ -237,6 +237,49 @@ WorkspaceStripEmptyMode parseWorkspaceStripEmptyMode(std::string_view value) {
     return WorkspaceStripEmptyMode::Existing;
 }
 
+std::optional<HymissionScrollMode> parseHymissionScrollMode(std::string_view value) {
+    value = trimAsciiWhitespace(value);
+
+    if (equalsAsciiInsensitive(value, "layout"))
+        return HymissionScrollMode::Layout;
+
+    return std::nullopt;
+}
+
+ScrollingLayoutDirection parseScrollingLayoutDirection(std::string_view value) {
+    value = trimAsciiWhitespace(value);
+
+    if (equalsAsciiInsensitive(value, "left"))
+        return ScrollingLayoutDirection::Left;
+    if (equalsAsciiInsensitive(value, "down"))
+        return ScrollingLayoutDirection::Down;
+    if (equalsAsciiInsensitive(value, "up"))
+        return ScrollingLayoutDirection::Up;
+
+    return ScrollingLayoutDirection::Right;
+}
+
+GestureAxis axisForScrollingLayoutDirection(ScrollingLayoutDirection direction) {
+    switch (direction) {
+        case ScrollingLayoutDirection::Down:
+        case ScrollingLayoutDirection::Up:
+            return GestureAxis::Vertical;
+        case ScrollingLayoutDirection::Right:
+        case ScrollingLayoutDirection::Left:
+        default:
+            return GestureAxis::Horizontal;
+    }
+}
+
+bool scrollingLayoutGestureAxisMatches(ScrollingLayoutDirection direction, GestureAxis axis) {
+    return axisForScrollingLayoutDirection(direction) == axis;
+}
+
+double scrollingLayoutMoveAmount(ScrollingLayoutDirection direction, double primaryDelta, double sensitivity) {
+    const double sign = (direction == ScrollingLayoutDirection::Left || direction == ScrollingLayoutDirection::Up) ? -1.0 : 1.0;
+    return primaryDelta * sign * std::max(0.0, sensitivity);
+}
+
 bool isWorkspaceStripHorizontal(WorkspaceStripAnchor anchor) {
     return anchor == WorkspaceStripAnchor::Top;
 }
@@ -336,6 +379,56 @@ std::vector<Rect> layoutWorkspaceStripSlots(const Rect& stripBand, WorkspaceStri
         }
 
         cursor += slotLength + slotGap;
+    }
+
+    return slots;
+}
+
+std::vector<Rect> layoutNiriWorkspaceStripSlots(const Rect& stripBand, WorkspaceStripAnchor anchor, std::size_t slotCount, std::optional<std::size_t> activeIndex,
+                                                double gap, double padding, double workspaceAspectRatio, double workspaceScale) {
+    std::vector<Rect> slots;
+    slots.reserve(slotCount);
+
+    const Rect band = clampRectSize(stripBand);
+    if (slotCount == 0 || band.width <= 0.0 || band.height <= 0.0)
+        return slots;
+
+    const bool   horizontal = isWorkspaceStripHorizontal(anchor);
+    const double mainStart = horizontal ? band.x : band.y;
+    const double mainLength = horizontal ? band.width : band.height;
+    const double crossStart = horizontal ? band.y : band.x;
+    const double crossLength = horizontal ? band.height : band.width;
+    const double safePadding = std::clamp(padding, 0.0, std::min(mainLength, crossLength) * 0.45);
+    const double safeGap = std::max(0.0, gap);
+    const double availableMain = std::max(1.0, mainLength - safePadding * 2.0);
+    const double availableCross = std::max(1.0, crossLength - safePadding * 2.0);
+    const double aspect = std::max(0.05, workspaceAspectRatio);
+    const double scale = std::clamp(workspaceScale, 0.05, 1.0);
+
+    const double slotCross = availableCross * scale;
+    const double slotMain = horizontal ? slotCross * aspect : slotCross / aspect;
+    const double effectiveGap = slotCount > 1 ? safeGap : 0.0;
+    const double contentMain = slotMain * static_cast<double>(slotCount) + effectiveGap * static_cast<double>(slotCount - 1);
+
+    const double minStart = mainStart + safePadding;
+    const double maxStart = mainStart + mainLength - safePadding - contentMain;
+    double       cursor = minStart + std::max(0.0, (availableMain - contentMain) * 0.5);
+    if (activeIndex && *activeIndex < slotCount) {
+        const double activeCenterInContent = static_cast<double>(*activeIndex) * (slotMain + effectiveGap) + slotMain * 0.5;
+        cursor = mainStart + mainLength * 0.5 - activeCenterInContent;
+        if (contentMain <= availableMain)
+            cursor = std::clamp(cursor, minStart, std::max(minStart, maxStart));
+    } else if (contentMain > availableMain) {
+        cursor = mainStart + (mainLength - contentMain) * 0.5;
+    }
+
+    const double cross = crossStart + (crossLength - slotCross) * 0.5;
+    for (std::size_t index = 0; index < slotCount; ++index) {
+        if (horizontal)
+            slots.push_back({cursor, cross, slotMain, slotCross});
+        else
+            slots.push_back({cross, cursor, slotCross, slotMain});
+        cursor += slotMain + effectiveGap;
     }
 
     return slots;

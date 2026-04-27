@@ -145,14 +145,18 @@ switch_release_key = Super_L
 gesture = 4, vertical, dispatcher, hymission:toggle,forceall
 gesture = 4, vertical, dispatcher, hymission:toggle,recommand
 gesture = 4, vertical, dispatcher, hymission:open,onlycurrentworkspace
+gesture = 3, horizontal, dispatcher, hymission:scroll,layout
+gesture = 3, vertical, workspace
 ```
 
 Gesture notes:
 
-- `vertical` and `horizontal` are supported
+- `vertical` and `horizontal` are supported for plugin-managed overview gestures; `hymission:scroll,layout` also supports `swipe`
 - unofficial shorthand such as `gesture = ..., hymission:toggle,...` is not supported
 - default gesture semantics are state-aware: hidden overview opens in the configured direction, and visible `hymission:toggle,*` overview can close in either swipe direction
 - `recommand` is gesture-only and is only valid with `hymission:toggle`
+- `hymission:scroll,layout` continuously drives Hyprland's scrolling layout when the gesture axis matches `scrolling:direction`
+- workspace swipes should use Hyprland's standard `gesture = ..., workspace`; Hymission already intercepts that path while overview is visible
 - in `recommand` mode, one side opens `forceall` and the other side opens `onlycurrentworkspace`
 - switching from one visible `recommand` side to the other only works in the side-changing direction; it must pass through hidden state and then cross a small transfer gap before the opposite side starts opening
 - swiping the other visible `recommand` direction only exits overview back to hidden and does not continue into the opposite side
@@ -179,6 +183,7 @@ plugin {
         small_window_boost = 1.35
         max_preview_scale = 0.95
         min_slot_scale = 0.10
+        natural_scale_flex = 0.22
         layout_engine = grid
         layout_scale_weight = 1.0
         layout_space_weight = 0.10
@@ -186,6 +191,9 @@ plugin {
         expand_selected_window = 1
         overview_focus_follows_mouse = 1
         multi_workspace_sort_recent_first = 1
+        niri_mode = 0
+        niri_scroll_pixels_per_delta = 1.0
+        niri_workspace_scale = 1.0
         toggle_switch_mode = 1
         switch_toggle_auto_next = 1
         switch_release_key = Super_L
@@ -231,6 +239,7 @@ plugin {
 | `small_window_boost` | float | `1.35` | Weight boost applied to smaller windows during layout. |
 | `max_preview_scale` | float | `0.95` | Maximum preview scale. |
 | `min_slot_scale` | float | `0.10` | Minimum allowed slot scale. |
+| `natural_scale_flex` | float | `0.22` | Natural-engine-only free scale range. Values are clamped to `0.0` - `0.25`; recent-first multi-workspace ordering keeps earlier windows visibly larger, while natural layouts may use larger per-window scale differences to fill sparse space. |
 | `layout_engine` | string | `grid` | Geometry solver. `grid` keeps the existing row-search layout; `natural`, `apple`, `expose`, and `mission-control` enable the Apple-like natural solver that tries to preserve original window positions while removing overlap. The natural engine attempts every window count and only uses row-search as an emergency fallback if solving fails. |
 | `layout_scale_weight` | float | `1.0` | Weight of preview scale in the layout scoring pass. |
 | `layout_space_weight` | float | `0.10` | Weight of space utilization in the layout scoring pass. |
@@ -243,6 +252,9 @@ plugin {
 | `expand_selected_window` | bool | `1` | Enlarge the selected preview and push nearby previews away without reshuffling the whole overview grid. Uses the overview-selected target, which usually follows hover when `overview_focus_follows_mouse = 1`. |
 | `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. Hover retargeting is frame-coalesced for smoother animation, and multi-workspace overview stays visually anchored when real focus crosses workspaces. |
 | `multi_workspace_sort_recent_first` | bool | `1` | Multi-workspace overview only. When enabled, `forceall` and any default overview scope that spans multiple workspaces place more recently used windows earlier in the grid, filling left-to-right then top-to-bottom. |
+| `niri_mode` | bool | `0` | Enable niri-like overflow behavior for the edge workspace strip. This is opt-in and does not turn the strip into the main overview content. |
+| `niri_scroll_pixels_per_delta` | float | `1.0` | Multiplier for `hymission:scroll,layout` movement outside overview. A value of `1.0` maps roughly one `gestures:workspace_swipe_distance` of finger travel to one viewport of scrolling-layout movement. |
+| `niri_workspace_scale` | float | `1.0` | Niri mode strip thumbnail scale inside the configured strip thickness. Values are clamped to `0.05` - `1.0`; `1.0` uses the full strip cross-axis size. |
 | `toggle_switch_mode` | bool | `1` | Turn `hymission:toggle` into a toggle-only switch session. Intended for modifier-backed bindings such as `ALT+TAB` / `SUPER+TAB`. |
 | `switch_toggle_auto_next` | bool | `1` | Toggle switch mode only. When enabled, the first switch-mode `toggle` both opens overview and advances to the next target. |
 | `switch_release_key` | string | `Super_L` | Toggle switch mode only. Release of this key commits the current selection and closes the switch session. Supports keysym names such as `Alt_L` / `Super_L` and `code:N`, and release tracking is resilient to missing per-window release events. |
@@ -277,6 +289,7 @@ Behavior notes:
 
 The workspace strip is shown when the current overview scope displays only the active workspace.
 By default it only shows real workspaces plus the trailing new-workspace card. In `continuous` mode, synthetic empty workspaces progressively expose numbered gaps one slot at a time and render the monitor background/wallpaper when available; the trailing new-workspace card keeps its dedicated `+` styling.
+With `niri_mode = 1`, the strip stays in the configured edge band and the main overview remains the scaled window overview. The strip uses monitor-aspect workspace thumbnails, centers the active workspace on open, and allows the thumbnail list to overflow instead of shrinking every workspace into view. `hymission:scroll,layout` is only for scrolling Hyprland's `scrolling` layout outside overview; workspace switching continues to use Hyprland's standard `gesture = ..., workspace`.
 
 ### Optional Waybar Single-Entry Setup
 

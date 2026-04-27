@@ -68,6 +68,10 @@ class OverviewController {
     [[nodiscard]] bool            beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction);
     void                          updateOverviewWorkspaceSwipeGesture(double delta);
     void                          endOverviewWorkspaceSwipeGesture(bool cancelled);
+    [[nodiscard]] bool            beginScrollGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction,
+                                                     const IPointer::SSwipeUpdateEvent& event, float deltaScale);
+    void                          updateScrollGesture(const IPointer::SSwipeUpdateEvent& event);
+    void                          endScrollGesture(bool cancelled);
 
     void renderStage(eRenderStage stage);
     void handleMouseMove();
@@ -101,6 +105,9 @@ class OverviewController {
     void                       workspaceSwipeBeginHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e);
     void                       workspaceSwipeUpdateHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e);
     void                       workspaceSwipeEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e);
+    void                       dispatcherGestureBeginHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e);
+    void                       dispatcherGestureUpdateHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e);
+    void                       dispatcherGestureEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e);
   private:
     friend class OverviewOverlayPassElement;
 
@@ -151,6 +158,7 @@ class OverviewController {
         float        previewAlpha = 1.0F;
         bool         isFloating = false;
         bool         isPinned = false;
+        bool         isNiriFloatingOverlay = false;
     };
 
     struct WorkspaceStripEntry {
@@ -261,6 +269,22 @@ class OverviewController {
         float        deltaScale = 1.0F;
     };
 
+    enum class ScrollGestureRoute {
+        None,
+        Layout,
+    };
+
+    struct ScrollGestureSession {
+        bool                      active = false;
+        HymissionScrollMode       mode = HymissionScrollMode::Layout;
+        ScrollGestureRoute        route = ScrollGestureRoute::None;
+        eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_HORIZONTAL;
+        float                     deltaScale = 1.0F;
+        std::size_t               debugSamples = 0;
+        bool                      skipNextUpdate = false;
+        bool                      restoreScrollingFollowFocus = false;
+    };
+
     struct WorkspaceNameBackup {
         PHLWORKSPACE workspace;
         std::string  name;
@@ -345,6 +369,9 @@ class OverviewController {
     using WorkspaceSwipeBeginFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureBegin&);
     using WorkspaceSwipeUpdateFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureUpdate&);
     using WorkspaceSwipeEndFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureEnd&);
+    using DispatcherGestureBeginFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureBegin&);
+    using DispatcherGestureUpdateFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureUpdate&);
+    using DispatcherGestureEndFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureEnd&);
     using HandleGestureFn = std::optional<std::string> (*)(void*, const std::string&, const std::string&);
     [[nodiscard]] LayoutConfig loadLayoutConfig() const;
     [[nodiscard]] CollectionPolicy loadCollectionPolicy(ScopeOverride requestedScope) const;
@@ -366,10 +393,21 @@ class OverviewController {
     [[nodiscard]] double       hideBarAnimationAlphaEnd() const;
     [[nodiscard]] bool         barSingleMissionControlEnabled() const;
     [[nodiscard]] bool         showFocusIndicatorEnabled() const;
+    [[nodiscard]] bool         niriModeEnabled() const;
+    [[nodiscard]] double       niriScrollPixelsPerDelta() const;
+    [[nodiscard]] double       niriWorkspaceScale() const;
     [[nodiscard]] bool         debugLogsEnabled() const;
     [[nodiscard]] bool         debugSurfaceLogsEnabled() const;
+    [[nodiscard]] PHLWORKSPACE activeLayoutWorkspace() const;
     [[nodiscard]] bool         isScrollingWorkspace(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] bool         hasScrollingWorkspace() const;
+    [[nodiscard]] GestureAxis  gestureAxisForDirection(eTrackpadGestureDirection direction) const;
+    [[nodiscard]] ScrollingLayoutDirection scrollingLayoutDirection() const;
+    [[nodiscard]] bool         canScrollActiveLayoutWithGesture(eTrackpadGestureDirection direction) const;
+    [[nodiscard]] double       scrollLayoutPixelsPerGestureDelta(ScrollingLayoutDirection direction) const;
+    [[nodiscard]] double       scrollLayoutPrimaryDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) const;
+    [[nodiscard]] bool         scrollActiveLayoutByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale);
+    void                       refreshNiriScrollingOverviewAfterLayoutScroll(const char* source);
     [[nodiscard]] bool         shouldSyncRealFocusDuringOverview() const;
     [[nodiscard]] bool         allowsWorkspaceSwitchInOverview() const;
     [[nodiscard]] bool         shouldBlockWorkspaceSwitchInOverview() const;
@@ -577,6 +615,9 @@ class OverviewController {
     CFunctionHook*            m_workspaceSwipeBeginFunctionHook = nullptr;
     CFunctionHook*            m_workspaceSwipeUpdateFunctionHook = nullptr;
     CFunctionHook*            m_workspaceSwipeEndFunctionHook = nullptr;
+    CFunctionHook*            m_dispatcherGestureBeginFunctionHook = nullptr;
+    CFunctionHook*            m_dispatcherGestureUpdateFunctionHook = nullptr;
+    CFunctionHook*            m_dispatcherGestureEndFunctionHook = nullptr;
     CFunctionHook*            m_handleGestureHook = nullptr;
     SurfaceGetTexBoxFn        m_surfaceTexBoxOriginal = nullptr;
     SurfaceBoundingBoxFn      m_surfaceBoundingBoxOriginal = nullptr;
@@ -597,6 +638,9 @@ class OverviewController {
     WorkspaceSwipeBeginFn     m_workspaceSwipeBeginOriginal = nullptr;
     WorkspaceSwipeUpdateFn    m_workspaceSwipeUpdateOriginal = nullptr;
     WorkspaceSwipeEndFn       m_workspaceSwipeEndOriginal = nullptr;
+    DispatcherGestureBeginFn  m_dispatcherGestureBeginOriginal = nullptr;
+    DispatcherGestureUpdateFn m_dispatcherGestureUpdateOriginal = nullptr;
+    DispatcherGestureEndFn    m_dispatcherGestureEndOriginal = nullptr;
     HandleGestureFn           m_handleGestureOriginal = nullptr;
     bool                      m_hooksActive = false;
     bool                      m_inputFollowMouseOverridden = false;
@@ -604,6 +648,7 @@ class OverviewController {
     bool                      m_restoreInputFollowMouseAfterPostClose = false;
     bool                      m_scrollingFollowFocusOverridden = false;
     long                      m_scrollingFollowFocusBackup = 1;
+    bool                      m_restoreScrollingFollowFocusAfterScrollMouseMove = false;
     bool                      m_animationsEnabledOverridden = false;
     long                      m_animationsEnabledBackup = 1;
     SP<CEventLoopTimer>       m_animationsEnabledRestoreTimer;
@@ -638,6 +683,7 @@ class OverviewController {
     std::vector<GestureRegistration> m_registeredGestures;
     std::vector<WorkspaceNameBackup> m_workspaceNameBackups;
     GestureSession            m_gestureSession;
+    ScrollGestureSession      m_scrollGestureSession;
     WorkspaceSwipeGestureContext m_workspaceSwipeGesture;
     WorkspaceTransition      m_workspaceTransition;
     StripPreviewContext      m_stripPreviewContext;

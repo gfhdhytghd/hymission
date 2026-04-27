@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cctype>
 #include <fstream>
+#include <limits>
 #include <linux/input-event-codes.h>
 #include <numeric>
 #include <optional>
@@ -18,6 +19,7 @@
 
 #define private public
 #include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
+#include <hyprland/src/managers/input/trackpad/gestures/DispatcherGesture.hpp>
 #undef private
 
 #include <hyprland/src/Compositor.hpp>
@@ -297,6 +299,36 @@ int signedUnit(double value) {
     return 0;
 }
 
+const char* trackpadDirectionName(eTrackpadGestureDirection direction) {
+    switch (direction) {
+        case TRACKPAD_GESTURE_DIR_HORIZONTAL: return "horizontal";
+        case TRACKPAD_GESTURE_DIR_VERTICAL: return "vertical";
+        case TRACKPAD_GESTURE_DIR_LEFT: return "left";
+        case TRACKPAD_GESTURE_DIR_RIGHT: return "right";
+        case TRACKPAD_GESTURE_DIR_UP: return "up";
+        case TRACKPAD_GESTURE_DIR_DOWN: return "down";
+        case TRACKPAD_GESTURE_DIR_SWIPE: return "swipe";
+        case TRACKPAD_GESTURE_DIR_PINCH: return "pinch";
+        case TRACKPAD_GESTURE_DIR_PINCH_IN: return "pinch_in";
+        case TRACKPAD_GESTURE_DIR_PINCH_OUT: return "pinch_out";
+        default: return "none";
+    }
+}
+
+const char* gestureAxisName(GestureAxis axis) {
+    return axis == GestureAxis::Vertical ? "vertical" : "horizontal";
+}
+
+const char* scrollingDirectionName(ScrollingLayoutDirection direction) {
+    switch (direction) {
+        case ScrollingLayoutDirection::Left: return "left";
+        case ScrollingLayoutDirection::Down: return "down";
+        case ScrollingLayoutDirection::Up: return "up";
+        case ScrollingLayoutDirection::Right:
+        default: return "right";
+    }
+}
+
 bool shouldWrapWorkspaceIds(const WORKSPACEID targetId, const WORKSPACEID currentId) {
     static auto PWORKSPACEWRAPAROUND = CConfigValue<Hyprlang::INT>("animations:workspace_wraparound");
 
@@ -449,6 +481,39 @@ double maxCenteredScaleForPerSideGrowth(const Rect& rect, double maxGrowXPerSide
     const double scaleX = 1.0 + std::max(0.0, maxGrowXPerSide) * 2.0 / rect.width;
     const double scaleY = 1.0 + std::max(0.0, maxGrowYPerSide) * 2.0 / rect.height;
     return std::max(1.0, std::min(scaleX, scaleY));
+}
+
+struct EdgeMotionAffinity {
+    double verticalEdge = 0.0;
+    double horizontalEdge = 0.0;
+    double corner = 0.0;
+};
+
+EdgeMotionAffinity edgeMotionAffinityForRect(const Rect& rect, const Rect& bounds) {
+    if (bounds.width <= 1.0 || bounds.height <= 1.0)
+        return {};
+
+    const double centerX = rect.centerX();
+    const double centerY = rect.centerY();
+    const double leftDistance = std::max(0.0, centerX - bounds.x);
+    const double rightDistance = std::max(0.0, bounds.x + bounds.width - centerX);
+    const double topDistance = std::max(0.0, centerY - bounds.y);
+    const double bottomDistance = std::max(0.0, bounds.y + bounds.height - centerY);
+
+    EdgeMotionAffinity affinity;
+    affinity.verticalEdge = clampUnit(1.0 - std::min(leftDistance, rightDistance) / std::max(1.0, bounds.width * 0.24));
+    affinity.horizontalEdge = clampUnit(1.0 - std::min(topDistance, bottomDistance) / std::max(1.0, bounds.height * 0.24));
+    affinity.corner = affinity.verticalEdge * affinity.horizontalEdge;
+    return affinity;
+}
+
+double edgeAwareMotionDistance2(const Rect& source, const Rect& target, const Rect& bounds) {
+    const EdgeMotionAffinity affinity = edgeMotionAffinityForRect(source, bounds);
+    const double             dx = target.centerX() - source.centerX();
+    const double             dy = target.centerY() - source.centerY();
+    const double             xWeight = 1.0 + affinity.verticalEdge * 7.0 + affinity.corner * 10.0;
+    const double             yWeight = 1.0 + affinity.horizontalEdge * 7.0 + affinity.corner * 10.0;
+    return dx * dx * xWeight + dy * dy * yWeight;
 }
 
 Rect inflateRect(const Rect& rect, double amountX, double amountY) {
@@ -986,11 +1051,18 @@ Rect sceneGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
     return makeRect(position.x, position.y, size.x, size.y);
 }
 
+Rect renderGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
+    Rect rect = sceneGlobalRectForWindow(window, goal);
+    if (window && window->m_isFloating)
+        rect = translateRect(rect, window->m_floatingOffset.x, window->m_floatingOffset.y);
+    return rect;
+}
+
 Rect surfaceRenderGlobalRectForWindow(const PHLWINDOW& window) {
     if (!window)
         return {};
 
-    return sceneGlobalRectForWindow(window);
+    return renderGlobalRectForWindow(window);
 }
 
 Layout::Tiled::CScrollingAlgorithm* scrollingAlgorithmForWorkspace(const PHLWORKSPACE& workspace) {
@@ -1002,6 +1074,71 @@ Layout::Tiled::CScrollingAlgorithm* scrollingAlgorithmForWorkspace(const PHLWORK
         return nullptr;
 
     return dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(algorithm->tiledAlgo().get());
+}
+
+bool isFloatingOverviewWindow(const PHLWINDOW& window) {
+    if (!window)
+        return false;
+
+    if (window->m_isFloating)
+        return true;
+
+    const auto target = window->layoutTarget();
+    return target && target->floating();
+}
+
+Rect centeredSurfaceRectInLayoutBox(const CBox& layoutBox, const Rect& surfaceGlobal) {
+    const double width = surfaceGlobal.width > 1.0 ? surfaceGlobal.width : layoutBox.width;
+    const double height = surfaceGlobal.height > 1.0 ? surfaceGlobal.height : layoutBox.height;
+    return makeRect(layoutBox.x + (layoutBox.width - width) * 0.5, layoutBox.y + (layoutBox.height - height) * 0.5, width, height);
+}
+
+Rect scrollingOverviewSourceGlobalRectForWindow(const PHLWINDOW& window, const Rect& fallbackGlobal) {
+    if (!window)
+        return fallbackGlobal;
+
+    const auto target = window->layoutTarget();
+    if (!target)
+        return fallbackGlobal;
+
+    const CBox targetBox = target->position();
+    if (targetBox.width <= 1.0 || targetBox.height <= 1.0)
+        return fallbackGlobal;
+
+    if (target->floating())
+        return fallbackGlobal;
+
+    CBox layoutBox = targetBox;
+    if (auto* scrolling = scrollingAlgorithmForWorkspace(window->m_workspace); scrolling) {
+        if (const auto targetData = scrolling->dataFor(target); targetData && targetData->layoutBox.width > 1.0 && targetData->layoutBox.height > 1.0)
+            layoutBox = targetData->layoutBox;
+    }
+
+    return centeredSurfaceRectInLayoutBox(layoutBox, fallbackGlobal);
+}
+
+Rect floatingOverviewSourceGlobalRectForWindow(const PHLWINDOW& window, const Rect& fallbackGlobal) {
+    if (!window)
+        return fallbackGlobal;
+
+    if (!isFloatingOverviewWindow(window))
+        return fallbackGlobal;
+
+    // Floating layout positions are not part of the scrolling tape. Anchor the
+    // overview preview from the live compositor rect so a window on the right
+    // side of the workspace remains on the right after the workspace-scale map.
+    return fallbackGlobal;
+}
+
+Rect niriFloatingOverviewBaseGlobalRect(const PHLMONITOR& monitor) {
+    if (!monitor)
+        return {};
+
+    CBox box = monitor->logicalBoxMinusReserved();
+    if (box.width <= 1.0 || box.height <= 1.0)
+        box = CBox{monitor->m_position.x, monitor->m_position.y, monitor->m_size.x, monitor->m_size.y};
+
+    return makeRect(box.x, box.y, box.width, box.height);
 }
 
 std::string vectorToString(const Vector2D& value) {
@@ -1027,6 +1164,17 @@ std::string trimCopy(std::string value) {
     value.erase(value.begin(), std::find_if(value.begin(), value.end(), [&](unsigned char ch) { return !isSpace(ch); }));
     value.erase(std::find_if(value.rbegin(), value.rend(), [&](unsigned char ch) { return !isSpace(ch); }).base(), value.end());
     return value;
+}
+
+std::optional<HymissionScrollMode> dispatcherScrollMode(void* gestureThisptr) {
+    if (!gestureThisptr)
+        return std::nullopt;
+
+    const auto* gesture = static_cast<CDispatcherTrackpadGesture*>(gestureThisptr);
+    if (gesture->m_dispatcher != "hymission:scroll")
+        return std::nullopt;
+
+    return parseHymissionScrollMode(trimCopy(gesture->m_data));
 }
 
 std::vector<std::string> splitCommaTokens(const std::string& value) {
@@ -1169,6 +1317,50 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
     Mode                      m_mode = Mode::Native;
 };
 
+class CHymissionScrollTrackpadGesture final : public ITrackpadGesture {
+  public:
+    CHymissionScrollTrackpadGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction, float)
+        : m_mode(mode), m_direction(direction) {
+    }
+
+    void begin(const STrackpadGestureBegin& e) override {
+        m_tracking = false;
+
+        const auto gestureDirection = e.direction != TRACKPAD_GESTURE_DIR_NONE ? e.direction : m_direction;
+        if (g_controller && e.swipe && g_controller->beginScrollGesture(m_mode, gestureDirection, *e.swipe, e.scale)) {
+            m_tracking = true;
+            return;
+        }
+    }
+
+    void update(const STrackpadGestureUpdate& e) override {
+        if (m_tracking) {
+            if (g_controller && e.swipe)
+                g_controller->updateScrollGesture(*e.swipe);
+            return;
+        }
+
+    }
+
+    void end(const STrackpadGestureEnd& e) override {
+        if (m_tracking) {
+            m_tracking = false;
+            if (g_controller)
+                g_controller->endScrollGesture(e.swipe ? e.swipe->cancelled : true);
+            return;
+        }
+    }
+
+    bool isDirectionSensitive() override {
+        return true;
+    }
+
+  private:
+    HymissionScrollMode      m_mode = HymissionScrollMode::Layout;
+    eTrackpadGestureDirection m_direction = TRACKPAD_GESTURE_DIR_HORIZONTAL;
+    bool                     m_tracking = false;
+};
+
 template <typename T>
 bool containsHandle(const std::vector<T>& values, const T& value) {
     return std::ranges::find(values, value) != values.end();
@@ -1177,6 +1369,16 @@ bool containsHandle(const std::vector<T>& values, const T& value) {
 bool rectApproxEqual(const Rect& lhs, const Rect& rhs, double epsilon) {
     return std::abs(lhs.x - rhs.x) <= epsilon && std::abs(lhs.y - rhs.y) <= epsilon && std::abs(lhs.width - rhs.width) <= epsilon &&
         std::abs(lhs.height - rhs.height) <= epsilon;
+}
+
+bool rectContainsPoint(const Rect& rect, double x, double y) {
+    return x >= rect.x && y >= rect.y && x <= rect.x + rect.width && y <= rect.y + rect.height;
+}
+
+double rectCenterDistanceSquared(const Rect& rect, double x, double y) {
+    const double dx = rect.centerX() - x;
+    const double dy = rect.centerY() - y;
+    return dx * dx + dy * dy;
 }
 
 std::optional<Vector2D> visiblePointForRectOnMonitor(const Rect& windowRect, const PHLMONITOR& monitor) {
@@ -1373,6 +1575,27 @@ void hkWorkspaceSwipeEnd(void* gestureThisptr, const ITrackpadGesture::STrackpad
     g_controller->workspaceSwipeEndHook(gestureThisptr, e);
 }
 
+void hkDispatcherGestureBegin(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e) {
+    if (!g_controller)
+        return;
+
+    g_controller->dispatcherGestureBeginHook(gestureThisptr, e);
+}
+
+void hkDispatcherGestureUpdate(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e) {
+    if (!g_controller)
+        return;
+
+    g_controller->dispatcherGestureUpdateHook(gestureThisptr, e);
+}
+
+void hkDispatcherGestureEnd(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e) {
+    if (!g_controller)
+        return;
+
+    g_controller->dispatcherGestureEndHook(gestureThisptr, e);
+}
+
 std::optional<std::string> hkHandleGesture(void*, const std::string& keyword, const std::string& value) {
     if (!g_controller)
         return {};
@@ -1409,6 +1632,12 @@ OverviewController::~OverviewController() {
         m_workspaceSwipeUpdateFunctionHook->unhook();
     if (m_workspaceSwipeEndFunctionHook)
         m_workspaceSwipeEndFunctionHook->unhook();
+    if (m_dispatcherGestureBeginFunctionHook)
+        m_dispatcherGestureBeginFunctionHook->unhook();
+    if (m_dispatcherGestureUpdateFunctionHook)
+        m_dispatcherGestureUpdateFunctionHook->unhook();
+    if (m_dispatcherGestureEndFunctionHook)
+        m_dispatcherGestureEndFunctionHook->unhook();
 
     if (m_surfaceTexBoxHook)
         HyprlandAPI::removeFunctionHook(m_handle, m_surfaceTexBoxHook);
@@ -1446,6 +1675,12 @@ OverviewController::~OverviewController() {
         HyprlandAPI::removeFunctionHook(m_handle, m_workspaceSwipeUpdateFunctionHook);
     if (m_workspaceSwipeEndFunctionHook)
         HyprlandAPI::removeFunctionHook(m_handle, m_workspaceSwipeEndFunctionHook);
+    if (m_dispatcherGestureBeginFunctionHook)
+        HyprlandAPI::removeFunctionHook(m_handle, m_dispatcherGestureBeginFunctionHook);
+    if (m_dispatcherGestureUpdateFunctionHook)
+        HyprlandAPI::removeFunctionHook(m_handle, m_dispatcherGestureUpdateFunctionHook);
+    if (m_dispatcherGestureEndFunctionHook)
+        HyprlandAPI::removeFunctionHook(m_handle, m_dispatcherGestureEndFunctionHook);
     if (m_handleGestureHook)
         HyprlandAPI::removeFunctionHook(m_handle, m_handleGestureHook);
 
@@ -1799,6 +2034,13 @@ void OverviewController::renderStage(eRenderStage stage) {
 }
 
 void OverviewController::handleMouseMove() {
+    if (m_restoreScrollingFollowFocusAfterScrollMouseMove && !m_scrollGestureSession.active) {
+        if (debugLogsEnabled())
+            debugLog("[hymission] restore scrolling:follow_focus after scroll mouse move");
+        m_restoreScrollingFollowFocusAfterScrollMouseMove = false;
+        setScrollingFollowFocusOverride(false);
+    }
+
     if (m_postCloseForcedFocusLatched && !isVisible()) {
         if (m_ignorePostCloseMouseMoveCount > 0) {
             --m_ignorePostCloseMouseMoveCount;
@@ -2251,6 +2493,16 @@ bool OverviewController::shouldRenderWindowHook(const PHLWINDOW& window, const P
         return true;
     }
 
+    if (isVisible() && niriModeEnabled() && window && monitor && ownsMonitor(monitor) && !hasManagedWindow(window) && window->onSpecialWorkspace() &&
+        isFloatingOverviewWindow(window)) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] hide niri special floating live window " << debugWindowLabel(window) << " monitor=" << monitor->m_name;
+            debugLog(out.str());
+        }
+        return false;
+    }
+
     return m_shouldRenderWindowOriginal(g_pHyprRenderer.get(), window, monitor);
 }
 
@@ -2421,6 +2673,53 @@ void OverviewController::workspaceSwipeEndHook(void* gestureThisptr, const ITrac
         return;
 
     m_workspaceSwipeEndOriginal(gestureThisptr, e);
+}
+
+void OverviewController::dispatcherGestureBeginHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e) {
+    const auto scrollMode = dispatcherScrollMode(gestureThisptr);
+    if (!scrollMode) {
+        if (m_dispatcherGestureBeginOriginal)
+            m_dispatcherGestureBeginOriginal(gestureThisptr, e);
+        return;
+    }
+
+    if (!e.swipe) {
+        if (debugLogsEnabled())
+            debugLog("[hymission] dispatcher scroll gesture begin ignored: missing swipe event");
+        return;
+    }
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] dispatcher scroll gesture begin dir=" << trackpadDirectionName(e.direction) << " scale=" << e.scale;
+        debugLog(out.str());
+    }
+
+    const auto direction = e.direction != TRACKPAD_GESTURE_DIR_NONE ? e.direction : TRACKPAD_GESTURE_DIR_SWIPE;
+    (void)beginScrollGesture(*scrollMode, direction, *e.swipe, e.scale);
+}
+
+void OverviewController::dispatcherGestureUpdateHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e) {
+    const auto scrollMode = dispatcherScrollMode(gestureThisptr);
+    if (!scrollMode) {
+        if (m_dispatcherGestureUpdateOriginal)
+            m_dispatcherGestureUpdateOriginal(gestureThisptr, e);
+        return;
+    }
+
+    if (e.swipe)
+        updateScrollGesture(*e.swipe);
+}
+
+void OverviewController::dispatcherGestureEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e) {
+    const auto scrollMode = dispatcherScrollMode(gestureThisptr);
+    if (!scrollMode) {
+        if (m_dispatcherGestureEndOriginal)
+            m_dispatcherGestureEndOriginal(gestureThisptr, e);
+        return;
+    }
+
+    endScrollGesture(e.swipe ? e.swipe->cancelled : true);
 }
 
 void OverviewController::surfaceDrawHook(void* surfacePassThisptr, const CRegion& damage) {
@@ -2603,6 +2902,7 @@ LayoutConfig OverviewController::loadLayoutConfig() const {
         .layoutSpaceWeight = getConfigFloat(m_handle, "plugin:hymission:layout_space_weight", 0.10),
         .layoutScaleWeight = getConfigFloat(m_handle, "plugin:hymission:layout_scale_weight", 1.0),
         .minSlotScale = getConfigFloat(m_handle, "plugin:hymission:min_slot_scale", 0.10),
+        .naturalScaleFlex = getConfigFloat(m_handle, "plugin:hymission:natural_scale_flex", 0.22),
     };
 }
 
@@ -2715,12 +3015,37 @@ bool OverviewController::showFocusIndicatorEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:show_focus_indicator", 0) != 0;
 }
 
+bool OverviewController::niriModeEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:niri_mode", 0) != 0;
+}
+
+double OverviewController::niriScrollPixelsPerDelta() const {
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_scroll_pixels_per_delta", 1.0), 0.0, 20.0);
+}
+
+double OverviewController::niriWorkspaceScale() const {
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_workspace_scale", 1.0), 0.05, 1.0);
+}
+
 bool OverviewController::debugLogsEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:debug_logs", 0) != 0;
 }
 
 bool OverviewController::debugSurfaceLogsEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:debug_surface_logs", 0) != 0;
+}
+
+PHLWORKSPACE OverviewController::activeLayoutWorkspace() const {
+    PHLMONITOR monitor = Desktop::focusState()->monitor();
+    if (!monitor)
+        monitor = g_pCompositor->getMonitorFromCursor();
+    if (!monitor)
+        return {};
+
+    if (monitor->m_activeSpecialWorkspace)
+        return monitor->m_activeSpecialWorkspace;
+
+    return monitor->m_activeWorkspace;
 }
 
 bool workspaceRowsEnabled(HANDLE handle) {
@@ -2740,6 +3065,189 @@ bool OverviewController::isScrollingWorkspace(const PHLWORKSPACE& workspace) con
 
 bool OverviewController::hasScrollingWorkspace() const {
     return std::ranges::any_of(m_state.managedWorkspaces, [this](const PHLWORKSPACE& workspace) { return isScrollingWorkspace(workspace); });
+}
+
+GestureAxis OverviewController::gestureAxisForDirection(eTrackpadGestureDirection direction) const {
+    switch (direction) {
+        case TRACKPAD_GESTURE_DIR_UP:
+        case TRACKPAD_GESTURE_DIR_DOWN:
+        case TRACKPAD_GESTURE_DIR_VERTICAL:
+            return GestureAxis::Vertical;
+        case TRACKPAD_GESTURE_DIR_LEFT:
+        case TRACKPAD_GESTURE_DIR_RIGHT:
+        case TRACKPAD_GESTURE_DIR_HORIZONTAL:
+        case TRACKPAD_GESTURE_DIR_SWIPE:
+        default:
+            return GestureAxis::Horizontal;
+    }
+}
+
+ScrollingLayoutDirection OverviewController::scrollingLayoutDirection() const {
+    std::string direction = getConfigString(m_handle, "scrolling:direction", "right");
+
+    if (const auto workspace = activeLayoutWorkspace(); workspace) {
+        const auto workspaceRule = g_pConfigManager->getWorkspaceRuleFor(workspace);
+        if (workspaceRule.layoutopts.contains("direction") && !workspaceRule.layoutopts.at("direction").empty())
+            direction = workspaceRule.layoutopts.at("direction");
+    }
+
+    return parseScrollingLayoutDirection(direction);
+}
+
+bool OverviewController::canScrollActiveLayoutWithGesture(eTrackpadGestureDirection direction) const {
+    return scrollingLayoutGestureAxisMatches(scrollingLayoutDirection(), gestureAxisForDirection(direction));
+}
+
+double OverviewController::scrollLayoutPixelsPerGestureDelta(ScrollingLayoutDirection direction) const {
+    const double swipeDistance = gestureSwipeDistance();
+    if (swipeDistance <= 0.0)
+        return std::max(0.0, niriScrollPixelsPerDelta());
+
+    double viewportLength = swipeDistance;
+    if (const auto monitor = Desktop::focusState()->monitor(); monitor)
+        viewportLength = axisForScrollingLayoutDirection(direction) == GestureAxis::Vertical ? static_cast<double>(monitor->m_size.y) :
+                                                                                               static_cast<double>(monitor->m_size.x);
+
+    return std::max(0.0, niriScrollPixelsPerDelta()) * std::max(1.0, viewportLength) / swipeDistance;
+}
+
+double OverviewController::scrollLayoutPrimaryDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) const {
+    bool vertical = false;
+    switch (direction) {
+        case TRACKPAD_GESTURE_DIR_UP:
+        case TRACKPAD_GESTURE_DIR_DOWN:
+        case TRACKPAD_GESTURE_DIR_VERTICAL:
+            vertical = true;
+            break;
+        case TRACKPAD_GESTURE_DIR_SWIPE:
+            vertical = std::abs(event.delta.y) > std::abs(event.delta.x);
+            break;
+        case TRACKPAD_GESTURE_DIR_LEFT:
+        case TRACKPAD_GESTURE_DIR_RIGHT:
+        case TRACKPAD_GESTURE_DIR_HORIZONTAL:
+        default:
+            vertical = false;
+            break;
+    }
+
+    return static_cast<double>(vertical ? event.delta.y : event.delta.x) * static_cast<double>(deltaScale);
+}
+
+bool OverviewController::scrollActiveLayoutByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) {
+    if (!canScrollActiveLayoutWithGesture(direction)) {
+        if (debugLogsEnabled()) {
+            const auto layoutDirection = scrollingLayoutDirection();
+            std::ostringstream out;
+            out << "[hymission] niri layout scroll skipped: axis mismatch gestureDir=" << trackpadDirectionName(direction)
+                << " gestureAxis=" << gestureAxisName(gestureAxisForDirection(direction)) << " layoutDir=" << scrollingDirectionName(layoutDirection)
+                << " layoutAxis=" << gestureAxisName(axisForScrollingLayoutDirection(layoutDirection));
+            debugLog(out.str());
+        }
+        return false;
+    }
+
+    const auto workspace = activeLayoutWorkspace();
+    auto* const scrolling = scrollingAlgorithmForWorkspace(workspace);
+    if (!scrolling || !scrolling->m_scrollingData || !scrolling->m_scrollingData->controller) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] niri layout scroll skipped: scrolling algorithm unavailable workspace="
+                << (workspace ? workspace->m_name : std::string{"<none>"});
+            debugLog(out.str());
+        }
+        return false;
+    }
+
+    const auto scrollingDirection = scrollingLayoutDirection();
+    const double primaryDelta = scrollLayoutPrimaryDelta(event, direction, deltaScale);
+    const double amount = scrollingLayoutMoveAmount(scrollingDirection, primaryDelta, scrollLayoutPixelsPerGestureDelta(scrollingDirection));
+    const bool traceMove = debugLogsEnabled() && m_scrollGestureSession.active && m_scrollGestureSession.debugSamples < 16;
+    if (traceMove)
+        ++m_scrollGestureSession.debugSamples;
+
+    if (std::abs(amount) < 0.001) {
+        if (traceMove) {
+            std::ostringstream out;
+            out << "[hymission] niri layout scroll delta too small dir=" << trackpadDirectionName(direction) << " delta=" << vectorToString(event.delta)
+                << " primary=" << primaryDelta << " amount=" << amount;
+            debugLog(out.str());
+        }
+        return true;
+    }
+
+    auto& data = scrolling->m_scrollingData;
+    auto* const controller = data->controller.get();
+    const CBox usable = scrolling->usableArea();
+    const bool fullscreenOnOne = getConfigInt(m_handle, "scrolling:fullscreen_on_one_column", 1) != 0;
+    const double viewportLength =
+        axisForScrollingLayoutDirection(scrollingDirection) == GestureAxis::Vertical ? static_cast<double>(usable.h) : static_cast<double>(usable.w);
+    const double maxExtent = controller->calculateMaxExtent(usable, fullscreenOnOne);
+    const double maxOffset = std::max(0.0, maxExtent - std::max(1.0, viewportLength));
+    const double offsetBefore = controller->getOffset();
+    const double requestedOffset = offsetBefore - amount;
+    const double offsetAfter = std::clamp(requestedOffset, 0.0, maxOffset);
+
+    if (std::abs(offsetAfter - offsetBefore) >= 0.001) {
+        controller->setOffset(offsetAfter);
+        data->recalculate(true);
+        if (g_pAnimationManager)
+            g_pAnimationManager->frameTick();
+    }
+
+    if (traceMove) {
+        std::ostringstream out;
+        out << "[hymission] niri layout direct scroll dir=" << trackpadDirectionName(direction)
+            << " layoutDir=" << scrollingDirectionName(scrollingDirection) << " delta=" << vectorToString(event.delta) << " primary=" << primaryDelta
+            << " amount=" << amount << " offsetBefore=" << offsetBefore << " requested=" << requestedOffset << " offsetAfter=" << offsetAfter
+            << " maxOffset=" << maxOffset << " maxExtent=" << maxExtent << " viewport=" << viewportLength
+            << " result=" << (std::abs(offsetAfter - offsetBefore) >= 0.001 ? "moved" : "clamped");
+        debugLog(out.str());
+    }
+
+    return true;
+}
+
+void OverviewController::refreshNiriScrollingOverviewAfterLayoutScroll(const char* source) {
+    if (!isVisible() || m_state.phase != Phase::Active || !niriModeEnabled() || !m_state.ownerMonitor || !isScrollingWorkspace(activeLayoutWorkspace()))
+        return;
+
+    State next = buildState(m_state.ownerMonitor, m_state.collectionPolicy.requestedScope, {}, false, m_state.suppressWorkspaceStrip, m_state.focusDuringOverview);
+    if (next.windows.empty())
+        return;
+
+    std::size_t updated = 0;
+    m_state.slots.clear();
+    for (auto& managed : m_state.windows) {
+        auto it = std::find_if(next.windows.begin(), next.windows.end(), [&](const ManagedWindow& candidate) { return candidate.window == managed.window; });
+        if (it == next.windows.end()) {
+            m_state.slots.push_back(managed.slot);
+            continue;
+        }
+
+        managed.naturalGlobal = it->naturalGlobal;
+        managed.slot = it->slot;
+        managed.targetGlobal = it->targetGlobal;
+        managed.relayoutFromGlobal = managed.targetGlobal;
+        managed.isNiriFloatingOverlay = it->isNiriFloatingOverlay;
+        m_state.slots.push_back(managed.slot);
+        ++updated;
+    }
+
+    if (updated == 0)
+        return;
+
+    m_state.relayoutActive = false;
+    m_state.relayoutProgress = 1.0;
+    m_state.relayoutStart = {};
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] niri scrolling overview refresh source=" << (source ? source : "?") << " updated=" << updated;
+        debugLog(out.str());
+    }
+
+    updateHoveredFromPointer(false, false, false, false, source ? source : "niri-scroll");
+    damageOwnedMonitors();
 }
 
 double OverviewController::gestureSwipeDistance() const {
@@ -2799,12 +3307,13 @@ WorkspaceStripEmptyMode OverviewController::workspaceStripEmptyMode() const {
 }
 
 double OverviewController::workspaceStripThickness(const PHLMONITOR& monitor) const {
-    const double raw = std::max(64.0, static_cast<double>(getConfigInt(m_handle, "plugin:hymission:workspace_strip_thickness", 160)));
+    double raw = std::max(64.0, static_cast<double>(getConfigInt(m_handle, "plugin:hymission:workspace_strip_thickness", 160)));
     if (!monitor)
         return raw;
 
     const bool horizontal = workspaceStripAnchor() == "top";
-    const double limit = (horizontal ? static_cast<double>(monitor->m_size.y) : static_cast<double>(monitor->m_size.x)) * 0.35;
+    const double crossLength = horizontal ? static_cast<double>(monitor->m_size.y) : static_cast<double>(monitor->m_size.x);
+    const double limit = crossLength * 0.35;
     return std::clamp(raw, 64.0, std::max(64.0, limit));
 }
 
@@ -3033,7 +3542,9 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
     }
 
     const auto direction = g_pTrackpadGestures->dirForString(tokens[1]);
-    if (direction != TRACKPAD_GESTURE_DIR_VERTICAL && direction != TRACKPAD_GESTURE_DIR_HORIZONTAL)
+    const bool axisDirection = direction == TRACKPAD_GESTURE_DIR_VERTICAL || direction == TRACKPAD_GESTURE_DIR_HORIZONTAL;
+    const bool scrollDirection = axisDirection || direction == TRACKPAD_GESTURE_DIR_SWIPE;
+    if (!scrollDirection)
         return m_handleGestureOriginal(g_pConfigManager.get(), keyword, value);
 
     uint32_t    modMask = 0;
@@ -3062,7 +3573,7 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
     if (actionIndex >= tokens.size())
         return m_handleGestureOriginal(g_pConfigManager.get(), keyword, value);
 
-    if (tokens[actionIndex] == "workspace" && actionIndex + 1 == tokens.size()) {
+    if (axisDirection && tokens[actionIndex] == "workspace" && actionIndex + 1 == tokens.size()) {
         const bool disableInhibit = flags.contains('p');
         g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
         const auto addResult =
@@ -3097,6 +3608,42 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
 
     const std::string dispatcher = tokens[actionIndex + 1];
     const std::string dispatcherArgs = joinTokens(tokens, actionIndex + 2);
+    const auto        trimmedDispatcherArgs = trimCopy(dispatcherArgs);
+
+    if (dispatcher == "hymission:scroll") {
+        const auto scrollMode = parseHymissionScrollMode(trimmedDispatcherArgs);
+        if (!scrollMode)
+            return "hymission:scroll only supports layout; use gesture = ..., workspace for workspace swipes";
+
+        const bool disableInhibit = flags.contains('p');
+        g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
+        const auto addResult =
+            g_pTrackpadGestures->addGesture(makeUnique<CHymissionScrollTrackpadGesture>(*scrollMode, direction, deltaScale), fingerCount, direction, modMask, deltaScale,
+                                            disableInhibit);
+        if (!addResult.has_value())
+            return addResult.error();
+
+        rememberRegisteredTrackpadGesture({
+            .fingerCount = fingerCount,
+            .direction = direction,
+            .modMask = modMask,
+            .deltaScale = deltaScale,
+            .disableInhibit = disableInhibit,
+        });
+
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] register niri scroll gesture fingers=" << fingerCount << " dir="
+                << (direction == TRACKPAD_GESTURE_DIR_SWIPE ? "swipe" : direction == TRACKPAD_GESTURE_DIR_HORIZONTAL ? "horizontal" : "vertical")
+                << " mode=" << trimmedDispatcherArgs << " scale=" << deltaScale << " modMask=" << modMask << " disableInhibit=" << (disableInhibit ? 1 : 0);
+            debugLog(out.str());
+        }
+
+        return {};
+    }
+
+    if (!axisDirection)
+        return m_handleGestureOriginal(g_pConfigManager.get(), keyword, value);
 
     GestureDispatcherKind dispatcherKind;
     if (dispatcher == "hymission:toggle") {
@@ -3109,7 +3656,6 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
 
     bool         recommand = false;
     ScopeOverride requestedScopeValue = ScopeOverride::Default;
-    const auto   trimmedDispatcherArgs = trimCopy(dispatcherArgs);
     if (trimmedDispatcherArgs == "recommand" || trimmedDispatcherArgs == "recommend") {
         if (dispatcherKind != GestureDispatcherKind::Toggle)
             return "gesture recommand is only supported with hymission:toggle";
@@ -3538,6 +4084,137 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
     }
 
     damageOwnedMonitors();
+}
+
+bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction, const IPointer::SSwipeUpdateEvent& event, float deltaScale) {
+    m_scrollGestureSession = {};
+
+    const auto phaseName = [this]() {
+        switch (m_state.phase) {
+            case Phase::Inactive: return "inactive";
+            case Phase::Opening: return "opening";
+            case Phase::Active: return "active";
+            case Phase::ClosingSettle: return "closing_settle";
+            case Phase::Closing: return "closing";
+        }
+        return "unknown";
+    };
+
+    if (debugLogsEnabled()) {
+        const auto layoutDirection = scrollingLayoutDirection();
+        const auto workspace = activeLayoutWorkspace();
+        std::ostringstream out;
+        out << "[hymission] scroll gesture begin request mode=" << (mode == HymissionScrollMode::Layout ? "layout" : "unknown")
+            << " dir=" << trackpadDirectionName(direction) << " gestureAxis=" << gestureAxisName(gestureAxisForDirection(direction))
+            << " layoutDir=" << scrollingDirectionName(layoutDirection) << " layoutAxis=" << gestureAxisName(axisForScrollingLayoutDirection(layoutDirection))
+            << " delta=" << vectorToString(event.delta) << " scale=" << deltaScale << " phase=" << phaseName() << " visible=" << (isVisible() ? 1 : 0)
+            << " overviewGestureActive=" << (m_gestureSession.active ? 1 : 0) << " workspace=" << (workspace ? workspace->m_name : std::string{"<none>"})
+            << " workspaceScrolling=" << (isScrollingWorkspace(workspace) ? 1 : 0);
+        debugLog(out.str());
+    }
+
+    const auto reject = [&](const char* reason) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] scroll gesture reject reason=" << reason;
+            debugLog(out.str());
+        }
+        return false;
+    };
+
+    if (mode != HymissionScrollMode::Layout)
+        return reject("unsupported-mode");
+
+    if (m_gestureSession.active)
+        return reject("overview-gesture-active");
+
+    if (m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
+        return reject("overview-closing");
+
+    const bool overviewVisible = isVisible();
+    if (overviewVisible && (!niriModeEnabled() || m_state.phase != Phase::Active))
+        return reject("overview-visible");
+
+    if (!canScrollActiveLayoutWithGesture(direction))
+        return reject("axis-mismatch");
+
+    if (!isScrollingWorkspace(activeLayoutWorkspace()))
+        return reject("active-workspace-not-scrolling");
+
+    const bool scrollingFollowFocusWasOverridden = m_scrollingFollowFocusOverridden;
+    setScrollingFollowFocusOverride(true);
+
+    m_scrollGestureSession = {
+        .active = true,
+        .mode = mode,
+        .route = ScrollGestureRoute::Layout,
+        .direction = direction,
+        .deltaScale = deltaScale,
+        .skipNextUpdate = true,
+        .restoreScrollingFollowFocus = !scrollingFollowFocusWasOverridden && m_scrollingFollowFocusOverridden,
+    };
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] scroll gesture accepted route=layout dir=" << trackpadDirectionName(direction) << " scale=" << deltaScale
+            << " suppressScrollingFollowFocus=" << (m_scrollGestureSession.restoreScrollingFollowFocus ? 1 : 0);
+        debugLog(out.str());
+    }
+
+    if (!scrollActiveLayoutByGestureDelta(event, direction, deltaScale)) {
+        m_scrollGestureSession = {};
+        return reject("initial-layout-scroll-failed");
+    }
+    refreshNiriScrollingOverviewAfterLayoutScroll("scroll-begin");
+
+    return true;
+}
+
+void OverviewController::updateScrollGesture(const IPointer::SSwipeUpdateEvent& event) {
+    if (!m_scrollGestureSession.active)
+        return;
+
+    if (m_scrollGestureSession.skipNextUpdate) {
+        m_scrollGestureSession.skipNextUpdate = false;
+        return;
+    }
+
+    switch (m_scrollGestureSession.route) {
+        case ScrollGestureRoute::Layout:
+            (void)scrollActiveLayoutByGestureDelta(event, m_scrollGestureSession.direction, m_scrollGestureSession.deltaScale);
+            refreshNiriScrollingOverviewAfterLayoutScroll("scroll-update");
+            break;
+        case ScrollGestureRoute::None:
+        default:
+            break;
+    }
+}
+
+void OverviewController::endScrollGesture(bool cancelled) {
+    if (!m_scrollGestureSession.active)
+        return;
+
+    const bool deferScrollingFollowFocusRestore = m_scrollGestureSession.restoreScrollingFollowFocus;
+    const bool forceInputRefocus = !isVisible() && !cancelled && m_scrollGestureSession.route == ScrollGestureRoute::Layout;
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] scroll gesture end cancelled=" << (cancelled ? 1 : 0) << " samples=" << m_scrollGestureSession.debugSamples
+            << " deferScrollingFollowFocusRestore=" << (deferScrollingFollowFocusRestore ? 1 : 0)
+            << " forceInputRefocus=" << (forceInputRefocus ? 1 : 0);
+        debugLog(out.str());
+    }
+
+    m_scrollGestureSession = {};
+
+    if (forceInputRefocus && g_pInputManager) {
+        if (debugLogsEnabled())
+            debugLog("[hymission] scroll gesture end force input refocus");
+        g_pInputManager->refocus();
+    }
+
+    if (deferScrollingFollowFocusRestore)
+        m_restoreScrollingFollowFocusAfterScrollMouseMove = true;
 }
 
 bool OverviewController::beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction) {
@@ -4076,7 +4753,10 @@ void OverviewController::setInputFollowMouseOverride(bool disable) {
 }
 
 void OverviewController::setScrollingFollowFocusOverride(bool disable) {
-    if (!hasScrollingWorkspace())
+    if (!disable && m_restoreScrollingFollowFocusAfterScrollMouseMove)
+        m_restoreScrollingFollowFocusAfterScrollMouseMove = false;
+
+    if (!hasScrollingWorkspace() && !isScrollingWorkspace(activeLayoutWorkspace()))
         return;
 
     const auto* value = HyprlandAPI::getConfigValue(m_handle, "scrolling:follow_focus");
@@ -4294,6 +4974,9 @@ bool OverviewController::installHooks() {
     (void)hookFunction("begin", "CWorkspaceSwipeGesture::begin(", m_workspaceSwipeBeginFunctionHook, reinterpret_cast<void*>(&hkWorkspaceSwipeBegin));
     (void)hookFunction("update", "CWorkspaceSwipeGesture::update(", m_workspaceSwipeUpdateFunctionHook, reinterpret_cast<void*>(&hkWorkspaceSwipeUpdate));
     (void)hookFunction("end", "CWorkspaceSwipeGesture::end(", m_workspaceSwipeEndFunctionHook, reinterpret_cast<void*>(&hkWorkspaceSwipeEnd));
+    (void)hookFunction("begin", "CDispatcherTrackpadGesture::begin(", m_dispatcherGestureBeginFunctionHook, reinterpret_cast<void*>(&hkDispatcherGestureBegin));
+    (void)hookFunction("update", "CDispatcherTrackpadGesture::update(", m_dispatcherGestureUpdateFunctionHook, reinterpret_cast<void*>(&hkDispatcherGestureUpdate));
+    (void)hookFunction("end", "CDispatcherTrackpadGesture::end(", m_dispatcherGestureEndFunctionHook, reinterpret_cast<void*>(&hkDispatcherGestureEnd));
 
     m_shouldRenderWindowOriginal = nullptr;
     m_surfaceTexBoxOriginal = nullptr;
@@ -4314,12 +4997,18 @@ bool OverviewController::installHooks() {
     m_workspaceSwipeBeginOriginal = nullptr;
     m_workspaceSwipeUpdateOriginal = nullptr;
     m_workspaceSwipeEndOriginal = nullptr;
+    m_dispatcherGestureBeginOriginal = nullptr;
+    m_dispatcherGestureUpdateOriginal = nullptr;
+    m_dispatcherGestureEndOriginal = nullptr;
 
     activateOptionalHook(m_changeWorkspaceHook, m_changeWorkspaceOriginal, "changeworkspace");
     activateOptionalHook(m_focusWorkspaceOnCurrentMonitorHook, m_focusWorkspaceOnCurrentMonitorOriginal, "focusWorkspaceOnCurrentMonitor");
     activateOptionalHook(m_workspaceSwipeBeginFunctionHook, m_workspaceSwipeBeginOriginal, "workspace swipe begin");
     activateOptionalHook(m_workspaceSwipeUpdateFunctionHook, m_workspaceSwipeUpdateOriginal, "workspace swipe update");
     activateOptionalHook(m_workspaceSwipeEndFunctionHook, m_workspaceSwipeEndOriginal, "workspace swipe end");
+    activateOptionalHook(m_dispatcherGestureBeginFunctionHook, m_dispatcherGestureBeginOriginal, "dispatcher gesture begin");
+    activateOptionalHook(m_dispatcherGestureUpdateFunctionHook, m_dispatcherGestureUpdateOriginal, "dispatcher gesture update");
+    activateOptionalHook(m_dispatcherGestureEndFunctionHook, m_dispatcherGestureEndOriginal, "dispatcher gesture end");
     return true;
 }
 
@@ -4896,8 +5585,17 @@ void OverviewController::refreshWorkspaceLayoutSnapshot(const PHLWORKSPACE& work
     }
 
     // Preserve the current scrolling offset when snapshotting overview geometry.
-    // Re-centering a hidden workspace to some remembered focus mutates real layout
-    // state and makes overview workspace switches inherit a shifted spot.
+    // CScrollingAlgorithm::recalculate() may hard-fit the focused column back
+    // into view; update target boxes directly so overview layout scrolling can
+    // travel across the whole tape instead of snapping around the focused window.
+    if (isScrollingWorkspace(workspace)) {
+        auto* const scrolling = scrollingAlgorithmForWorkspace(workspace);
+        if (scrolling && scrolling->m_scrollingData) {
+            scrolling->m_scrollingData->recalculate(true);
+            return;
+        }
+    }
+
     workspace->m_space->recalculate();
 }
 
@@ -5545,7 +6243,33 @@ void OverviewController::restoreSurfaceRenderData(CSurfacePassElement::SRenderDa
 }
 
 std::optional<std::size_t> OverviewController::hitTestTarget(double x, double y) const {
-    return hitTest(targetRects(), x, y);
+    const auto hitLayer = [&](bool floatingOverlay) -> std::optional<std::size_t> {
+        std::optional<std::size_t> bestIndex;
+        double                     bestDistance = std::numeric_limits<double>::infinity();
+
+        for (std::size_t index = 0; index < m_state.windows.size(); ++index) {
+            const auto& managed = m_state.windows[index];
+            if (managed.isNiriFloatingOverlay != floatingOverlay)
+                continue;
+
+            const Rect rect = currentPreviewRect(managed);
+            if (!rectContainsPoint(rect, x, y))
+                continue;
+
+            const double distance = rectCenterDistanceSquared(rect, x, y);
+            if (!bestIndex || distance < bestDistance) {
+                bestIndex = index;
+                bestDistance = distance;
+            }
+        }
+
+        return bestIndex;
+    };
+
+    if (const auto floating = hitLayer(true))
+        return floating;
+
+    return hitLayer(false);
 }
 
 std::optional<std::size_t> OverviewController::hitTestStripTarget(double x, double y) const {
@@ -6310,6 +7034,48 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
             return target;
         };
 
+        const auto motionDirectionsForPeer = [&](const Rect& base, double radialX, double radialY) {
+            std::vector<std::pair<double, double>> directions;
+            directions.reserve(10);
+
+            const auto appendDirection = [&](double dx, double dy) {
+                const double length = std::hypot(dx, dy);
+                if (length <= 0.001)
+                    return;
+                dx /= length;
+                dy /= length;
+                const auto duplicate = std::ranges::any_of(directions, [&](const auto& existing) {
+                    return std::abs(existing.first - dx) <= 0.001 && std::abs(existing.second - dy) <= 0.001;
+                });
+                if (!duplicate)
+                    directions.push_back({dx, dy});
+            };
+
+            const EdgeMotionAffinity affinity = edgeMotionAffinityForRect(base, boundsGlobal);
+            const double             awayX = std::abs(radialX) > 0.001 ? radialX : (base.centerX() >= pressureCenterX ? 1.0 : -1.0);
+            const double             awayY = std::abs(radialY) > 0.001 ? radialY : (base.centerY() >= pressureCenterY ? 1.0 : -1.0);
+
+            if (affinity.verticalEdge > 0.15) {
+                appendDirection(0.0, awayY);
+                appendDirection(0.0, 1.0);
+                appendDirection(0.0, -1.0);
+            }
+            if (affinity.horizontalEdge > 0.15) {
+                appendDirection(awayX, 0.0);
+                appendDirection(1.0, 0.0);
+                appendDirection(-1.0, 0.0);
+            }
+
+            appendDirection(radialX, radialY);
+            appendDirection(radialX, 0.0);
+            appendDirection(0.0, radialY);
+            appendDirection(1.0, 0.0);
+            appendDirection(-1.0, 0.0);
+            appendDirection(0.0, 1.0);
+            appendDirection(0.0, -1.0);
+            return directions;
+        };
+
         for (const auto& peer : peers) {
             const double deltaX = peer.base.centerX() - pressureCenterX;
             const double deltaY = peer.base.centerY() - pressureCenterY;
@@ -6334,9 +7100,21 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
             Rect target = translateRect(peer.base, directionX * radialPressure * easedInfluence, directionY * radialPressure * easedInfluence);
             target = clampRectInside(target, boundsGlobal);
 
-            auto resolved = resolveAlongBearing(target, directionX, directionY);
-            if (!resolved)
-                resolved = resolveAlongBearing(clampRectInside(peer.base, boundsGlobal), directionX, directionY);
+            std::optional<Rect> resolved;
+            double              resolvedScore = std::numeric_limits<double>::max();
+            for (const auto& [candidateDirX, candidateDirY] : motionDirectionsForPeer(peer.base, directionX, directionY)) {
+                auto candidate = resolveAlongBearing(target, candidateDirX, candidateDirY);
+                if (!candidate)
+                    candidate = resolveAlongBearing(clampRectInside(peer.base, boundsGlobal), candidateDirX, candidateDirY);
+                if (!candidate)
+                    continue;
+
+                const double score = edgeAwareMotionDistance2(peer.base, *candidate, boundsGlobal);
+                if (!resolved || score < resolvedScore) {
+                    resolved = candidate;
+                    resolvedScore = score;
+                }
+            }
             if (!resolved)
                 return false;
 
@@ -7788,6 +8566,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
             .previewAlpha = source.previewAlpha,
             .isFloating = source.isFloating,
             .isPinned = source.isPinned,
+            .isNiriFloatingOverlay = source.isNiriFloatingOverlay,
         });
     };
 
@@ -8754,6 +9533,27 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
             continue;
 
         const Rect band = workspaceStripBandRectForMonitor(monitor, state);
+        if (niriModeEnabled()) {
+            std::optional<std::size_t> activeIndex;
+            for (std::size_t index = 0; index < monitorEntries.size(); ++index) {
+                if (monitorEntries[index].active) {
+                    activeIndex = index;
+                    break;
+                }
+            }
+
+            const double aspect = monitor->m_size.y > 0.0 ? static_cast<double>(monitor->m_size.x) / static_cast<double>(monitor->m_size.y) : (16.0 / 9.0);
+            const double scale = niriWorkspaceScale();
+            const auto slots =
+                layoutNiriWorkspaceStripSlots(band, parseWorkspaceStripAnchor(anchor), monitorEntries.size(), activeIndex, stripGap, padding, aspect, scale);
+            for (std::size_t index = 0; index < std::min(slots.size(), monitorEntries.size()); ++index) {
+                monitorEntries[index].rect = slots[index];
+            }
+
+            state.stripEntries.insert(state.stripEntries.end(), monitorEntries.begin(), monitorEntries.end());
+            continue;
+        }
+
         const double innerWidth = std::max(1.0, band.width - padding * 2.0);
         const double innerHeight = std::max(1.0, band.height - padding * 2.0);
         double scale = horizontal ? innerHeight / static_cast<double>(monitor->m_size.y) : innerWidth / static_cast<double>(monitor->m_size.x);
@@ -9065,8 +9865,13 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     }
 
     std::unordered_map<MONITORID, std::vector<WindowInput>> inputsByMonitor;
-    std::unordered_map<MONITORID, std::vector<std::size_t>> indexesByMonitor;
+    std::unordered_map<MONITORID, std::size_t> directNiriOverviewWindowsByMonitor;
     const bool useWorkspaceRows = workspaceRowsEnabled(m_handle);
+    LayoutConfig config = loadLayoutConfig();
+    config.preserveInputOrder = preserveExistingOrder || orderByRecentUse;
+    config.forceRowGroups = useWorkspaceRows;
+    config.rankScaleByInputOrder = orderByRecentUse;
+    const bool allowDirectNiriOverviewLayout = state.collectionPolicy.onlyActiveWorkspace;
     const auto rowGroupForWindow = [&](const PHLWINDOW& window) -> std::size_t {
         if (!useWorkspaceRows)
             return 0;
@@ -9084,6 +9889,75 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
         return state.managedWorkspaces.size();
     };
+    const auto niriOverviewSlotForSource = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal, const Rect& baseGlobal,
+                                               std::size_t windowIndex, bool allowPinned) -> std::optional<WindowSlot> {
+        if (!allowDirectNiriOverviewLayout)
+            return std::nullopt;
+
+        if (state.collectionPolicy.requestedScope == ScopeOverride::ForceAll)
+            return std::nullopt;
+
+        if (!niriModeEnabled() || !window || !targetMonitor || (window->m_pinned && !allowPinned) || !window->m_workspace || !window->m_workspace->m_space ||
+            !isScrollingWorkspace(window->m_workspace))
+            return std::nullopt;
+
+        if (!state.collectionPolicy.onlyActiveWorkspace && window->m_workspace != state.ownerWorkspace)
+            return std::nullopt;
+
+        auto* const scrolling = scrollingAlgorithmForWorkspace(window->m_workspace);
+        if (!scrolling || !scrolling->m_scrollingData)
+            return std::nullopt;
+
+        const Rect previewArea = overviewContentRectForMonitor(targetMonitor, state);
+        if (previewArea.width <= 1.0 || previewArea.height <= 1.0)
+            return std::nullopt;
+
+        if (baseGlobal.width <= 1.0 || baseGlobal.height <= 1.0)
+            return std::nullopt;
+
+        const double fitScale = std::min(previewArea.width / baseGlobal.width, previewArea.height / baseGlobal.height);
+        const double maxScale = std::max(config.minSlotScale, config.maxPreviewScale);
+        const double scale = std::max(config.minSlotScale, std::min(fitScale, maxScale));
+        const double scaledViewportWidth = baseGlobal.width * scale;
+        const double scaledViewportHeight = baseGlobal.height * scale;
+        const double viewportX = previewArea.x + (previewArea.width - scaledViewportWidth) * 0.5;
+        const double viewportY = previewArea.y + (previewArea.height - scaledViewportHeight) * 0.5;
+        const double targetWidth = sourceGlobal.width * scale;
+        const double targetHeight = sourceGlobal.height * scale;
+        const double targetCenterX = viewportX + (sourceGlobal.centerX() - baseGlobal.x) * scale;
+        const double targetCenterY = viewportY + (sourceGlobal.centerY() - baseGlobal.y) * scale;
+        const Rect targetLocal = makeRect(targetCenterX - targetWidth * 0.5, targetCenterY - targetHeight * 0.5, targetWidth, targetHeight);
+
+        return WindowSlot{
+            .index = windowIndex,
+            .natural =
+                {
+                    sourceGlobal.x - targetMonitor->m_position.x,
+                    sourceGlobal.y - targetMonitor->m_position.y,
+                    sourceGlobal.width,
+                    sourceGlobal.height,
+                },
+            .target = targetLocal,
+            .scale = scale,
+        };
+    };
+    const auto niriFloatingOverviewSlotForWindow = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
+                                                       std::size_t windowIndex) -> std::optional<WindowSlot> {
+        if (!isFloatingOverviewWindow(window))
+            return std::nullopt;
+
+        return niriOverviewSlotForSource(window, targetMonitor, sourceGlobal, niriFloatingOverviewBaseGlobalRect(targetMonitor), windowIndex, true);
+    };
+    const auto niriScrollingOverviewSlotForWindow = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
+                                                        std::size_t windowIndex) -> std::optional<WindowSlot> {
+        const auto target = window ? window->layoutTarget() : nullptr;
+        if (!target || target->floating())
+            return std::nullopt;
+
+        const CBox workAreaBox = window && window->m_workspace && window->m_workspace->m_space ? window->m_workspace->m_space->workArea() : CBox{};
+        const Rect baseGlobal = makeRect(workAreaBox.x, workAreaBox.y, workAreaBox.width, workAreaBox.height);
+        return niriOverviewSlotForSource(window, targetMonitor, sourceGlobal, baseGlobal, windowIndex, false);
+    };
 
     for (const auto& workspace : state.managedWorkspaces)
         refreshWorkspaceLayoutSnapshot(workspace);
@@ -9100,6 +9974,55 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         const Rect naturalGlobal = stateSnapshotGlobalRectForWindow(window, useGoalGeometry);
         const Rect layoutGlobal = layoutAnchorGlobalRectForWindow(window, useGoalGeometry);
         const std::size_t windowIndex = state.windows.size();
+        Rect directNiriSourceGlobal = naturalGlobal;
+        std::optional<WindowSlot> directNiriSlot;
+        bool directNiriFloatingOverlay = false;
+
+        const Rect floatingSourceGlobal = floatingOverviewSourceGlobalRectForWindow(window, renderGlobalRectForWindow(window, useGoalGeometry));
+        directNiriSlot = niriFloatingOverviewSlotForWindow(window, targetMonitor, floatingSourceGlobal, windowIndex);
+        if (directNiriSlot) {
+            directNiriSourceGlobal = floatingSourceGlobal;
+            directNiriFloatingOverlay = true;
+        } else {
+            const Rect scrollingSourceGlobal = scrollingOverviewSourceGlobalRectForWindow(window, naturalGlobal);
+            directNiriSlot = niriScrollingOverviewSlotForWindow(window, targetMonitor, scrollingSourceGlobal, windowIndex);
+            if (directNiriSlot)
+                directNiriSourceGlobal = scrollingSourceGlobal;
+        }
+
+        state.windows.push_back({
+            .window = window,
+            .targetMonitor = targetMonitor,
+            .title = window->m_title,
+            .naturalGlobal = directNiriSlot ? directNiriSourceGlobal : naturalGlobal,
+            .exitGlobal = directNiriSlot ? directNiriSourceGlobal : naturalGlobal,
+            .previewAlpha = std::clamp(window->m_activeInactiveAlpha->value(), 0.0F, 1.0F),
+            .isFloating = window->m_isFloating,
+            .isPinned = window->m_pinned,
+            .isNiriFloatingOverlay = directNiriFloatingOverlay,
+        });
+
+        if (directNiriSlot) {
+            auto& managed = state.windows.back();
+            managed.slot = *directNiriSlot;
+            managed.targetGlobal = makeRect(targetMonitor->m_position.x + directNiriSlot->target.x,
+                                            targetMonitor->m_position.y + directNiriSlot->target.y, directNiriSlot->target.width,
+                                            directNiriSlot->target.height);
+            managed.relayoutFromGlobal = managed.targetGlobal;
+            state.slots.push_back(*directNiriSlot);
+            ++directNiriOverviewWindowsByMonitor[targetMonitor->m_id];
+            if (debugLogsEnabled() && directNiriOverviewWindowsByMonitor[targetMonitor->m_id] <= 8) {
+                std::ostringstream out;
+                out << "[hymission] niri " << (directNiriFloatingOverlay ? "floating overview overlay" : "scrolling overview direct")
+                    << " window=" << debugWindowLabel(window)
+                    << " floating=" << (window->m_isFloating ? 1 : 0)
+                    << " source=" << rectToString(directNiriSourceGlobal)
+                    << " target=" << rectToString(managed.targetGlobal)
+                    << " scale=" << directNiriSlot->scale;
+                debugLog(out.str());
+            }
+            continue;
+        }
 
         inputsByMonitor[targetMonitor->m_id].push_back({
             .index = windowIndex,
@@ -9114,33 +10037,20 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             .rowGroup = rowGroupForWindow(window),
             .layoutEmphasis = 1.0,
         });
-        indexesByMonitor[targetMonitor->m_id].push_back(windowIndex);
-
-        state.windows.push_back({
-            .window = window,
-            .targetMonitor = targetMonitor,
-            .title = window->m_title,
-            .naturalGlobal = naturalGlobal,
-            .exitGlobal = naturalGlobal,
-            .previewAlpha = std::clamp(window->m_activeInactiveAlpha->value(), 0.0F, 1.0F),
-            .isFloating = window->m_isFloating,
-            .isPinned = window->m_pinned,
-        });
     }
 
     std::vector<PHLMONITOR> activeParticipatingMonitors;
     MissionControlLayout engine;
-    LayoutConfig config = loadLayoutConfig();
-    config.preserveInputOrder = preserveExistingOrder || orderByRecentUse;
-    config.forceRowGroups = useWorkspaceRows;
     for (const auto& candidateMonitor : state.participatingMonitors) {
         if (!candidateMonitor)
             continue;
 
         const auto inputsIt = inputsByMonitor.find(candidateMonitor->m_id);
+        const auto directIt = directNiriOverviewWindowsByMonitor.find(candidateMonitor->m_id);
+        const bool hasDirectNiriOverviewWindows = directIt != directNiriOverviewWindowsByMonitor.end() && directIt->second > 0;
         const bool hasStripWorkspace = workspaceStripEnabled(state) && static_cast<bool>(candidateMonitor->m_activeWorkspace);
         const bool keepMonitor = keepEmptyParticipatingMonitors && overrideForMonitor(candidateMonitor);
-        if ((inputsIt == inputsByMonitor.end() || inputsIt->second.empty()) && !keepMonitor && !hasStripWorkspace)
+        if ((inputsIt == inputsByMonitor.end() || inputsIt->second.empty()) && !hasDirectNiriOverviewWindows && !keepMonitor && !hasStripWorkspace)
             continue;
 
         activeParticipatingMonitors.push_back(candidateMonitor);
@@ -9152,17 +10062,267 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             engine.compute(inputsIt->second,
                            previewArea,
                            config);
-        const auto& indexes = indexesByMonitor[candidateMonitor->m_id];
-        for (std::size_t slotIndex = 0; slotIndex < slots.size() && slotIndex < indexes.size(); ++slotIndex) {
-            const std::size_t windowIndex = indexes[slotIndex];
-            state.windows[windowIndex].slot = slots[slotIndex];
-            state.windows[windowIndex].targetGlobal =
-                makeRect(candidateMonitor->m_position.x + slots[slotIndex].target.x, candidateMonitor->m_position.y + slots[slotIndex].target.y, slots[slotIndex].target.width,
-                         slots[slotIndex].target.height);
-            state.windows[windowIndex].relayoutFromGlobal = state.windows[windowIndex].targetGlobal;
-            state.slots.push_back(slots[slotIndex]);
+        for (const auto& slot : slots) {
+            if (slot.index >= state.windows.size())
+                continue;
+
+            auto& managed = state.windows[slot.index];
+            if (managed.targetMonitor != candidateMonitor)
+                continue;
+
+            managed.slot = slot;
+            managed.targetGlobal =
+                makeRect(candidateMonitor->m_position.x + slot.target.x, candidateMonitor->m_position.y + slot.target.y, slot.target.width, slot.target.height);
+            managed.relayoutFromGlobal = managed.targetGlobal;
+            state.slots.push_back(slot);
         }
     }
+
+    const auto settleNiriFloatingOverlayOverlaps = [&]() {
+        const double gap = std::max(2.0, std::min(12.0, std::min(config.columnSpacing, config.rowSpacing) * 0.25));
+        for (const auto& candidateMonitor : activeParticipatingMonitors) {
+            if (!candidateMonitor)
+                continue;
+
+            std::vector<std::size_t> floatingIndexes;
+            for (std::size_t index = 0; index < state.windows.size(); ++index) {
+                const auto& managed = state.windows[index];
+                if (managed.targetMonitor == candidateMonitor && managed.isNiriFloatingOverlay)
+                    floatingIndexes.push_back(index);
+            }
+
+            if (floatingIndexes.empty())
+                continue;
+
+            const Rect boundsLocal = overviewContentRectForMonitor(candidateMonitor, state);
+            const Rect boundsGlobal =
+                makeRect(candidateMonitor->m_position.x + boundsLocal.x, candidateMonitor->m_position.y + boundsLocal.y, boundsLocal.width, boundsLocal.height);
+            if (boundsGlobal.width <= 1.0 || boundsGlobal.height <= 1.0)
+                continue;
+
+            std::size_t staticObstacleCount = 0;
+            std::vector<Rect> placedFloatingRects;
+            placedFloatingRects.reserve(floatingIndexes.size());
+            for (const auto& managed : state.windows) {
+                if (managed.targetMonitor == candidateMonitor && !managed.isNiriFloatingOverlay)
+                    ++staticObstacleCount;
+            }
+
+            std::stable_sort(floatingIndexes.begin(), floatingIndexes.end(), [&](std::size_t lhs, std::size_t rhs) {
+                const Rect& lhsRect = state.windows[lhs].targetGlobal;
+                const Rect& rhsRect = state.windows[rhs].targetGlobal;
+                const double lhsArea = lhsRect.width * lhsRect.height;
+                const double rhsArea = rhsRect.width * rhsRect.height;
+                const auto   lhsAffinity = edgeMotionAffinityForRect(lhsRect, boundsGlobal);
+                const auto   rhsAffinity = edgeMotionAffinityForRect(rhsRect, boundsGlobal);
+                const double lhsAnchor = lhsAffinity.corner * 4.0 + std::max(lhsAffinity.verticalEdge, lhsAffinity.horizontalEdge) * 2.0;
+                const double rhsAnchor = rhsAffinity.corner * 4.0 + std::max(rhsAffinity.verticalEdge, rhsAffinity.horizontalEdge) * 2.0;
+                if (std::abs(lhsAnchor - rhsAnchor) > 0.01)
+                    return lhsAnchor > rhsAnchor;
+                if (std::abs(lhsArea - rhsArea) > 1.0)
+                    return lhsArea > rhsArea;
+                return lhs < rhs;
+            });
+
+            const auto overlapArea = [](const Rect& lhs, const Rect& rhs) {
+                const double x1 = std::max(lhs.x, rhs.x);
+                const double y1 = std::max(lhs.y, rhs.y);
+                const double x2 = std::min(lhs.x + lhs.width, rhs.x + rhs.width);
+                const double y2 = std::min(lhs.y + lhs.height, rhs.y + rhs.height);
+                if (x2 <= x1 || y2 <= y1)
+                    return 0.0;
+                return (x2 - x1) * (y2 - y1);
+            };
+
+            const auto totalOverlapArea = [&](const Rect& target, const std::vector<Rect>& obstacles) {
+                double overlap = 0.0;
+                for (const auto& obstacle : obstacles)
+                    overlap += overlapArea(target, obstacle);
+                return overlap;
+            };
+
+            struct FloatingResolveResult {
+                Rect   target;
+                double scale = 1.0;
+                double overlap = 0.0;
+            };
+
+            const auto resolveFloatingTarget = [&](const Rect& desired, const std::vector<Rect>& obstacles, double currentSlotScale) -> FloatingResolveResult {
+                const Rect clampedDesired = clampRectInside(desired, boundsGlobal);
+                if (obstacles.empty())
+                    return {.target = clampedDesired, .scale = 1.0, .overlap = 0.0};
+
+                std::vector<Rect> candidates;
+                std::vector<double> candidateScales;
+                candidates.reserve(128);
+                candidateScales.reserve(128);
+                const auto appendCandidate = [&](const Rect& candidate, double scale) {
+                    const Rect clamped = clampRectInside(candidate, boundsGlobal);
+                    if (std::ranges::any_of(candidates, [&](const Rect& existing) { return rectApproxEqual(existing, clamped, 0.5); }))
+                        return;
+                    candidates.push_back(clamped);
+                    candidateScales.push_back(scale);
+                };
+
+                const double absoluteScaleFloor = std::max(0.30, config.minSlotScale);
+                const double scaleFloorBySlot = currentSlotScale > 0.001 ? absoluteScaleFloor / currentSlotScale : 0.72;
+                const double scaleFloorByReadableSize =
+                    config.minPreviewShortEdge / std::max(1.0, std::min(clampedDesired.width, clampedDesired.height));
+                const double scaleFloor = std::min(1.0, std::max({0.52, scaleFloorBySlot, scaleFloorByReadableSize}));
+
+                std::vector<double> scales;
+                scales.push_back(1.0);
+                for (double scale = 0.96; scale > scaleFloor + 0.001; scale -= 0.04)
+                    scales.push_back(scale);
+                if (scales.back() > scaleFloor + 0.001)
+                    scales.push_back(scaleFloor);
+
+                std::vector<std::pair<double, double>> baseOffsets;
+                baseOffsets.push_back({0.0, 0.0});
+                const double maxNudge = std::max(8.0, std::min(72.0, std::min(boundsGlobal.width, boundsGlobal.height) * 0.04));
+                for (double radius : {gap, gap * 2.0, 16.0, 32.0, maxNudge}) {
+                    if (radius <= 0.5 || radius > maxNudge + 0.5)
+                        continue;
+                    baseOffsets.push_back({radius, 0.0});
+                    baseOffsets.push_back({-radius, 0.0});
+                    baseOffsets.push_back({0.0, radius});
+                    baseOffsets.push_back({0.0, -radius});
+                    const double diagonal = radius * 0.70710678118;
+                    baseOffsets.push_back({diagonal, diagonal});
+                    baseOffsets.push_back({diagonal, -diagonal});
+                    baseOffsets.push_back({-diagonal, diagonal});
+                    baseOffsets.push_back({-diagonal, -diagonal});
+                }
+
+                for (const double scale : scales) {
+                    const double width = clampedDesired.width * scale;
+                    const double height = clampedDesired.height * scale;
+                    const Rect   scaledDesired =
+                        makeRect(clampedDesired.centerX() - width * 0.5, clampedDesired.centerY() - height * 0.5, width, height);
+                    std::vector<std::pair<double, double>> offsets = baseOffsets;
+                    const auto appendOffset = [&](double dx, double dy) {
+                        offsets.push_back({dx, dy});
+                    };
+                    std::vector<double> candidateXs;
+                    std::vector<double> candidateYs;
+                    candidateXs.reserve(obstacles.size() * 3 + 4);
+                    candidateYs.reserve(obstacles.size() * 3 + 4);
+                    const auto appendX = [&](double x) {
+                        if (!std::ranges::any_of(candidateXs, [&](double existing) { return std::abs(existing - x) <= 0.5; }))
+                            candidateXs.push_back(x);
+                    };
+                    const auto appendY = [&](double y) {
+                        if (!std::ranges::any_of(candidateYs, [&](double existing) { return std::abs(existing - y) <= 0.5; }))
+                            candidateYs.push_back(y);
+                    };
+                    appendX(scaledDesired.x);
+                    appendX(boundsGlobal.x);
+                    appendX(boundsGlobal.x + boundsGlobal.width - width);
+                    appendY(scaledDesired.y);
+                    appendY(boundsGlobal.y);
+                    appendY(boundsGlobal.y + boundsGlobal.height - height);
+                    for (const auto& obstacle : obstacles) {
+                        appendX(obstacle.x - width - gap);
+                        appendX(obstacle.x + obstacle.width + gap);
+                        appendX(obstacle.centerX() - width * 0.5);
+                        appendY(obstacle.y - height - gap);
+                        appendY(obstacle.y + obstacle.height + gap);
+                        appendY(obstacle.centerY() - height * 0.5);
+                        if (!rectsOverlap(scaledDesired, obstacle))
+                            continue;
+
+                        const double moveRight = obstacle.x + obstacle.width - scaledDesired.x;
+                        const double moveLeft = obstacle.x - (scaledDesired.x + scaledDesired.width);
+                        const double moveDown = obstacle.y + obstacle.height - scaledDesired.y;
+                        const double moveUp = obstacle.y - (scaledDesired.y + scaledDesired.height);
+
+                        appendOffset(moveRight, 0.0);
+                        appendOffset(moveLeft, 0.0);
+                        appendOffset(0.0, moveDown);
+                        appendOffset(0.0, moveUp);
+                        appendOffset(moveRight, moveDown);
+                        appendOffset(moveRight, moveUp);
+                        appendOffset(moveLeft, moveDown);
+                        appendOffset(moveLeft, moveUp);
+                    }
+                    for (const auto& [dx, dy] : offsets) {
+                        appendCandidate(makeRect(clampedDesired.centerX() + dx - width * 0.5, clampedDesired.centerY() + dy - height * 0.5, width, height), scale);
+                    }
+                    for (const double x : candidateXs) {
+                        for (const double y : candidateYs)
+                            appendCandidate(makeRect(x, y, width, height), scale);
+                    }
+                }
+
+                const bool desiredOnRight = desired.centerX() >= boundsGlobal.centerX();
+                const bool desiredOnBottom = desired.centerY() >= boundsGlobal.centerY();
+                const double boundsDiag2 = boundsGlobal.width * boundsGlobal.width + boundsGlobal.height * boundsGlobal.height;
+
+                FloatingResolveResult best{
+                    .target = clampedDesired,
+                    .scale = 1.0,
+                    .overlap = totalOverlapArea(clampedDesired, obstacles),
+                };
+                double bestScore = std::numeric_limits<double>::max();
+                for (std::size_t candidateIndex = 0; candidateIndex < candidates.size(); ++candidateIndex) {
+                    const auto& candidate = candidates[candidateIndex];
+                    const double scale = candidateIndex < candidateScales.size() ? candidateScales[candidateIndex] : 1.0;
+                    const double motionDistance2 = edgeAwareMotionDistance2(desired, candidate, boundsGlobal);
+                    const double totalOverlap = totalOverlapArea(candidate, obstacles);
+                    const double shrink = std::max(0.0, 1.0 - scale);
+
+                    double score = motionDistance2 + shrink * shrink * 45000.0;
+                    if ((candidate.centerX() >= boundsGlobal.centerX()) != desiredOnRight)
+                        score += boundsDiag2 * 4.0;
+                    if ((candidate.centerY() >= boundsGlobal.centerY()) != desiredOnBottom)
+                        score += boundsDiag2;
+
+                    if (totalOverlap < best.overlap - 0.5 || (std::abs(totalOverlap - best.overlap) <= 0.5 && score < bestScore)) {
+                        best = {.target = candidate, .scale = scale, .overlap = totalOverlap};
+                        bestScore = score;
+                    }
+                }
+
+                return best;
+            };
+
+            for (const auto index : floatingIndexes) {
+                const Rect desired = state.windows[index].targetGlobal;
+                const auto resolved = resolveFloatingTarget(desired, placedFloatingRects, state.windows[index].slot.scale);
+                const Rect target = resolved.target;
+
+                if (!rectApproxEqual(target, desired, 0.5) || std::abs(resolved.scale - 1.0) > 0.001) {
+                    auto& managed = state.windows[index];
+                    managed.targetGlobal = target;
+                    managed.relayoutFromGlobal = target;
+                    managed.slot.target = makeRect(target.x - candidateMonitor->m_position.x, target.y - candidateMonitor->m_position.y, target.width, target.height);
+                    managed.slot.scale *= resolved.scale;
+                    for (auto& slot : state.slots) {
+                        if (slot.index == index) {
+                            slot = managed.slot;
+                            break;
+                        }
+                    }
+
+                    if (debugLogsEnabled()) {
+                        std::ostringstream out;
+                        out << "[hymission] niri floating overview adjust window=" << debugWindowLabel(managed.window)
+                            << " desired=" << rectToString(desired)
+                            << " target=" << rectToString(target)
+                            << " scaleAdjust=" << resolved.scale
+                            << " remainingOverlap=" << resolved.overlap
+                            << " staticObstaclesIgnored=" << staticObstacleCount
+                            << " floatingObstacles=" << placedFloatingRects.size();
+                        debugLog(out.str());
+                    }
+                }
+
+                placedFloatingRects.push_back(inflateRect(state.windows[index].targetGlobal, gap, gap));
+            }
+        }
+    };
+    settleNiriFloatingOverlayOverlaps();
+
     state.participatingMonitors = std::move(activeParticipatingMonitors);
     buildWorkspaceStripEntries(state);
 

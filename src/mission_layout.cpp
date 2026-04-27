@@ -74,9 +74,22 @@ struct NaturalProfile {
 };
 
 void clampRectToArea(Rect& rect, const Rect& area);
+std::vector<WindowSlot> computeGridLayout(const std::vector<PreparedWindow>& prepared, const Rect& inner, const LayoutConfig& config);
 
 double clampPositive(double value) {
     return std::max(0.0, value);
+}
+
+double pointToRectDistance(double x, double y, const Rect& rect) {
+    const double dx = std::max({rect.x - x, 0.0, x - (rect.x + rect.width)});
+    const double dy = std::max({rect.y - y, 0.0, y - (rect.y + rect.height)});
+    return std::hypot(dx, dy);
+}
+
+double rectDistance(const Rect& lhs, const Rect& rhs) {
+    const double dx = std::max({rhs.x - (lhs.x + lhs.width), lhs.x - (rhs.x + rhs.width), 0.0});
+    const double dy = std::max({rhs.y - (lhs.y + lhs.height), lhs.y - (rhs.y + rhs.height), 0.0});
+    return std::hypot(dx, dy);
 }
 
 double clampAdditionalScale(double value) {
@@ -99,6 +112,12 @@ double naturalFitScaleForWindow(const PreparedWindow& window, const Rect& area) 
     const double widthFit = area.width / std::max(1.0, window.input.natural.width);
     const double heightFit = area.height / std::max(1.0, window.input.natural.height);
     return std::max(0.0, std::min(widthFit, heightFit));
+}
+
+double slotFitScale(const Rect& natural, const Rect& area, const LayoutConfig& config) {
+    const double widthFit = area.width / std::max(1.0, natural.width);
+    const double heightFit = area.height / std::max(1.0, natural.height);
+    return std::min(normalizedMaxPreviewScale(config), std::max(0.0, std::min(widthFit, heightFit)));
 }
 
 double clampLayoutScale(double value, const LayoutConfig& config) {
@@ -185,6 +204,52 @@ std::vector<PreparedWindow> prepareWindows(const std::vector<WindowInput>& windo
         item.scaledWidth = item.layoutWidth * item.weightScale;
         item.scaledHeight = item.layoutHeight * item.weightScale;
         prepared.push_back(item);
+    }
+
+    return prepared;
+}
+
+std::vector<PreparedWindow> applyNaturalScaleFlex(std::vector<PreparedWindow> prepared, const Rect& area, const LayoutConfig& config) {
+    if (prepared.size() < 2)
+        return prepared;
+
+    if (config.rankScaleByInputOrder)
+        return prepared;
+
+    const double countScale = 0.35;
+    const double flex = std::clamp(config.naturalScaleFlex, 0.0, 0.25) * countScale;
+    if (flex <= 0.0)
+        return prepared;
+
+    std::vector<double> bias(prepared.size(), 0.0);
+    std::vector<double> density(prepared.size(), 0.0);
+    const double        normX = std::max(1.0, area.width);
+    const double        normY = std::max(1.0, area.height);
+    for (std::size_t i = 0; i < prepared.size(); ++i) {
+        for (std::size_t j = 0; j < prepared.size(); ++j) {
+            if (i == j)
+                continue;
+
+            const double dx = (prepared[i].input.natural.centerX() - prepared[j].input.natural.centerX()) / normX;
+            const double dy = (prepared[i].input.natural.centerY() - prepared[j].input.natural.centerY()) / normY;
+            const double distanceSq = dx * dx + dy * dy;
+            density[i] += std::exp(-distanceSq / 0.10);
+        }
+    }
+
+    const auto [minIt, maxIt] = std::minmax_element(density.begin(), density.end());
+    const double range = *maxIt - *minIt;
+    if (range > 0.000001) {
+        for (std::size_t i = 0; i < prepared.size(); ++i) {
+            bias[i] = std::clamp(((*maxIt + *minIt) * 0.5 - density[i]) / (range * 0.5), -1.0, 1.0);
+        }
+    }
+
+    for (std::size_t i = 0; i < prepared.size(); ++i) {
+        const double multiplier = std::clamp(1.0 + bias[i] * flex, 1.0 - flex, 1.0 + flex);
+        prepared[i].weightScale *= multiplier;
+        prepared[i].scaledWidth = prepared[i].layoutWidth * prepared[i].weightScale;
+        prepared[i].scaledHeight = prepared[i].layoutHeight * prepared[i].weightScale;
     }
 
     return prepared;
@@ -509,13 +574,15 @@ std::vector<NaturalBandAnchor> buildNaturalBandAnchors(const std::vector<Prepare
     for (std::size_t i = 0; i < count; ++i)
         ordered[i] = i;
 
-    std::stable_sort(ordered.begin(), ordered.end(), [&](std::size_t a, std::size_t b) {
-        const double ay = prepared[a].input.natural.centerY();
-        const double by = prepared[b].input.natural.centerY();
-        if (std::abs(ay - by) > 0.5)
-            return ay < by;
-        return prepared[a].input.natural.centerX() < prepared[b].input.natural.centerX();
-    });
+    if (visualBias < 0.85) {
+        std::stable_sort(ordered.begin(), ordered.end(), [&](std::size_t a, std::size_t b) {
+            const double ay = prepared[a].input.natural.centerY();
+            const double by = prepared[b].input.natural.centerY();
+            if (std::abs(ay - by) > 0.5)
+                return ay < by;
+            return prepared[a].input.natural.centerX() < prepared[b].input.natural.centerX();
+        });
+    }
 
     const double legacyUsedWidth = 0.76;
     const double visualUsedWidth = std::clamp(0.74 + static_cast<double>(count) * 0.004, 0.76, 0.84);
@@ -533,13 +600,15 @@ std::vector<NaturalBandAnchor> buildNaturalBandAnchors(const std::vector<Prepare
             break;
 
         std::vector<std::size_t> band(ordered.begin() + static_cast<std::ptrdiff_t>(begin), ordered.begin() + static_cast<std::ptrdiff_t>(end));
-        std::stable_sort(band.begin(), band.end(), [&](std::size_t a, std::size_t b) {
-            const double ax = prepared[a].input.natural.centerX();
-            const double bx = prepared[b].input.natural.centerX();
-            if (std::abs(ax - bx) > 0.5)
-                return ax < bx;
-            return prepared[a].input.natural.centerY() < prepared[b].input.natural.centerY();
-        });
+        if (visualBias < 0.85) {
+            std::stable_sort(band.begin(), band.end(), [&](std::size_t a, std::size_t b) {
+                const double ax = prepared[a].input.natural.centerX();
+                const double bx = prepared[b].input.natural.centerX();
+                if (std::abs(ax - bx) > 0.5)
+                    return ax < bx;
+                return prepared[a].input.natural.centerY() < prepared[b].input.natural.centerY();
+            });
+        }
 
         const double y = rows == 1 ? area.centerY() : top + usedHeight * (static_cast<double>(row) + 0.5) / static_cast<double>(rows);
         for (std::size_t column = 0; column < band.size(); ++column) {
@@ -765,48 +834,78 @@ void centerNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
     }
 }
 
-void spreadNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
-    if (slots.size() < 5)
+void spreadNaturalAxis(std::vector<WindowSlot>& slots, const Rect& area, bool horizontal, double desiredFill, double maxSpreadScale) {
+    if (slots.size() < 3)
         return;
 
-    double minY = std::numeric_limits<double>::infinity();
-    double maxY = -std::numeric_limits<double>::infinity();
-    double weightedY = 0.0;
+    const double areaStart = horizontal ? area.x : area.y;
+    const double areaLength = horizontal ? area.width : area.height;
+    const double areaEnd = areaStart + areaLength;
+
+    double minEdge = std::numeric_limits<double>::infinity();
+    double maxEdge = -std::numeric_limits<double>::infinity();
+    double weightedCenter = 0.0;
     double totalArea = 0.0;
 
     for (const auto& slot : slots) {
-        minY = std::min(minY, slot.target.y);
-        maxY = std::max(maxY, slot.target.y + slot.target.height);
-        const double area = slot.target.width * slot.target.height;
-        weightedY += slot.target.centerY() * area;
-        totalArea += area;
+        const double start = horizontal ? slot.target.x : slot.target.y;
+        const double length = horizontal ? slot.target.width : slot.target.height;
+        const double center = start + length * 0.5;
+        const double slotArea = slot.target.width * slot.target.height;
+        minEdge = std::min(minEdge, start);
+        maxEdge = std::max(maxEdge, start + length);
+        weightedCenter += center * slotArea;
+        totalArea += slotArea;
     }
 
-    const double boundsHeight = maxY - minY;
-    const double desiredHeight = area.height * std::clamp(0.54 + static_cast<double>(slots.size()) * 0.008, 0.54, 0.72);
-    if (boundsHeight >= desiredHeight || boundsHeight <= 1.0)
+    const double boundsLength = maxEdge - minEdge;
+    const double desiredLength = areaLength * std::clamp(desiredFill, 0.0, 1.0);
+    if (boundsLength >= desiredLength || boundsLength <= 1.0)
         return;
 
-    const double centerY = totalArea > 0.0 ? weightedY / totalArea : (minY + maxY) / 2.0;
-    const double scale = std::min(1.7, desiredHeight / boundsHeight);
+    const double origin = totalArea > 0.0 ? weightedCenter / totalArea : (minEdge + maxEdge) * 0.5;
+    double       scale = std::min(maxSpreadScale, desiredLength / boundsLength);
 
-    bool canApply = true;
     for (const auto& slot : slots) {
-        const double targetCenterY = centerY + (slot.target.centerY() - centerY) * scale;
-        const double y = std::floor(targetCenterY - slot.target.height / 2.0);
-        if (y < area.y || y + slot.target.height > area.y + area.height) {
-            canApply = false;
-            break;
-        }
+        const double start = horizontal ? slot.target.x : slot.target.y;
+        const double length = horizontal ? slot.target.width : slot.target.height;
+        const double half = length * 0.5;
+        const double center = start + half;
+        const double delta = center - origin;
+        if (std::abs(delta) <= 0.001)
+            continue;
+
+        double axisLimit = scale;
+        if (delta > 0.0)
+            axisLimit = (areaEnd - half - origin) / delta;
+        else
+            axisLimit = (areaStart + half - origin) / delta;
+        if (std::isfinite(axisLimit))
+            scale = std::min(scale, axisLimit);
     }
 
-    if (!canApply)
+    if (scale <= 1.001)
         return;
 
     for (auto& slot : slots) {
-        const double targetCenterY = centerY + (slot.target.centerY() - centerY) * scale;
-        slot.target.y = std::floor(targetCenterY - slot.target.height / 2.0);
+        const double length = horizontal ? slot.target.width : slot.target.height;
+        const double center = (horizontal ? slot.target.x : slot.target.y) + length * 0.5;
+        const double targetCenter = origin + (center - origin) * scale;
+        const double start = std::floor(targetCenter - length * 0.5);
+        if (horizontal)
+            slot.target.x = start;
+        else
+            slot.target.y = start;
+        clampRectToArea(slot.target, area);
     }
+}
+
+void spreadNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
+    const double count = static_cast<double>(slots.size());
+    const double verticalFill = std::clamp(0.78 + count * 0.010, 0.80, 0.94);
+    const double horizontalFill = std::clamp(0.78 + count * 0.008, 0.80, 0.94);
+    spreadNaturalAxis(slots, area, true, horizontalFill, 2.0);
+    spreadNaturalAxis(slots, area, false, verticalFill, 2.0);
 }
 
 std::vector<WindowSlot> materializeNaturalSlots(std::vector<NaturalItem> items, const Rect& area) {
@@ -831,7 +930,261 @@ std::vector<WindowSlot> materializeNaturalSlots(std::vector<NaturalItem> items, 
     return slots;
 }
 
-double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area) {
+void shrinkSlotScale(WindowSlot& slot, double scale, const Rect& area, const LayoutConfig& config) {
+    if (slot.scale <= 0.0 || scale >= slot.scale)
+        return;
+
+    const double naturalShortEdge = std::min(slot.natural.width, slot.natural.height);
+    if (naturalShortEdge > 0.0)
+        scale = std::max(scale, normalizedMinPreviewShortEdge(config, area) / naturalShortEdge);
+    scale = std::max(scale, normalizedMinSlotScale(config));
+    if (scale >= slot.scale)
+        return;
+
+    const double ratio = std::max(0.0, scale) / slot.scale;
+    const double centerX = slot.target.centerX();
+    const double centerY = slot.target.centerY();
+    slot.target = {
+        std::floor(centerX - slot.target.width * ratio / 2.0),
+        std::floor(centerY - slot.target.height * ratio / 2.0),
+        slot.target.width * ratio,
+        slot.target.height * ratio,
+    };
+    slot.scale = scale;
+    clampRectToArea(slot.target, area);
+}
+
+void enforceInputOrderScaleGradient(std::vector<WindowSlot>& slots,
+                                    const std::vector<PreparedWindow>& prepared,
+                                    const Rect&                        area,
+                                    const LayoutConfig&                config) {
+    if (!config.rankScaleByInputOrder || slots.size() < 2)
+        return;
+
+    const double flex = std::clamp(config.naturalScaleFlex, 0.0, 0.25);
+    if (flex <= 0.0)
+        return;
+
+    std::vector<WindowSlot*> ordered;
+    ordered.reserve(prepared.size());
+    for (const auto& window : prepared) {
+        const auto it = std::find_if(slots.begin(), slots.end(), [&](const WindowSlot& slot) {
+            return slot.index == window.input.index;
+        });
+        if (it != slots.end())
+            ordered.push_back(&*it);
+    }
+
+    if (ordered.size() < 2)
+        return;
+
+    const double denom = std::max(1.0, static_cast<double>(ordered.size() - 1));
+    const double rankFlex = flex * 0.55;
+    double previousScale = std::numeric_limits<double>::infinity();
+    for (std::size_t order = 0; order < ordered.size(); ++order) {
+        auto& slot = *ordered[order];
+        double targetScale = slot.scale * (1.0 - rankFlex * static_cast<double>(order) / denom);
+        if (std::isfinite(previousScale))
+            targetScale = std::min(targetScale, previousScale * 0.995);
+        shrinkSlotScale(slot, targetScale, area, config);
+        previousScale = slot.scale;
+    }
+
+    centerNaturalTargets(slots, area);
+}
+
+std::array<std::pair<double, double>, 4> areaCorners(const Rect& area) {
+    return {{
+        {area.x, area.y},
+        {area.x + area.width, area.y},
+        {area.x, area.y + area.height},
+        {area.x + area.width, area.y + area.height},
+    }};
+}
+
+std::array<double, 4> nearestCornerDistances(const std::vector<WindowSlot>& slots, const Rect& area) {
+    const auto corners = areaCorners(area);
+    std::array<double, 4> distances{};
+
+    for (std::size_t corner = 0; corner < corners.size(); ++corner) {
+        double nearest = std::numeric_limits<double>::infinity();
+        for (const auto& slot : slots)
+            nearest = std::min(nearest, pointToRectDistance(corners[corner].first, corners[corner].second, slot.target));
+        distances[corner] = std::isfinite(nearest) ? nearest : 0.0;
+    }
+
+    return distances;
+}
+
+double averageEdgeMargin(const std::vector<WindowSlot>& slots, const Rect& area) {
+    if (slots.empty())
+        return 0.0;
+
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+    for (const auto& slot : slots) {
+        minX = std::min(minX, slot.target.x);
+        minY = std::min(minY, slot.target.y);
+        maxX = std::max(maxX, slot.target.x + slot.target.width);
+        maxY = std::max(maxY, slot.target.y + slot.target.height);
+    }
+
+    return std::max(1.0, ((minX - area.x) + (area.x + area.width - maxX) + (minY - area.y) + (area.y + area.height - maxY)) / 4.0);
+}
+
+double edgeBalancePixels(const std::vector<WindowSlot>& slots, const Rect& area) {
+    if (slots.empty())
+        return 0.0;
+
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+    for (const auto& slot : slots) {
+        minX = std::min(minX, slot.target.x);
+        minY = std::min(minY, slot.target.y);
+        maxX = std::max(maxX, slot.target.x + slot.target.width);
+        maxY = std::max(maxY, slot.target.y + slot.target.height);
+    }
+
+    const double edgeLeft = minX - area.x;
+    const double edgeRight = area.x + area.width - maxX;
+    const double edgeTop = minY - area.y;
+    const double edgeBottom = area.y + area.height - maxY;
+    return std::abs(edgeLeft - edgeRight) + std::abs(edgeTop - edgeBottom);
+}
+
+std::pair<double, double> nearestGapMetrics(const std::vector<WindowSlot>& slots) {
+    if (slots.size() < 2)
+        return {0.0, 0.0};
+
+    double totalNearest = 0.0;
+    double maxNearest = 0.0;
+    for (std::size_t i = 0; i < slots.size(); ++i) {
+        double nearest = std::numeric_limits<double>::infinity();
+        for (std::size_t j = 0; j < slots.size(); ++j) {
+            if (i == j)
+                continue;
+            nearest = std::min(nearest, rectDistance(slots[i].target, slots[j].target));
+        }
+        if (std::isfinite(nearest)) {
+            totalNearest += nearest;
+            maxNearest = std::max(maxNearest, nearest);
+        }
+    }
+
+    return {totalNearest / static_cast<double>(slots.size()), maxNearest};
+}
+
+double cornerVoidCost(const std::vector<WindowSlot>& slots, const Rect& area) {
+    if (slots.empty())
+        return 0.0;
+
+    const auto distances = nearestCornerDistances(slots, area);
+    const auto [minIt, maxIt] = std::minmax_element(distances.begin(), distances.end());
+    const auto [averageGap, maxGap] = nearestGapMetrics(slots);
+    const double averageEdge = averageEdgeMargin(slots, area);
+    const double overflow = std::max(0.0, *maxIt - averageEdge * 5.0);
+    const double balance = *maxIt - *minIt;
+    return overflow * 18.0 + balance * 1.0 + *maxIt * 0.10 + edgeBalancePixels(slots, area) * 2.8 + averageGap * 1.6 + maxGap * 0.6;
+}
+
+bool canPlaceSlotTarget(const std::vector<WindowSlot>& slots, std::size_t movingIndex, const Rect& target, const Rect& area, const LayoutConfig& config) {
+    if (target.x < area.x - 0.5 || target.y < area.y - 0.5 || target.x + target.width > area.x + area.width + 0.5 ||
+        target.y + target.height > area.y + area.height + 0.5)
+        return false;
+
+    const double gapX = std::max(0.0, config.columnSpacing * 0.25);
+    const double gapY = std::max(0.0, config.rowSpacing * 0.25);
+    for (std::size_t i = 0; i < slots.size(); ++i) {
+        if (i == movingIndex)
+            continue;
+
+        const auto& other = slots[i].target;
+        if (overlapAlong(target.x, target.x + target.width, other.x, other.x + other.width, gapX) > 0.0 &&
+            overlapAlong(target.y, target.y + target.height, other.y, other.y + other.height, gapY) > 0.0)
+            return false;
+    }
+
+    return true;
+}
+
+void relieveCornerVoids(std::vector<WindowSlot>& slots, const Rect& area, const LayoutConfig& config) {
+    if (slots.size() < 2)
+        return;
+
+    const auto corners = areaCorners(area);
+    for (int pass = 0; pass < 9; ++pass) {
+        const auto distances = nearestCornerDistances(slots, area);
+        const double averageEdge = averageEdgeMargin(slots, area);
+        const double limit = averageEdge * 5.0;
+        double bestCost = cornerVoidCost(slots, area);
+        std::vector<WindowSlot> bestSlots;
+
+        for (std::size_t corner = 0; corner < corners.size(); ++corner) {
+            if (distances[corner] <= limit)
+                continue;
+
+            std::vector<std::size_t> nearestIndexes;
+            nearestIndexes.reserve(slots.size());
+            for (std::size_t i = 0; i < slots.size(); ++i) {
+                nearestIndexes.push_back(i);
+            }
+            std::sort(nearestIndexes.begin(), nearestIndexes.end(), [&](std::size_t lhs, std::size_t rhs) {
+                const double lhsDistance = pointToRectDistance(corners[corner].first, corners[corner].second, slots[lhs].target);
+                const double rhsDistance = pointToRectDistance(corners[corner].first, corners[corner].second, slots[rhs].target);
+                if (std::abs(lhsDistance - rhsDistance) > 0.5)
+                    return lhsDistance < rhsDistance;
+                return lhs < rhs;
+            });
+
+            const std::size_t attempts = std::min<std::size_t>(6, nearestIndexes.size());
+            for (std::size_t attempt = 0; attempt < attempts; ++attempt) {
+                const std::size_t nearestIndex = nearestIndexes[attempt];
+                const auto& slot = slots[nearestIndex];
+                const bool pullLeft = corners[corner].first <= area.centerX();
+                const bool pullTop = corners[corner].second <= area.centerY();
+                const double maxX = pullLeft ? slot.target.x - area.x : area.x + area.width - (slot.target.x + slot.target.width);
+                const double maxY = pullTop ? slot.target.y - area.y : area.y + area.height - (slot.target.y + slot.target.height);
+                const double maxNudge = std::max(24.0, std::min(area.width, area.height) * 0.30);
+                const double fullX = std::min(std::max(0.0, maxX), maxNudge);
+                const double fullY = std::min(std::max(0.0, maxY), maxNudge);
+                if (fullX <= 0.5 && fullY <= 0.5)
+                    continue;
+
+                for (const auto [useX, useY] : std::array<std::pair<bool, bool>, 3>{{{true, true}, {true, false}, {false, true}}}) {
+                    for (const double fraction : {1.0, 0.75, 0.5, 0.25, 0.125}) {
+                        Rect target = slot.target;
+                        if (useX)
+                            target.x += (pullLeft ? -1.0 : 1.0) * fullX * fraction;
+                        if (useY)
+                            target.y += (pullTop ? -1.0 : 1.0) * fullY * fraction;
+                        clampRectToArea(target, area);
+                        if (!canPlaceSlotTarget(slots, nearestIndex, target, area, config))
+                            continue;
+
+                        auto candidate = slots;
+                        candidate[nearestIndex].target = target;
+                        const double cost = cornerVoidCost(candidate, area);
+                        if (cost < bestCost - 0.5) {
+                            bestCost = cost;
+                            bestSlots = std::move(candidate);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (bestSlots.empty())
+            break;
+
+        slots = std::move(bestSlots);
+    }
+}
+
+double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area, const LayoutConfig& config) {
     if (slots.empty())
         return std::numeric_limits<double>::infinity();
 
@@ -843,12 +1196,14 @@ double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area)
     double weightedX = 0.0;
     double weightedY = 0.0;
     double averageScale = 0.0;
+    double minShortEdge = std::numeric_limits<double>::infinity();
 
     for (const auto& slot : slots) {
         minX = std::min(minX, slot.target.x);
         minY = std::min(minY, slot.target.y);
         maxX = std::max(maxX, slot.target.x + slot.target.width);
         maxY = std::max(maxY, slot.target.y + slot.target.height);
+        minShortEdge = std::min(minShortEdge, std::min(slot.target.width, slot.target.height));
 
         const double targetArea = slot.target.width * slot.target.height;
         totalArea += targetArea;
@@ -869,7 +1224,19 @@ double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area)
     const double edgeRight = area.x + area.width - maxX;
     const double edgeTop = minY - area.y;
     const double edgeBottom = area.y + area.height - maxY;
+    const double averageEdge = std::max(1.0, (edgeLeft + edgeRight + edgeTop + edgeBottom) / 4.0);
     const double edgeBalance = std::abs(edgeLeft - edgeRight) / std::max(1.0, area.width) + std::abs(edgeTop - edgeBottom) / std::max(1.0, area.height);
+    const double edgeWhitespace = (edgeLeft + edgeRight) / std::max(1.0, area.width) + (edgeTop + edgeBottom) / std::max(1.0, area.height);
+    const double boundsFillRatio = ((maxX - minX) * (maxY - minY)) / areaPixels;
+    const auto cornerDistances = nearestCornerDistances(slots, area);
+    const auto [minCornerIt, maxCornerIt] = std::minmax_element(cornerDistances.begin(), cornerDistances.end());
+    const double cornerBalance = (*maxCornerIt - *minCornerIt) / std::max(1.0, std::hypot(area.width, area.height));
+    const double cornerWhitespace = *maxCornerIt / std::max(1.0, std::hypot(area.width, area.height));
+    const double cornerEdgeOverflow = std::max(0.0, *maxCornerIt - averageEdge * 5.0) / std::max(1.0, std::hypot(area.width, area.height));
+    const auto [averageNearestGap, maxNearestGap] = nearestGapMetrics(slots);
+    const double gapBasis = std::max(1.0, std::min(area.width, area.height));
+    const double averageGapOverflow = std::max(0.0, averageNearestGap / gapBasis - 0.075);
+    const double maxGapOverflow = std::max(0.0, maxNearestGap / gapBasis - 0.16);
 
     constexpr int columns = 4;
     constexpr int rows = 3;
@@ -923,10 +1290,146 @@ double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area)
     heatStdDev = std::sqrt(heatStdDev / static_cast<double>(heat.size()));
 
     const double heatImbalance = std::abs(leftHeat - rightHeat) + std::abs(topHeat - bottomHeat);
-    const double sparsePenalty = targetAreaRatio < 0.18 ? (0.18 - targetAreaRatio) : 0.0;
+    const double sparsePenalty = targetAreaRatio < 0.20 ? (0.20 - targetAreaRatio) : 0.0;
+    const double boundsSparsePenalty = boundsFillRatio < 0.82 ? (0.82 - boundsFillRatio) : 0.0;
+    const double readableShortEdge = std::max(1.0, normalizedMinPreviewShortEdge(config, area));
+    const double readabilityPenalty = minShortEdge < readableShortEdge ? (readableShortEdge - minShortEdge) / readableShortEdge : 0.0;
 
-    return heatStdDev * 2.4 + heatImbalance * 0.42 + gravityOffset * 3.0 + edgeBalance * 2.0 + sparsePenalty * 2.0 - targetAreaRatio * 0.55 -
-        averageScale * 0.16;
+    return heatStdDev * 2.4 + heatImbalance * 0.42 + gravityOffset * 3.0 + edgeBalance * 2.4 + edgeWhitespace * 3.2 + cornerBalance * 1.5 +
+        cornerWhitespace * 0.45 + cornerEdgeOverflow * 8.0 + averageGapOverflow * 5.0 + maxGapOverflow * 3.5 + sparsePenalty * 3.4 +
+        boundsSparsePenalty * 4.0 + readabilityPenalty * 14.0 - targetAreaRatio * 1.9 - averageScale * 0.35;
+}
+
+Rect scaledSlotTarget(const WindowSlot& slot, double scale, const Rect& area, const LayoutConfig& config, double anchorX, double anchorY) {
+    double width = std::max(0.0, slot.natural.width * scale);
+    double height = std::max(0.0, slot.natural.height * scale);
+    const double floor = normalizedMinPreviewShortEdge(config, area);
+    if (floor > 0.0) {
+        width = std::max(width, std::min(floor, area.width));
+        height = std::max(height, std::min(floor, area.height));
+    }
+    width = std::max(width, slot.target.width);
+    height = std::max(height, slot.target.height);
+    anchorX = std::clamp(anchorX, 0.0, 1.0);
+    anchorY = std::clamp(anchorY, 0.0, 1.0);
+    const double fixedX = slot.target.x + slot.target.width * anchorX;
+    const double fixedY = slot.target.y + slot.target.height * anchorY;
+
+    Rect target{
+        std::floor(fixedX - width * anchorX),
+        std::floor(fixedY - height * anchorY),
+        width,
+        height,
+    };
+    clampRectToArea(target, area);
+    return target;
+}
+
+std::vector<Rect> scaledSlotTargets(const WindowSlot& slot, double scale, const Rect& area, const LayoutConfig& config) {
+    const double outwardX = slot.target.centerX() < area.centerX() ? 1.0 : 0.0;
+    const double outwardY = slot.target.centerY() < area.centerY() ? 1.0 : 0.0;
+    const std::array<std::pair<double, double>, 12> anchors{{
+        {0.5, 0.5},
+        {outwardX, 0.5},
+        {0.5, outwardY},
+        {outwardX, outwardY},
+        {0.0, 0.5},
+        {1.0, 0.5},
+        {0.5, 0.0},
+        {0.5, 1.0},
+        {0.0, 0.0},
+        {1.0, 0.0},
+        {0.0, 1.0},
+        {1.0, 1.0},
+    }};
+
+    std::vector<Rect> targets;
+    targets.reserve(anchors.size());
+    for (const auto& [anchorX, anchorY] : anchors) {
+        const Rect target = scaledSlotTarget(slot, scale, area, config, anchorX, anchorY);
+        const auto duplicate = std::find_if(targets.begin(), targets.end(), [&](const Rect& existing) {
+            return std::abs(existing.x - target.x) < 0.5 && std::abs(existing.y - target.y) < 0.5 && std::abs(existing.width - target.width) < 0.5 &&
+                std::abs(existing.height - target.height) < 0.5;
+        });
+        if (duplicate == targets.end())
+            targets.push_back(target);
+    }
+    return targets;
+}
+
+void expandSparseSlots(std::vector<WindowSlot>& slots, const std::vector<PreparedWindow>& prepared, const Rect& area, const LayoutConfig& config) {
+    if (slots.size() < 2)
+        return;
+
+    std::vector<std::size_t> rankOrder;
+    if (config.rankScaleByInputOrder) {
+        rankOrder.reserve(prepared.size());
+        for (const auto& window : prepared) {
+            const auto it = std::find_if(slots.begin(), slots.end(), [&](const WindowSlot& slot) {
+                return slot.index == window.input.index;
+            });
+            if (it != slots.end())
+                rankOrder.push_back(static_cast<std::size_t>(std::distance(slots.begin(), it)));
+        }
+    }
+
+    const double flex = std::clamp(config.naturalScaleFlex, 0.0, 0.25);
+    const double maxExtraScale = std::min(0.38, flex * (config.rankScaleByInputOrder ? 1.45 : 1.75));
+    if (maxExtraScale <= 0.001)
+        return;
+
+    const auto rankCapForSlot = [&](std::size_t slotIndex, const std::vector<WindowSlot>& currentSlots) {
+        double cap = normalizedMaxPreviewScale(config);
+        if (!config.rankScaleByInputOrder)
+            return cap;
+
+        const auto it = std::find(rankOrder.begin(), rankOrder.end(), slotIndex);
+        if (it == rankOrder.end())
+            return cap;
+
+        const auto position = static_cast<std::size_t>(std::distance(rankOrder.begin(), it));
+        if (position > 0)
+            cap = std::min(cap, currentSlots[rankOrder[position - 1]].scale * 0.995);
+        return cap;
+    };
+
+    for (int pass = 0; pass < 5; ++pass) {
+        double bestCost = naturalVisualCost(slots, area, config);
+        std::vector<WindowSlot> bestSlots;
+
+        for (std::size_t i = 0; i < slots.size(); ++i) {
+            const double fitScale = slotFitScale(slots[i].natural, area, config);
+            const double maxScale = std::min(fitScale, rankCapForSlot(i, slots));
+            if (maxScale <= slots[i].scale + 0.001)
+                continue;
+
+            for (const double fraction : {1.0, 0.75, 0.55, 0.35, 0.20}) {
+                const double targetScale = std::min(maxScale, slots[i].scale + maxExtraScale * fraction);
+                if (targetScale <= slots[i].scale + 0.001)
+                    continue;
+
+                for (const auto& target : scaledSlotTargets(slots[i], targetScale, area, config)) {
+                    if (!canPlaceSlotTarget(slots, i, target, area, config))
+                        continue;
+
+                    auto candidate = slots;
+                    candidate[i].target = target;
+                    candidate[i].scale = targetScale;
+                    const double cost = naturalVisualCost(candidate, area, config);
+                    if (cost < bestCost - 0.002) {
+                        bestCost = cost;
+                        bestSlots = std::move(candidate);
+                    }
+                }
+            }
+        }
+
+        if (bestSlots.empty())
+            break;
+        slots = std::move(bestSlots);
+    }
+
+    centerNaturalTargets(slots, area);
 }
 
 std::optional<std::vector<WindowSlot>> computeNaturalLayoutWithProfile(const std::vector<PreparedWindow>& prepared,
@@ -983,16 +1486,38 @@ std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<Pr
     std::optional<std::vector<WindowSlot>> bestSlots;
     double                                 bestCost = std::numeric_limits<double>::infinity();
 
+    const auto consider = [&](std::vector<WindowSlot> candidate, double costBias = 0.0) {
+        if (candidate.empty())
+            return;
+
+        enforceInputOrderScaleGradient(candidate, prepared, area, config);
+        relieveCornerVoids(candidate, area, config);
+        expandSparseSlots(candidate, prepared, area, config);
+        relieveCornerVoids(candidate, area, config);
+        const double cost = naturalVisualCost(candidate, area, config) + costBias;
+        if (!bestSlots || cost < bestCost) {
+            bestCost = cost;
+            bestSlots = std::move(candidate);
+        }
+    };
+
     for (const auto& profile : profiles) {
         auto candidate = computeNaturalLayoutWithProfile(prepared, area, config, profile);
         if (!candidate)
             continue;
 
-        const double cost = naturalVisualCost(*candidate, area);
-        if (!bestSlots || cost < bestCost) {
-            bestCost = cost;
-            bestSlots = std::move(candidate);
-        }
+        consider(std::move(*candidate));
+    }
+
+    if (!config.forceRowGroups && prepared.size() >= 4) {
+        LayoutConfig visualPackConfig = config;
+        visualPackConfig.forceRowGroups = false;
+        visualPackConfig.preserveInputOrder = config.preserveInputOrder;
+        visualPackConfig.layoutSpaceWeight = std::max(visualPackConfig.layoutSpaceWeight, 0.18);
+
+        auto visualPack = computeGridLayout(prepared, area, visualPackConfig);
+        centerNaturalTargets(visualPack, area);
+        consider(std::move(visualPack), -0.08);
     }
 
     return bestSlots;
@@ -1087,10 +1612,11 @@ std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowIn
         return {};
 
     const Rect inner = insetArea(area, config);
-    const auto prepared = prepareWindows(windows, inner, config);
+    auto       prepared = prepareWindows(windows, inner, config);
 
     if (config.engine == LayoutEngine::Natural) {
         const Rect naturalInner = insetNaturalEdgeArea(inner, config);
+        prepared = applyNaturalScaleFlex(std::move(prepared), naturalInner, config);
         if (config.forceRowGroups) {
             if (auto groupedNatural = computeNaturalRowGroupLayout(prepared, naturalInner, config))
                 return *groupedNatural;

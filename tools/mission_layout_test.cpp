@@ -52,6 +52,7 @@ LayoutConfig deterministicConfig() {
     config.smallWindowBoost = 1.0;
     config.maxPreviewScale = 1.0;
     config.minSlotScale = 0.0;
+    config.naturalScaleFlex = 0.0;
     config.preserveInputOrder = true;
     return config;
 }
@@ -328,6 +329,28 @@ int main() {
         ok &= expect(slots.size() == windows.size(), "dense natural requests should fall back without dropping windows");
         for (const auto& slot : slots)
             ok &= expect(rectInside(slot.target, area), "dense fallback should keep targets inside the area");
+    }
+
+    {
+        LayoutConfig config = deterministicConfig();
+        config.engine = LayoutEngine::Natural;
+        config.naturalScaleFlex = 0.16;
+        config.rankScaleByInputOrder = true;
+        config.preserveInputOrder = true;
+        config.rowSpacing = 24.0;
+        config.columnSpacing = 24.0;
+
+        std::vector<WindowInput> windows;
+        for (std::size_t i = 0; i < 6; ++i)
+            windows.push_back({.index = i, .natural = {static_cast<double>(i) * 40.0, 60.0, 360.0, 260.0}, .label = "recent"});
+
+        const Rect area{0, 0, 1300, 760};
+        const auto slots = engine.compute(windows, area, config);
+        ok &= expect(slots.size() == windows.size(), "recent-rank natural scaling should keep all windows");
+        for (std::size_t i = 1; i < slots.size(); ++i)
+            ok &= expect(slots[i - 1].scale > slots[i].scale, "recent-rank natural scaling should decrease scale by input order");
+        for (const auto& slot : slots)
+            ok &= expect(rectInside(slot.target, area), "recent-rank natural scaling should keep targets inside the area");
     }
 
     {
