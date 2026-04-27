@@ -180,7 +180,7 @@ plugin {
         small_window_boost = 1.35
         max_preview_scale = 0.95
         min_slot_scale = 0.10
-        natural_scale_flex = 0.12
+        natural_scale_flex = 0.22
         layout_engine = grid
         layout_scale_weight = 1.0
         layout_space_weight = 0.10
@@ -236,7 +236,7 @@ plugin {
 | `small_window_boost` | float | `1.35` | Weight boost applied to smaller windows during layout. |
 | `max_preview_scale` | float | `0.95` | Maximum preview scale. |
 | `min_slot_scale` | float | `0.10` | Minimum allowed slot scale. |
-| `natural_scale_flex` | float | `0.12` | Natural-engine-only free scale range. Values are clamped to `0.0` - `0.25`; recent-first multi-workspace ordering keeps earlier windows visibly larger by shrinking later previews, while non-ranked natural layouts use a much lighter density-based bias. |
+| `natural_scale_flex` | float | `0.22` | Natural-engine-only free scale range. Values are clamped to `0.0` - `0.25`; recent-first multi-workspace ordering keeps earlier windows visibly larger, while natural layouts may use larger per-window scale differences to fill sparse space. |
 | `layout_engine` | string | `grid` | Geometry solver. `grid` keeps the existing row-search layout; `natural`, `apple`, `expose`, and `mission-control` enable the Apple-like natural solver that tries to preserve original window positions while removing overlap. The natural engine attempts every window count and only uses row-search as an emergency fallback if solving fails. |
 | `layout_scale_weight` | float | `1.0` | Weight of preview scale in the layout scoring pass. |
 | `layout_space_weight` | float | `0.10` | Weight of space utilization in the layout scoring pass. |

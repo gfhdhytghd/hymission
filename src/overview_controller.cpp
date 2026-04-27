@@ -2902,7 +2902,7 @@ LayoutConfig OverviewController::loadLayoutConfig() const {
         .layoutSpaceWeight = getConfigFloat(m_handle, "plugin:hymission:layout_space_weight", 0.10),
         .layoutScaleWeight = getConfigFloat(m_handle, "plugin:hymission:layout_scale_weight", 1.0),
         .minSlotScale = getConfigFloat(m_handle, "plugin:hymission:min_slot_scale", 0.10),
-        .naturalScaleFlex = getConfigFloat(m_handle, "plugin:hymission:natural_scale_flex", 0.12),
+        .naturalScaleFlex = getConfigFloat(m_handle, "plugin:hymission:natural_scale_flex", 0.22),
     };
 }
 

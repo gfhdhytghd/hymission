@@ -49,7 +49,9 @@ struct LayoutMetrics {
     double overlapArea = 0.0;
     double outOfBoundsArea = 0.0;
     double minScale = std::numeric_limits<double>::infinity();
+    double maxScale = 0.0;
     double averageScale = 0.0;
+    double scaleSpread = 0.0;
     double minShortEdge = std::numeric_limits<double>::infinity();
     double averageShortEdge = 0.0;
     double targetAreaRatio = 0.0;
@@ -133,6 +135,10 @@ struct StressSummary {
     MetricSeries heatMax;
     MetricSeries heatStdDev;
     MetricSeries heatImbalance;
+    MetricSeries minScale;
+    MetricSeries maxScale;
+    MetricSeries averageScale;
+    MetricSeries scaleSpread;
     MetricSeries averageMotion;
     MetricSeries maxMotion;
     MetricSeries minShortEdge;
@@ -611,6 +617,7 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
         const double slotArea = slots[i].target.width * slots[i].target.height;
         const double shortEdge = std::min(slots[i].target.width, slots[i].target.height);
         metrics.minScale = std::min(metrics.minScale, slots[i].scale);
+        metrics.maxScale = std::max(metrics.maxScale, slots[i].scale);
         metrics.averageScale += slots[i].scale;
         metrics.minShortEdge = std::min(metrics.minShortEdge, shortEdge);
         metrics.averageShortEdge += shortEdge;
@@ -648,6 +655,7 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
 
     if (!slots.empty()) {
         metrics.averageScale /= static_cast<double>(slots.size());
+        metrics.scaleSpread = metrics.maxScale - metrics.minScale;
         metrics.averageShortEdge /= static_cast<double>(slots.size());
         metrics.averageMotion /= static_cast<double>(slots.size());
         metrics.minEdgeMargin = std::min({metrics.edgeMarginLeft, metrics.edgeMarginRight, metrics.edgeMarginTop, metrics.edgeMarginBottom});
@@ -685,6 +693,8 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
         metrics.maxNearestGapRatio = metrics.maxNearestGap / gapBasis;
     } else {
         metrics.minScale = 0.0;
+        metrics.maxScale = 0.0;
+        metrics.scaleSpread = 0.0;
         metrics.minShortEdge = 0.0;
         metrics.edgeMarginLeft = 0.0;
         metrics.edgeMarginRight = 0.0;
@@ -958,6 +968,10 @@ void recordStressMetrics(StressSummary& summary, const LayoutMetrics& metrics) {
     recordMetric(summary.heatMax, metrics.heatMax);
     recordMetric(summary.heatStdDev, metrics.heatStdDev);
     recordMetric(summary.heatImbalance, metrics.heatImbalance);
+    recordMetric(summary.minScale, metrics.minScale);
+    recordMetric(summary.maxScale, metrics.maxScale);
+    recordMetric(summary.averageScale, metrics.averageScale);
+    recordMetric(summary.scaleSpread, metrics.scaleSpread);
     recordMetric(summary.averageMotion, metrics.averageMotion);
     recordMetric(summary.maxMotion, metrics.maxMotion);
     recordMetric(summary.minShortEdge, metrics.minShortEdge);
@@ -1036,6 +1050,10 @@ void printStressSummary(const StressSummary& summary) {
     printMetricSeries("heatMax", summary.heatMax);
     printMetricSeries("heatStdDev", summary.heatStdDev);
     printMetricSeries("heatImbalance", summary.heatImbalance);
+    printMetricSeries("minScale", summary.minScale);
+    printMetricSeries("maxScale", summary.maxScale);
+    printMetricSeries("averageScale", summary.averageScale);
+    printMetricSeries("scaleSpread", summary.scaleSpread);
     printMetricSeries("averageMotion", summary.averageMotion);
     printMetricSeries("maxMotion", summary.maxMotion);
     printMetricSeries("minShortEdge", summary.minShortEdge);
@@ -1179,7 +1197,9 @@ void printMetrics(const LayoutMetrics& metrics) {
               << " overlapArea=" << metrics.overlapArea
               << " outOfBoundsArea=" << metrics.outOfBoundsArea
               << " minScale=" << std::setprecision(3) << metrics.minScale
+              << " maxScale=" << metrics.maxScale
               << " averageScale=" << metrics.averageScale
+              << " scaleSpread=" << metrics.scaleSpread
               << " minShortEdge=" << std::setprecision(1) << metrics.minShortEdge
               << " averageShortEdge=" << metrics.averageShortEdge
               << " edgeMargins(l/r/t/b)=" << metrics.edgeMarginLeft << "/" << metrics.edgeMarginRight << "/" << metrics.edgeMarginTop << "/" << metrics.edgeMarginBottom
