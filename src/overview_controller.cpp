@@ -10354,4 +10354,30 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     return state;
 }
 
+void OverviewController::setDamageTrackingOverride(bool disable) {
+    const auto* value = HyprlandAPI::getConfigValue(m_handle, "debug:damage_tracking");
+    if (!value) return;
+
+    const auto* data = reinterpret_cast<Hyprlang::INT* const*>(value->getDataStaticPtr());
+    if (!data || !*data) return;
+
+    if (disable) {
+        if (m_damageTrackingOverridden) return;
+
+        m_damageTrackingBackup = static_cast<long>(**data);
+        if (m_damageTrackingBackup == 0) return;
+
+        const auto err = g_pConfigManager->parseKeyword("debug:damage_tracking", "0");
+        if (!err.empty()) return;
+
+        m_damageTrackingOverridden = true;
+        return;
+    }
+
+    if (!m_damageTrackingOverridden) return;
+
+    g_pConfigManager->parseKeyword("debug:damage_tracking", std::to_string(m_damageTrackingBackup));
+    m_damageTrackingOverridden = false;
+}
+
 } // namespace hymission
