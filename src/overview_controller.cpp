@@ -1610,6 +1610,7 @@ OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
 }
 
 OverviewController::~OverviewController() {
+    setDamageTrackingOverride(false);
     destroyGaussianBlurPipeline();
     clearToggleSwitchReleasePollTimer();
     clearRegisteredTrackpadGestures();
@@ -7512,6 +7513,7 @@ CRegion OverviewController::transformRegionForWindow(const PHLWINDOW& window, co
 }
 
 void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope) {
+    setDamageTrackingOverride(true);
     setAnimationsEnabledOverride(false);
     clearToggleSwitchSession();
 
@@ -7820,6 +7822,7 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
 }
 
 void OverviewController::deactivate() {
+    setDamageTrackingOverride(false);
     const auto monitor = m_state.ownerMonitor;
     const auto ownedMonitors = m_state.participatingMonitors;
     const auto fullscreenActiveOriginal = m_fullscreenActiveOriginal;
