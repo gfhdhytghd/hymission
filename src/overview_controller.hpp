@@ -726,6 +726,10 @@ class OverviewController {
     CHyprSignalListener       m_workspaceActiveListener;
     CHyprSignalListener       m_monitorRemovedListener;
     CHyprSignalListener       m_monitorFocusedListener;
+
+    void                      setDamageTrackingOverride(bool disable);
+    bool                      m_damageTrackingOverridden = false;
+    long                      m_damageTrackingBackup = 2; // Default hyprland value
 };
 
 } // namespace hymission
