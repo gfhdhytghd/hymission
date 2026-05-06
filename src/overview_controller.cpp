@@ -6555,6 +6555,9 @@ void OverviewController::commitOverviewExitFocus(const PHLWINDOW& window) {
     if (!alreadyFocused)
         focusWindowCompat(window, false, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
 
+    if (window->m_isFloating)
+        g_pCompositor->changeWindowZOrder(window, true);
+
     recordWindowActivation(window, true);
     (void)syncScrollingWorkspaceSpotOnWindow(window);
 
