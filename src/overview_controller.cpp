@@ -215,9 +215,65 @@ std::string getConfigString(HANDLE handle, const char* name, std::string fallbac
     return fallback;
 }
 
+std::string luaStringLiteral(const std::string& value) {
+    std::string out = "\"";
+    for (const char ch : value) {
+        if (ch == '\\' || ch == '"')
+            out += '\\';
+        out += ch;
+    }
+    out += '"';
+    return out;
+}
+
+std::string luaConfigExpression(const std::string& name, const std::string& value) {
+    std::vector<std::string> parts;
+    std::string              current;
+    for (const char ch : name) {
+        if (ch == ':' || ch == '.') {
+            if (!current.empty()) {
+                parts.push_back(current);
+                current.clear();
+            }
+            continue;
+        }
+
+        current += ch;
+    }
+
+    if (!current.empty())
+        parts.push_back(current);
+
+    if (parts.empty())
+        return {};
+
+    std::string expression = "hl.config({";
+    for (std::size_t i = 0; i + 1 < parts.size(); ++i)
+        expression += "[" + luaStringLiteral(parts[i]) + "] = {";
+
+    expression += "[" + luaStringLiteral(parts.back()) + "] = " + value;
+
+    for (std::size_t i = 0; i < parts.size(); ++i)
+        expression += "}";
+
+    expression += ")";
+    return expression;
+}
+
 std::string setConfigKeyword(const std::string& name, const std::string& value) {
     const auto result = HyprlandAPI::invokeHyprctlCommand("keyword", name + " " + value);
-    return result == "ok" ? std::string{} : result;
+    if (result == "ok")
+        return {};
+
+    if (result != "keyword can't work with non-legacy parsers. Use eval.")
+        return result;
+
+    const auto expression = luaConfigExpression(name, value);
+    if (expression.empty())
+        return result;
+
+    const auto evalResult = HyprlandAPI::invokeHyprctlCommand("eval", expression);
+    return evalResult == "ok" ? std::string{} : evalResult;
 }
 
 std::optional<uint32_t> parseSwitchReleaseKeycode(const std::string& value) {
