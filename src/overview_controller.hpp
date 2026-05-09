@@ -93,7 +93,7 @@ class OverviewController {
     [[nodiscard]] SDispatchResult focusWorkspaceOnCurrentMonitorDispatcherHook(std::string args);
     bool                surfaceNeedsLiveBlurHook(void* surfacePassThisptr);
     bool                surfaceNeedsPrecomputeBlurHook(void* surfacePassThisptr);
-    void                surfaceDrawHook(void* surfacePassThisptr, const CRegion& damage);
+    std::vector<UP<IPassElement>> surfaceDrawHook(void* surfacePassThisptr);
     CBox                surfaceTexBoxHook(void* surfacePassThisptr);
     std::optional<CBox> surfaceBoundingBoxHook(void* surfacePassThisptr);
     CRegion             surfaceOpaqueRegionHook(void* surfacePassThisptr);
@@ -360,7 +360,7 @@ class OverviewController {
     using SurfaceBoundingBoxFn = std::optional<CBox> (*)(void*);
     using SurfaceOpaqueRegionFn = CRegion (*)(void*);
     using SurfaceVisibleRegionFn = CRegion (*)(void*, bool&);
-    using SurfaceDrawFn = void (*)(void*, const CRegion&);
+    using SurfaceDrawFn = std::vector<UP<IPassElement>> (*)(void*);
     using SurfaceBlurNeedsFn = bool (*)(void*);
     using ShouldRenderWindowFn = bool (*)(void*, PHLWINDOW, PHLMONITOR);
     using RenderLayerFn = void (*)(void*, PHLLS, PHLMONITOR, const Time::steady_tp&, bool, bool);

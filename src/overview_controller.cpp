@@ -1480,6 +1480,10 @@ CSurfacePassElement::SRenderData* surfaceRenderDataMutable(void* surfacePassThis
     if (!surfacePassThisptr)
         return nullptr;
 
+    auto* passElement = reinterpret_cast<IPassElement*>(surfacePassThisptr);
+    if (passElement->type() != EK_SURFACE)
+        return nullptr;
+
     return &reinterpret_cast<CSurfacePassElement*>(surfacePassThisptr)->m_data;
 }
 
@@ -1534,11 +1538,11 @@ void hkCalculateUVForSurface(void* rendererThisptr, PHLWINDOW window, SP<CWLSurf
     g_controller->calculateUVForSurfaceHook(window, std::move(surface), monitor, main, projSize, projSizeUnscaled, fixMisalignedFSV1);
 }
 
-void hkSurfaceDraw(void* surfacePassThisptr, const CRegion& damage) {
+std::vector<UP<IPassElement>> hkSurfaceDraw(void* surfacePassThisptr) {
     if (!g_controller)
-        return;
+        return {};
 
-    g_controller->surfaceDrawHook(surfacePassThisptr, damage);
+    return g_controller->surfaceDrawHook(surfacePassThisptr);
 }
 
 bool hkSurfaceNeedsLiveBlur(void* surfacePassThisptr) {
@@ -2726,28 +2730,27 @@ void OverviewController::dispatcherGestureEndHook(void* gestureThisptr, const IT
     endScrollGesture(e.swipe ? e.swipe->cancelled : true);
 }
 
-void OverviewController::surfaceDrawHook(void* surfacePassThisptr, const CRegion& damage) {
+std::vector<UP<IPassElement>> OverviewController::surfaceDrawHook(void* surfacePassThisptr) {
     if (!m_surfaceDrawOriginal) {
-        return;
+        return {};
     }
 
     if (m_surfaceRenderDataTransformDepth > 0) {
-        m_surfaceDrawOriginal(surfacePassThisptr, damage);
-        return;
+        return m_surfaceDrawOriginal(surfacePassThisptr);
     }
 
     CSurfacePassElement::SRenderData* renderData = nullptr;
     PHLMONITOR                        monitor;
     SurfaceRenderDataSnapshot        snapshot;
     if (!prepareSurfaceRenderData(surfacePassThisptr, "draw", renderData, monitor, snapshot)) {
-        m_surfaceDrawOriginal(surfacePassThisptr, damage);
-        return;
+        return m_surfaceDrawOriginal(surfacePassThisptr);
     }
 
     ++m_surfaceRenderDataTransformDepth;
-    m_surfaceDrawOriginal(surfacePassThisptr, damage);
+    auto result = m_surfaceDrawOriginal(surfacePassThisptr);
     --m_surfaceRenderDataTransformDepth;
     restoreSurfaceRenderData(renderData, snapshot);
+    return result;
 }
 
 bool OverviewController::surfaceNeedsLiveBlurHook(void* surfacePassThisptr) {
@@ -4910,7 +4913,7 @@ bool OverviewController::installHooks() {
         return false;
     }
 
-    if (!hookFunction("draw", "CSurfacePassElement::draw(", m_surfaceDrawHook, reinterpret_cast<void*>(&hkSurfaceDraw))) {
+    if (!hookFunction("draw", "IPassElement::draw(", m_surfaceDrawHook, reinterpret_cast<void*>(&hkSurfaceDraw))) {
         notify("[hymission] failed to hook surface draw", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         return false;
     }
@@ -5159,7 +5162,7 @@ void* OverviewController::findFunction(const std::string& symbolName, const std:
     if (it != matches.end())
         return it->address;
 
-    return matches.empty() ? nullptr : matches.front().address;
+    return nullptr;
 }
 
 bool OverviewController::isAnimating() const {
