@@ -441,7 +441,9 @@ class OverviewController {
     [[nodiscard]] bool         activateHooks();
     void                       deactivateHooks();
     [[nodiscard]] bool         hookFunction(const std::string& symbolName, const std::string& demangledNeedle, CFunctionHook*& hook, void* destination);
+    [[nodiscard]] bool         hookFunction(const std::string& symbolName, const std::vector<std::string>& demangledNeedles, CFunctionHook*& hook, void* destination);
     [[nodiscard]] void*        findFunction(const std::string& symbolName, const std::string& demangledNeedle) const;
+    [[nodiscard]] void*        findFunction(const std::string& symbolName, const std::vector<std::string>& demangledNeedles) const;
     [[nodiscard]] bool         wrapDispatcher(const std::string& name, DispatcherHandler& original, DispatcherHandler replacement);
     void                       restoreWrappedDispatchers();
 

@@ -4885,13 +4885,16 @@ bool OverviewController::installHooks() {
     }
 
     if (!hookFunction("shouldRenderWindow",
-                      "CHyprRenderer::shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<CMonitor>)",
+                      std::vector<std::string>{
+                          "IHyprRenderer::shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<CMonitor>)",
+                          "CHyprRenderer::shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<CMonitor>)"},
                       m_shouldRenderWindowHook, reinterpret_cast<void*>(&hkShouldRenderWindow))) {
         notify("[hymission] failed to hook shouldRenderWindow(window, monitor)", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         return false;
     }
 
-    (void)hookFunction("renderLayer", "CHyprRenderer::renderLayer(", m_renderLayerHook, reinterpret_cast<void*>(&hkRenderLayer));
+    (void)hookFunction("renderLayer", std::vector<std::string>{"IHyprRenderer::renderLayer(", "CHyprRenderer::renderLayer("}, m_renderLayerHook,
+                       reinterpret_cast<void*>(&hkRenderLayer));
 
     if (!hookFunction("getTexBox", "CSurfacePassElement::getTexBox(", m_surfaceTexBoxHook, reinterpret_cast<void*>(&hkSurfaceTexBox))) {
         notify("[hymission] failed to hook getTexBox", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
@@ -4939,7 +4942,9 @@ bool OverviewController::installHooks() {
         return false;
     }
 
-    if (!hookFunction("calculateUVForSurface", "CHyprRenderer::calculateUVForSurface(", m_calculateUVForSurfaceHook, reinterpret_cast<void*>(&hkCalculateUVForSurface))) {
+    if (!hookFunction("calculateUVForSurface",
+                      std::vector<std::string>{"IElementRenderer::calculateUVForSurface(", "CHyprRenderer::calculateUVForSurface("},
+                      m_calculateUVForSurfaceHook, reinterpret_cast<void*>(&hkCalculateUVForSurface))) {
         notify("[hymission] failed to hook calculateUVForSurface", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         return false;
     }
@@ -5111,7 +5116,11 @@ void OverviewController::deactivateHooks() {
 }
 
 bool OverviewController::hookFunction(const std::string& symbolName, const std::string& demangledNeedle, CFunctionHook*& hook, void* destination) {
-    void* source = findFunction(symbolName, demangledNeedle);
+    return hookFunction(symbolName, std::vector<std::string>{demangledNeedle}, hook, destination);
+}
+
+bool OverviewController::hookFunction(const std::string& symbolName, const std::vector<std::string>& demangledNeedles, CFunctionHook*& hook, void* destination) {
+    void* source = findFunction(symbolName, demangledNeedles);
     if (!source)
         return false;
 
@@ -5154,13 +5163,19 @@ void OverviewController::restoreWrappedDispatchers() {
 }
 
 void* OverviewController::findFunction(const std::string& symbolName, const std::string& demangledNeedle) const {
-    const auto matches = HyprlandAPI::findFunctionsByName(m_handle, symbolName);
-    const auto it = std::find_if(matches.begin(), matches.end(), [&](const SFunctionMatch& match) {
-        return match.demangled.find(demangledNeedle) != std::string::npos;
-    });
+    return findFunction(symbolName, std::vector<std::string>{demangledNeedle});
+}
 
-    if (it != matches.end())
-        return it->address;
+void* OverviewController::findFunction(const std::string& symbolName, const std::vector<std::string>& demangledNeedles) const {
+    const auto matches = HyprlandAPI::findFunctionsByName(m_handle, symbolName);
+    for (const auto& demangledNeedle : demangledNeedles) {
+        const auto it = std::find_if(matches.begin(), matches.end(), [&](const SFunctionMatch& match) {
+            return match.demangled.find(demangledNeedle) != std::string::npos;
+        });
+
+        if (it != matches.end())
+            return it->address;
+    }
 
     return nullptr;
 }
