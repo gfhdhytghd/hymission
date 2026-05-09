@@ -7,8 +7,11 @@
 #include <hyprland/src/config/values/types/IntValue.hpp>
 #include <hyprland/src/config/values/types/StringValue.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
+
+extern "C" {
 #include <lauxlib.h>
 #include <lua.h>
+}
 
 #include "overview_controller.hpp"
 

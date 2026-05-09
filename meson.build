@@ -36,6 +36,7 @@ src = [
 shared_module(meson.project_name(), src,
   dependencies: [
     dependency('hyprland'),
+    dependency('lua'),
   ],
   install: true,
 )
