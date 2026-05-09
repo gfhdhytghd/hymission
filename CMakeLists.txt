@@ -26,6 +26,7 @@ endif()
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(HYPR_DEPS REQUIRED hyprland)
+pkg_check_modules(LUA REQUIRED lua)
 
 add_library(hymission SHARED
   src/main.cpp
@@ -34,9 +35,9 @@ add_library(hymission SHARED
   src/overview_controller.cpp
 )
 
-target_include_directories(hymission PRIVATE ${HYPR_DEPS_INCLUDE_DIRS})
-target_link_directories(hymission PRIVATE ${HYPR_DEPS_LIBRARY_DIRS})
-target_link_libraries(hymission PRIVATE ${HYPR_DEPS_LIBRARIES})
+target_include_directories(hymission PRIVATE ${HYPR_DEPS_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS})
+target_link_directories(hymission PRIVATE ${HYPR_DEPS_LIBRARY_DIRS} ${LUA_LIBRARY_DIRS})
+target_link_libraries(hymission PRIVATE ${HYPR_DEPS_LIBRARIES} ${LUA_LIBRARIES})
 
 add_executable(hymission-layout-demo
   tools/layout_demo.cpp

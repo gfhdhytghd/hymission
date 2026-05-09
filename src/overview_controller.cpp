@@ -3567,33 +3567,37 @@ void OverviewController::rememberRegisteredTrackpadGesture(const GestureRegistra
 }
 
 std::optional<std::string> OverviewController::handleGestureConfigHook(const std::string& keyword, const std::string& value) {
-    if (!m_handleGestureOriginal)
-        return {};
+    const auto fallbackToHyprlandGesture = [&]() -> std::optional<std::string> {
+        if (!m_handleGestureOriginal)
+            return {};
+
+        return m_handleGestureOriginal(Config::mgr().get(), keyword, value);
+    };
 
     const std::string trimmedKeyword = trimCopy(keyword);
     if (!trimmedKeyword.starts_with("gesture"))
-        return m_handleGestureOriginal(Config::mgr().get(), keyword, value);
+        return fallbackToHyprlandGesture();
 
     const std::string flags = trimmedKeyword.substr(std::string("gesture").size());
     if (flags.find_first_not_of("p") != std::string::npos)
-        return m_handleGestureOriginal(Config::mgr().get(), keyword, value);
+        return fallbackToHyprlandGesture();
 
     const auto tokens = splitCommaTokens(value);
     if (tokens.size() < 3)
-        return m_handleGestureOriginal(Config::mgr().get(), keyword, value);
+        return fallbackToHyprlandGesture();
 
     std::size_t fingerCount = 0;
     try {
         fingerCount = static_cast<std::size_t>(std::stoul(tokens[0]));
     } catch (const std::exception&) {
-        return m_handleGestureOriginal(Config::mgr().get(), keyword, value);
+        return fallbackToHyprlandGesture();
     }
 
     const auto direction = g_pTrackpadGestures->dirForString(tokens[1]);
     const bool axisDirection = direction == TRACKPAD_GESTURE_DIR_VERTICAL || direction == TRACKPAD_GESTURE_DIR_HORIZONTAL;
     const bool scrollDirection = axisDirection || direction == TRACKPAD_GESTURE_DIR_SWIPE;
     if (!scrollDirection)
-        return m_handleGestureOriginal(Config::mgr().get(), keyword, value);
+        return fallbackToHyprlandGesture();
 
     uint32_t    modMask = 0;
     float       deltaScale = 1.0F;
@@ -3619,7 +3623,7 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
     }
 
     if (actionIndex >= tokens.size())
-        return m_handleGestureOriginal(Config::mgr().get(), keyword, value);
+        return fallbackToHyprlandGesture();
 
     if (axisDirection && tokens[actionIndex] == "workspace" && actionIndex + 1 == tokens.size()) {
         const bool disableInhibit = flags.contains('p');
@@ -3649,10 +3653,10 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
     }
 
     if (tokens[actionIndex] != "dispatcher")
-        return m_handleGestureOriginal(Config::mgr().get(), keyword, value);
+        return fallbackToHyprlandGesture();
 
     if (actionIndex + 1 >= tokens.size())
-        return m_handleGestureOriginal(Config::mgr().get(), keyword, value);
+        return fallbackToHyprlandGesture();
 
     const std::string dispatcher = tokens[actionIndex + 1];
     const std::string dispatcherArgs = joinTokens(tokens, actionIndex + 2);
@@ -3691,7 +3695,7 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
     }
 
     if (!axisDirection)
-        return m_handleGestureOriginal(Config::mgr().get(), keyword, value);
+        return fallbackToHyprlandGesture();
 
     GestureDispatcherKind dispatcherKind;
     if (dispatcher == "hymission:toggle") {
@@ -3699,7 +3703,7 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
     } else if (dispatcher == "hymission:open") {
         dispatcherKind = GestureDispatcherKind::Open;
     } else {
-        return m_handleGestureOriginal(Config::mgr().get(), keyword, value);
+        return fallbackToHyprlandGesture();
     }
 
     bool         recommand = false;

@@ -1,10 +1,13 @@
 #include <memory>
+#include <sstream>
 #include <string>
 
 #include <hyprland/src/config/values/types/FloatValue.hpp>
 #include <hyprland/src/config/values/types/IntValue.hpp>
 #include <hyprland/src/config/values/types/StringValue.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
+#include <lauxlib.h>
+#include <lua.h>
 
 #include "overview_controller.hpp"
 
@@ -52,6 +55,190 @@ SDispatchResult dispatchClose(const std::string&) {
 
 SDispatchResult dispatchDebugCurrentLayout(const std::string&) {
     return g_overviewController ? g_overviewController->debugCurrentLayout() : SDispatchResult{.success = false, .error = "overview controller unavailable"};
+}
+
+int luaDispatchResult(lua_State* L, const SDispatchResult& result) {
+    if (result.success)
+        return 0;
+
+    lua_pushstring(L, result.error.empty() ? "hymission function failed" : result.error.c_str());
+    return lua_error(L);
+}
+
+std::string luaOptionalString(lua_State* L, int index) {
+    if (lua_gettop(L) < index || lua_isnil(L, index))
+        return {};
+
+    return luaL_checkstring(L, index);
+}
+
+std::string luaTableStringField(lua_State* L, const char* field, const std::string& fallback = {}) {
+    lua_getfield(L, 1, field);
+    std::string result = fallback;
+    if (!lua_isnil(L, -1))
+        result = luaL_checkstring(L, -1);
+    lua_pop(L, 1);
+    return result;
+}
+
+std::string luaRequiredTableStringField(lua_State* L, const char* field) {
+    lua_getfield(L, 1, field);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        luaL_error(L, "hl.plugin.hymission.gesture: missing field \"%s\"", field);
+        return {};
+    }
+
+    std::string result = luaL_checkstring(L, -1);
+    lua_pop(L, 1);
+    return result;
+}
+
+int luaRequiredTableIntegerField(lua_State* L, const char* field) {
+    lua_getfield(L, 1, field);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        luaL_error(L, "hl.plugin.hymission.gesture: missing field \"%s\"", field);
+        return 0;
+    }
+
+    const int result = static_cast<int>(luaL_checkinteger(L, -1));
+    lua_pop(L, 1);
+    return result;
+}
+
+bool luaTableBoolField(lua_State* L, const char* field, bool fallback = false) {
+    lua_getfield(L, 1, field);
+    const bool result = lua_isnil(L, -1) ? fallback : lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    return result;
+}
+
+bool luaTableHasField(lua_State* L, const char* field) {
+    lua_getfield(L, 1, field);
+    const bool result = !lua_isnil(L, -1);
+    lua_pop(L, 1);
+    return result;
+}
+
+std::string normalizeHymissionDispatcher(std::string dispatcher) {
+    if (dispatcher == "toggle" || dispatcher == "hymission.toggle")
+        return "hymission:toggle";
+    if (dispatcher == "open" || dispatcher == "hymission.open")
+        return "hymission:open";
+    if (dispatcher == "close" || dispatcher == "hymission.close")
+        return "hymission:close";
+    if (dispatcher == "debug_current_layout" || dispatcher == "debugCurrentLayout" || dispatcher == "hymission.debug_current_layout" ||
+        dispatcher == "hymission.debugCurrentLayout")
+        return "hymission:debug_current_layout";
+    if (dispatcher == "scroll" || dispatcher == "hymission.scroll")
+        return "hymission:scroll";
+    return dispatcher;
+}
+
+int luaToggle(lua_State* L) {
+    return luaDispatchResult(L, dispatchToggle(luaOptionalString(L, 1)));
+}
+
+int luaOpen(lua_State* L) {
+    return luaDispatchResult(L, dispatchOpen(luaOptionalString(L, 1)));
+}
+
+int luaClose(lua_State* L) {
+    return luaDispatchResult(L, dispatchClose(""));
+}
+
+int luaDebugCurrentLayout(lua_State* L) {
+    return luaDispatchResult(L, dispatchDebugCurrentLayout(""));
+}
+
+int luaDispatch(lua_State* L) {
+    const std::string dispatcher = normalizeHymissionDispatcher(luaL_checkstring(L, 1));
+    const std::string args       = luaOptionalString(L, 2);
+
+    if (dispatcher == "hymission:toggle")
+        return luaDispatchResult(L, dispatchToggle(args));
+    if (dispatcher == "hymission:open")
+        return luaDispatchResult(L, dispatchOpen(args));
+    if (dispatcher == "hymission:close")
+        return luaDispatchResult(L, dispatchClose(args));
+    if (dispatcher == "hymission:debug_current_layout")
+        return luaDispatchResult(L, dispatchDebugCurrentLayout(args));
+
+    lua_pushstring(L, ("unknown hymission dispatcher: " + dispatcher).c_str());
+    return lua_error(L);
+}
+
+std::string luaGestureValueFromTable(lua_State* L) {
+    const int         fingers = luaRequiredTableIntegerField(L, "fingers");
+    const std::string direction = luaRequiredTableStringField(L, "direction");
+
+    std::string action = luaTableStringField(L, "dispatcher");
+    if (action.empty())
+        action = luaRequiredTableStringField(L, "action");
+
+    std::ostringstream value;
+    value << fingers << ", " << direction;
+
+    const std::string mods = luaTableStringField(L, "mods", luaTableStringField(L, "mod"));
+    if (!mods.empty())
+        value << ", mod:" << mods;
+
+    if (luaTableHasField(L, "scale")) {
+        lua_getfield(L, 1, "scale");
+        value << ", scale:" << luaL_checknumber(L, -1);
+        lua_pop(L, 1);
+    }
+
+    if (action == "workspace") {
+        value << ", workspace";
+        return value.str();
+    }
+
+    const std::string dispatcher = normalizeHymissionDispatcher(action);
+    std::string       args       = luaTableStringField(L, "args");
+    if (args.empty())
+        args = luaTableStringField(L, "scope");
+    if (args.empty())
+        args = luaTableStringField(L, "mode");
+    if (args.empty() && (luaTableBoolField(L, "recommand") || luaTableBoolField(L, "recommend")))
+        args = "recommand";
+    if (args.empty() && dispatcher == "hymission:scroll")
+        args = "layout";
+
+    value << ", dispatcher, " << dispatcher;
+    if (!args.empty())
+        value << "," << args;
+
+    return value.str();
+}
+
+int luaGesture(lua_State* L) {
+    std::string keyword = "gesture";
+    std::string value;
+
+    if (lua_istable(L, 1)) {
+        if (luaTableBoolField(L, "disable_inhibit") || luaTableBoolField(L, "disableInhibit"))
+            keyword = "gesturep";
+        value = luaGestureValueFromTable(L);
+    } else {
+        value = luaL_checkstring(L, 1);
+        if (lua_gettop(L) >= 2 && lua_isboolean(L, 2) && lua_toboolean(L, 2))
+            keyword = "gesturep";
+    }
+
+    if (!g_overviewController) {
+        lua_pushstring(L, "overview controller unavailable");
+        return lua_error(L);
+    }
+
+    const auto error = g_overviewController->handleGestureConfigHook(keyword, value);
+    if (error) {
+        lua_pushstring(L, error->empty() ? "failed to register hymission gesture" : error->c_str());
+        return lua_error(L);
+    }
+
+    return 0;
 }
 } // namespace
 
@@ -129,6 +316,23 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     registerDispatcher("hymission:open", dispatchOpen);
     registerDispatcher("hymission:close", dispatchClose);
     registerDispatcher("hymission:debug_current_layout", dispatchDebugCurrentLayout);
+
+    const auto registerLuaFunction = [&](const char* name, PLUGIN_LUA_FN fn) {
+        if (!HyprlandAPI::addLuaFunction(g_pluginHandle, "hymission", name, fn)) {
+            HyprlandAPI::addNotification(
+                g_pluginHandle,
+                std::string("[hymission] failed to register lua function hl.plugin.hymission.") + name,
+                CHyprColor(1.0, 0.2, 0.2, 1.0),
+                5000);
+        }
+    };
+
+    registerLuaFunction("toggle", luaToggle);
+    registerLuaFunction("open", luaOpen);
+    registerLuaFunction("close", luaClose);
+    registerLuaFunction("debug_current_layout", luaDebugCurrentLayout);
+    registerLuaFunction("dispatch", luaDispatch);
+    registerLuaFunction("gesture", luaGesture);
 
     if (!HyprlandAPI::reloadConfig()) {
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] reloadConfig failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);

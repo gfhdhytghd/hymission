@@ -134,6 +134,32 @@ switch_release_key = Super_L
 
 `hymission:open`, `hymission:close`, and gesture paths keep their normal behavior. Toggle switch mode is meant for modifier-backed `hymission:toggle` bindings such as `ALT+TAB` / `SUPER+TAB`.
 
+### Lua dispatchers
+
+When using Hyprland's Lua config, Hymission exposes native plugin functions under `hl.plugin.hymission`:
+
+```lua
+hl.bind("SUPER + TAB", hl.plugin.hymission.toggle)
+hl.bind("SUPER + A", function()
+    hl.plugin.hymission.toggle("forceall")
+end)
+hl.bind("SUPER + S", function()
+    hl.plugin.hymission.open("onlycurrentworkspace")
+end)
+hl.bind("SUPER + Escape", hl.plugin.hymission.close)
+```
+
+Available functions:
+
+- `hl.plugin.hymission.toggle(args?)`
+- `hl.plugin.hymission.open(args?)`
+- `hl.plugin.hymission.close()`
+- `hl.plugin.hymission.debug_current_layout()`
+- `hl.plugin.hymission.dispatch(name, args?)`
+- `hl.plugin.hymission.gesture(table|string, disable_inhibit?)`
+
+`toggle` and `open` accept the same optional scope arguments as the legacy dispatchers: `forceall` and `onlycurrentworkspace`.
+
 ### Gestures
 
 `hymission` only hooks the official Hyprland dispatcher gesture form:
@@ -145,6 +171,46 @@ gesture = 4, vertical, dispatcher, hymission:open,onlycurrentworkspace
 gesture = 3, horizontal, dispatcher, hymission:scroll,layout
 gesture = 3, vertical, workspace
 ```
+
+Lua config should register Hymission gestures through `hl.plugin.hymission.gesture(...)` instead of `hl.gesture({ action = function() ... end })` when you want continuous overview progress:
+
+```lua
+hl.plugin.hymission.gesture({
+    fingers = 4,
+    direction = "vertical",
+    action = "toggle",
+    args = "forceall",
+})
+
+hl.plugin.hymission.gesture({
+    fingers = 4,
+    direction = "vertical",
+    action = "toggle",
+    recommand = true,
+})
+
+hl.plugin.hymission.gesture({
+    fingers = 4,
+    direction = "vertical",
+    action = "open",
+    scope = "onlycurrentworkspace",
+})
+
+hl.plugin.hymission.gesture({
+    fingers = 3,
+    direction = "horizontal",
+    action = "scroll",
+    mode = "layout",
+})
+
+hl.plugin.hymission.gesture({
+    fingers = 3,
+    direction = "vertical",
+    action = "workspace",
+})
+```
+
+Optional gesture fields are `mods`, `scale`, and `disable_inhibit`.
 
 Gesture notes:
 
