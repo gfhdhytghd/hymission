@@ -135,6 +135,8 @@ std::string normalizeHymissionDispatcher(std::string dispatcher) {
     if (dispatcher == "debug_current_layout" || dispatcher == "debugCurrentLayout" || dispatcher == "hymission.debug_current_layout" ||
         dispatcher == "hymission.debugCurrentLayout")
         return "hymission:debug_current_layout";
+    if (dispatcher == "scroll" || dispatcher == "hymission.scroll")
+        return "hymission:scroll";
     return dispatcher;
 }
 
@@ -205,6 +207,9 @@ std::string luaGestureValueFromTable(lua_State* L) {
         args = luaTableStringField(L, "mode");
     if (args.empty() && (luaTableBoolField(L, "recommand") || luaTableBoolField(L, "recommend")))
         args = "recommand";
+    if (args.empty() && dispatcher == "hymission:scroll")
+        args = "layout";
+
     value << ", dispatcher, " << dispatcher;
     if (!args.empty())
         value << "," << args;
@@ -270,6 +275,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("overview_focus_follows_mouse", 1);
     INT_CONF("multi_workspace_sort_recent_first", 1);
     INT_CONF("niri_mode", 0);
+    FLOAT_CONF("niri_scroll_pixels_per_delta", 1.0F);
     FLOAT_CONF("niri_workspace_scale", 1.0F);
     INT_CONF("gesture_invert_vertical", 0);
     INT_CONF("one_workspace_per_row", 0);

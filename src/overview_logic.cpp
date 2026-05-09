@@ -237,6 +237,49 @@ WorkspaceStripEmptyMode parseWorkspaceStripEmptyMode(std::string_view value) {
     return WorkspaceStripEmptyMode::Existing;
 }
 
+std::optional<HymissionScrollMode> parseHymissionScrollMode(std::string_view value) {
+    value = trimAsciiWhitespace(value);
+
+    if (equalsAsciiInsensitive(value, "layout"))
+        return HymissionScrollMode::Layout;
+
+    return std::nullopt;
+}
+
+ScrollingLayoutDirection parseScrollingLayoutDirection(std::string_view value) {
+    value = trimAsciiWhitespace(value);
+
+    if (equalsAsciiInsensitive(value, "left"))
+        return ScrollingLayoutDirection::Left;
+    if (equalsAsciiInsensitive(value, "down"))
+        return ScrollingLayoutDirection::Down;
+    if (equalsAsciiInsensitive(value, "up"))
+        return ScrollingLayoutDirection::Up;
+
+    return ScrollingLayoutDirection::Right;
+}
+
+GestureAxis axisForScrollingLayoutDirection(ScrollingLayoutDirection direction) {
+    switch (direction) {
+        case ScrollingLayoutDirection::Down:
+        case ScrollingLayoutDirection::Up:
+            return GestureAxis::Vertical;
+        case ScrollingLayoutDirection::Right:
+        case ScrollingLayoutDirection::Left:
+        default:
+            return GestureAxis::Horizontal;
+    }
+}
+
+bool scrollingLayoutGestureAxisMatches(ScrollingLayoutDirection direction, GestureAxis axis) {
+    return axisForScrollingLayoutDirection(direction) == axis;
+}
+
+double scrollingLayoutMoveAmount(ScrollingLayoutDirection direction, double primaryDelta, double sensitivity) {
+    const double sign = (direction == ScrollingLayoutDirection::Left || direction == ScrollingLayoutDirection::Up) ? -1.0 : 1.0;
+    return primaryDelta * sign * std::max(0.0, sensitivity);
+}
+
 bool isWorkspaceStripHorizontal(WorkspaceStripAnchor anchor) {
     return anchor == WorkspaceStripAnchor::Top;
 }

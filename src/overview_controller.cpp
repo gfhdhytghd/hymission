@@ -379,6 +379,36 @@ int signedUnit(double value) {
     return 0;
 }
 
+const char* trackpadDirectionName(eTrackpadGestureDirection direction) {
+    switch (direction) {
+        case TRACKPAD_GESTURE_DIR_HORIZONTAL: return "horizontal";
+        case TRACKPAD_GESTURE_DIR_VERTICAL: return "vertical";
+        case TRACKPAD_GESTURE_DIR_LEFT: return "left";
+        case TRACKPAD_GESTURE_DIR_RIGHT: return "right";
+        case TRACKPAD_GESTURE_DIR_UP: return "up";
+        case TRACKPAD_GESTURE_DIR_DOWN: return "down";
+        case TRACKPAD_GESTURE_DIR_SWIPE: return "swipe";
+        case TRACKPAD_GESTURE_DIR_PINCH: return "pinch";
+        case TRACKPAD_GESTURE_DIR_PINCH_IN: return "pinch_in";
+        case TRACKPAD_GESTURE_DIR_PINCH_OUT: return "pinch_out";
+        default: return "none";
+    }
+}
+
+const char* gestureAxisName(GestureAxis axis) {
+    return axis == GestureAxis::Vertical ? "vertical" : "horizontal";
+}
+
+const char* scrollingDirectionName(ScrollingLayoutDirection direction) {
+    switch (direction) {
+        case ScrollingLayoutDirection::Left: return "left";
+        case ScrollingLayoutDirection::Down: return "down";
+        case ScrollingLayoutDirection::Up: return "up";
+        case ScrollingLayoutDirection::Right:
+        default: return "right";
+    }
+}
+
 bool shouldWrapWorkspaceIds(const WORKSPACEID targetId, const WORKSPACEID currentId) {
     static auto PWORKSPACEWRAPAROUND = CConfigValue<Hyprlang::INT>("animations:workspace_wraparound");
 
@@ -1375,6 +1405,49 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
     Mode                      m_mode = Mode::Native;
 };
 
+class CHymissionScrollTrackpadGesture final : public ITrackpadGesture {
+  public:
+    CHymissionScrollTrackpadGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction, float)
+        : m_mode(mode), m_direction(direction) {
+    }
+
+    void begin(const STrackpadGestureBegin& e) override {
+        m_tracking = false;
+
+        const auto gestureDirection = e.direction != TRACKPAD_GESTURE_DIR_NONE ? e.direction : m_direction;
+        if (g_controller && e.swipe && g_controller->beginScrollGesture(m_mode, gestureDirection, *e.swipe, e.scale)) {
+            m_tracking = true;
+            return;
+        }
+    }
+
+    void update(const STrackpadGestureUpdate& e) override {
+        if (m_tracking) {
+            if (g_controller && e.swipe)
+                g_controller->updateScrollGesture(*e.swipe);
+            return;
+        }
+    }
+
+    void end(const STrackpadGestureEnd& e) override {
+        if (m_tracking) {
+            m_tracking = false;
+            if (g_controller)
+                g_controller->endScrollGesture(e.swipe ? e.swipe->cancelled : true);
+            return;
+        }
+    }
+
+    bool isDirectionSensitive() override {
+        return true;
+    }
+
+  private:
+    HymissionScrollMode      m_mode = HymissionScrollMode::Layout;
+    eTrackpadGestureDirection m_direction = TRACKPAD_GESTURE_DIR_HORIZONTAL;
+    bool                     m_tracking = false;
+};
+
 template <typename T>
 bool containsHandle(const std::vector<T>& values, const T& value) {
     return std::ranges::find(values, value) != values.end();
@@ -2013,6 +2086,13 @@ void OverviewController::renderStage(eRenderStage stage) {
 }
 
 void OverviewController::handleMouseMove() {
+    if (m_restoreScrollingFollowFocusAfterScrollMouseMove && !m_scrollGestureSession.active) {
+        if (debugLogsEnabled())
+            debugLog("[hymission] restore scrolling:follow_focus after scroll mouse move");
+        m_restoreScrollingFollowFocusAfterScrollMouseMove = false;
+        setScrollingFollowFocusOverride(false);
+    }
+
     if (m_postCloseForcedFocusLatched && !isVisible()) {
         if (m_ignorePostCloseMouseMoveCount > 0) {
             --m_ignorePostCloseMouseMoveCount;
@@ -2964,6 +3044,10 @@ bool OverviewController::niriModeEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:niri_mode", 0) != 0;
 }
 
+double OverviewController::niriScrollPixelsPerDelta() const {
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_scroll_pixels_per_delta", 1.0), 0.0, 20.0);
+}
+
 double OverviewController::niriWorkspaceScale() const {
     return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_workspace_scale", 1.0), 0.05, 1.0);
 }
@@ -3006,6 +3090,146 @@ bool OverviewController::isScrollingWorkspace(const PHLWORKSPACE& workspace) con
 
 bool OverviewController::hasScrollingWorkspace() const {
     return std::ranges::any_of(m_state.managedWorkspaces, [this](const PHLWORKSPACE& workspace) { return isScrollingWorkspace(workspace); });
+}
+
+GestureAxis OverviewController::gestureAxisForDirection(eTrackpadGestureDirection direction) const {
+    switch (direction) {
+        case TRACKPAD_GESTURE_DIR_UP:
+        case TRACKPAD_GESTURE_DIR_DOWN:
+        case TRACKPAD_GESTURE_DIR_VERTICAL:
+            return GestureAxis::Vertical;
+        case TRACKPAD_GESTURE_DIR_LEFT:
+        case TRACKPAD_GESTURE_DIR_RIGHT:
+        case TRACKPAD_GESTURE_DIR_HORIZONTAL:
+        case TRACKPAD_GESTURE_DIR_SWIPE:
+        default:
+            return GestureAxis::Horizontal;
+    }
+}
+
+ScrollingLayoutDirection OverviewController::scrollingLayoutDirection() const {
+    std::string direction = getConfigString(m_handle, "scrolling:direction", "right");
+
+    if (const auto workspace = activeLayoutWorkspace(); workspace) {
+        const auto workspaceRule = Config::workspaceRuleMgr()->getWorkspaceRuleFor(workspace).value_or(Config::CWorkspaceRule{});
+        if (workspaceRule.m_layoutopts.contains("direction") && !workspaceRule.m_layoutopts.at("direction").empty())
+            direction = workspaceRule.m_layoutopts.at("direction");
+    }
+
+    return parseScrollingLayoutDirection(direction);
+}
+
+bool OverviewController::canScrollActiveLayoutWithGesture(eTrackpadGestureDirection direction) const {
+    return scrollingLayoutGestureAxisMatches(scrollingLayoutDirection(), gestureAxisForDirection(direction));
+}
+
+double OverviewController::scrollLayoutPixelsPerGestureDelta(ScrollingLayoutDirection direction) const {
+    const double swipeDistance = gestureSwipeDistance();
+    if (swipeDistance <= 0.0)
+        return std::max(0.0, niriScrollPixelsPerDelta());
+
+    double viewportLength = swipeDistance;
+    if (const auto monitor = Desktop::focusState()->monitor(); monitor)
+        viewportLength = axisForScrollingLayoutDirection(direction) == GestureAxis::Vertical ? static_cast<double>(monitor->m_size.y) :
+                                                                                               static_cast<double>(monitor->m_size.x);
+
+    return std::max(0.0, niriScrollPixelsPerDelta()) * std::max(1.0, viewportLength) / swipeDistance;
+}
+
+double OverviewController::scrollLayoutPrimaryDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) const {
+    bool vertical = false;
+    switch (direction) {
+        case TRACKPAD_GESTURE_DIR_UP:
+        case TRACKPAD_GESTURE_DIR_DOWN:
+        case TRACKPAD_GESTURE_DIR_VERTICAL:
+            vertical = true;
+            break;
+        case TRACKPAD_GESTURE_DIR_SWIPE:
+            vertical = std::abs(event.delta.y) > std::abs(event.delta.x);
+            break;
+        case TRACKPAD_GESTURE_DIR_LEFT:
+        case TRACKPAD_GESTURE_DIR_RIGHT:
+        case TRACKPAD_GESTURE_DIR_HORIZONTAL:
+        default:
+            vertical = false;
+            break;
+    }
+
+    return static_cast<double>(vertical ? event.delta.y : event.delta.x) * static_cast<double>(deltaScale);
+}
+
+bool OverviewController::scrollActiveLayoutByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) {
+    if (!canScrollActiveLayoutWithGesture(direction)) {
+        if (debugLogsEnabled()) {
+            const auto layoutDirection = scrollingLayoutDirection();
+            std::ostringstream out;
+            out << "[hymission] niri layout scroll skipped: axis mismatch gestureDir=" << trackpadDirectionName(direction)
+                << " gestureAxis=" << gestureAxisName(gestureAxisForDirection(direction)) << " layoutDir=" << scrollingDirectionName(layoutDirection)
+                << " layoutAxis=" << gestureAxisName(axisForScrollingLayoutDirection(layoutDirection));
+            debugLog(out.str());
+        }
+        return false;
+    }
+
+    const auto workspace = activeLayoutWorkspace();
+    auto* const scrolling = scrollingAlgorithmForWorkspace(workspace);
+    if (!scrolling || !scrolling->m_scrollingData || !scrolling->m_scrollingData->controller) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] niri layout scroll skipped: scrolling algorithm unavailable workspace="
+                << (workspace ? workspace->m_name : std::string{"<none>"});
+            debugLog(out.str());
+        }
+        return false;
+    }
+
+    const auto scrollingDirection = scrollingLayoutDirection();
+    const double primaryDelta = scrollLayoutPrimaryDelta(event, direction, deltaScale);
+    const double amount = scrollingLayoutMoveAmount(scrollingDirection, primaryDelta, scrollLayoutPixelsPerGestureDelta(scrollingDirection));
+    const bool traceMove = debugLogsEnabled() && m_scrollGestureSession.active && m_scrollGestureSession.debugSamples < 16;
+    if (traceMove)
+        ++m_scrollGestureSession.debugSamples;
+
+    if (std::abs(amount) < 0.001) {
+        if (traceMove) {
+            std::ostringstream out;
+            out << "[hymission] niri layout scroll delta too small dir=" << trackpadDirectionName(direction) << " delta=" << vectorToString(event.delta)
+                << " primary=" << primaryDelta << " amount=" << amount;
+            debugLog(out.str());
+        }
+        return true;
+    }
+
+    auto& data = scrolling->m_scrollingData;
+    auto* const controller = data->controller.get();
+    const CBox usable = scrolling->usableArea();
+    const bool fullscreenOnOne = getConfigInt(m_handle, "scrolling:fullscreen_on_one_column", 1) != 0;
+    const double viewportLength =
+        axisForScrollingLayoutDirection(scrollingDirection) == GestureAxis::Vertical ? static_cast<double>(usable.h) : static_cast<double>(usable.w);
+    const double maxExtent = controller->calculateMaxExtent(usable, fullscreenOnOne);
+    const double maxOffset = std::max(0.0, maxExtent - std::max(1.0, viewportLength));
+    const double offsetBefore = controller->getOffset();
+    const double requestedOffset = offsetBefore - amount;
+    const double offsetAfter = std::clamp(requestedOffset, 0.0, maxOffset);
+
+    if (std::abs(offsetAfter - offsetBefore) >= 0.001) {
+        controller->setOffset(offsetAfter);
+        data->recalculate(true);
+        if (g_pAnimationManager)
+            g_pAnimationManager->frameTick();
+    }
+
+    if (traceMove) {
+        std::ostringstream out;
+        out << "[hymission] niri layout direct scroll dir=" << trackpadDirectionName(direction)
+            << " layoutDir=" << scrollingDirectionName(scrollingDirection) << " delta=" << vectorToString(event.delta) << " primary=" << primaryDelta
+            << " amount=" << amount << " offsetBefore=" << offsetBefore << " requested=" << requestedOffset << " offsetAfter=" << offsetAfter
+            << " maxOffset=" << maxOffset << " maxExtent=" << maxExtent << " viewport=" << viewportLength
+            << " result=" << (std::abs(offsetAfter - offsetBefore) >= 0.001 ? "moved" : "clamped");
+        debugLog(out.str());
+    }
+
+    return true;
 }
 
 void OverviewController::refreshNiriScrollingOverviewAfterLayoutScroll(const char* source) {
@@ -3310,7 +3534,7 @@ void OverviewController::clearRegisteredTrackpadGestures() {
         return;
 
     for (const auto& gesture : m_registeredGestures)
-        g_pTrackpadGestures->removeGesture(gesture.fingerCount, gesture.direction, gesture.modMask, gesture.deltaScale, gesture.disableInhibit);
+        (void)g_pTrackpadGestures->removeGesture(gesture.fingerCount, gesture.direction, gesture.modMask, gesture.deltaScale, gesture.disableInhibit);
 
     m_registeredGestures.clear();
 }
@@ -3384,7 +3608,7 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
 
     if (axisDirection && tokens[actionIndex] == "workspace" && actionIndex + 1 == tokens.size()) {
         const bool disableInhibit = flags.contains('p');
-        g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
+        (void)g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
         const auto addResult =
             g_pTrackpadGestures->addGesture(makeUnique<CHymissionWorkspaceTrackpadGesture>(direction, deltaScale), fingerCount, direction, modMask, deltaScale, disableInhibit);
         if (!addResult.has_value())
@@ -3419,6 +3643,38 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
     const std::string dispatcherArgs = joinTokens(tokens, actionIndex + 2);
     const auto        trimmedDispatcherArgs = trimCopy(dispatcherArgs);
 
+    if (dispatcher == "hymission:scroll") {
+        const auto scrollMode = parseHymissionScrollMode(trimmedDispatcherArgs);
+        if (!scrollMode)
+            return "hymission:scroll only supports layout; use gesture = ..., workspace for workspace swipes";
+
+        const bool disableInhibit = flags.contains('p');
+        (void)g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
+        const auto addResult =
+            g_pTrackpadGestures->addGesture(makeUnique<CHymissionScrollTrackpadGesture>(*scrollMode, direction, deltaScale), fingerCount, direction, modMask, deltaScale,
+                                            disableInhibit);
+        if (!addResult.has_value())
+            return addResult.error();
+
+        rememberRegisteredTrackpadGesture({
+            .fingerCount = fingerCount,
+            .direction = direction,
+            .modMask = modMask,
+            .deltaScale = deltaScale,
+            .disableInhibit = disableInhibit,
+        });
+
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] register niri scroll gesture fingers=" << fingerCount << " dir="
+                << (direction == TRACKPAD_GESTURE_DIR_SWIPE ? "swipe" : direction == TRACKPAD_GESTURE_DIR_HORIZONTAL ? "horizontal" : "vertical")
+                << " mode=" << trimmedDispatcherArgs << " scale=" << deltaScale << " modMask=" << modMask << " disableInhibit=" << (disableInhibit ? 1 : 0);
+            debugLog(out.str());
+        }
+
+        return {};
+    }
+
     if (!axisDirection)
         return fallbackToHyprlandGesture();
 
@@ -3448,7 +3704,7 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
     }
 
     const bool disableInhibit = flags.contains('p');
-    g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
+    (void)g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
     const auto addResult =
         g_pTrackpadGestures->addGesture(makeUnique<CHymissionTrackpadGesture>(dispatcherKind, requestedScopeValue, recommand, direction, deltaScale), fingerCount, direction,
                                         modMask, deltaScale, disableInhibit);
@@ -3861,6 +4117,137 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
     }
 
     damageOwnedMonitors();
+}
+
+bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction, const IPointer::SSwipeUpdateEvent& event, float deltaScale) {
+    m_scrollGestureSession = {};
+
+    const auto phaseName = [this]() {
+        switch (m_state.phase) {
+            case Phase::Inactive: return "inactive";
+            case Phase::Opening: return "opening";
+            case Phase::Active: return "active";
+            case Phase::ClosingSettle: return "closing_settle";
+            case Phase::Closing: return "closing";
+        }
+        return "unknown";
+    };
+
+    if (debugLogsEnabled()) {
+        const auto layoutDirection = scrollingLayoutDirection();
+        const auto workspace = activeLayoutWorkspace();
+        std::ostringstream out;
+        out << "[hymission] scroll gesture begin request mode=" << (mode == HymissionScrollMode::Layout ? "layout" : "unknown")
+            << " dir=" << trackpadDirectionName(direction) << " gestureAxis=" << gestureAxisName(gestureAxisForDirection(direction))
+            << " layoutDir=" << scrollingDirectionName(layoutDirection) << " layoutAxis=" << gestureAxisName(axisForScrollingLayoutDirection(layoutDirection))
+            << " delta=" << vectorToString(event.delta) << " scale=" << deltaScale << " phase=" << phaseName() << " visible=" << (isVisible() ? 1 : 0)
+            << " overviewGestureActive=" << (m_gestureSession.active ? 1 : 0) << " workspace=" << (workspace ? workspace->m_name : std::string{"<none>"})
+            << " workspaceScrolling=" << (isScrollingWorkspace(workspace) ? 1 : 0);
+        debugLog(out.str());
+    }
+
+    const auto reject = [&](const char* reason) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] scroll gesture reject reason=" << reason;
+            debugLog(out.str());
+        }
+        return false;
+    };
+
+    if (mode != HymissionScrollMode::Layout)
+        return reject("unsupported-mode");
+
+    if (m_gestureSession.active)
+        return reject("overview-gesture-active");
+
+    if (m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
+        return reject("overview-closing");
+
+    const bool overviewVisible = isVisible();
+    if (overviewVisible && (!niriModeEnabled() || m_state.phase != Phase::Active))
+        return reject("overview-visible");
+
+    if (!canScrollActiveLayoutWithGesture(direction))
+        return reject("axis-mismatch");
+
+    if (!isScrollingWorkspace(activeLayoutWorkspace()))
+        return reject("active-workspace-not-scrolling");
+
+    const bool scrollingFollowFocusWasOverridden = m_scrollingFollowFocusOverridden;
+    setScrollingFollowFocusOverride(true);
+
+    m_scrollGestureSession = {
+        .active = true,
+        .mode = mode,
+        .route = ScrollGestureRoute::Layout,
+        .direction = direction,
+        .deltaScale = deltaScale,
+        .skipNextUpdate = true,
+        .restoreScrollingFollowFocus = !scrollingFollowFocusWasOverridden && m_scrollingFollowFocusOverridden,
+    };
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] scroll gesture accepted route=layout dir=" << trackpadDirectionName(direction) << " scale=" << deltaScale
+            << " suppressScrollingFollowFocus=" << (m_scrollGestureSession.restoreScrollingFollowFocus ? 1 : 0);
+        debugLog(out.str());
+    }
+
+    if (!scrollActiveLayoutByGestureDelta(event, direction, deltaScale)) {
+        m_scrollGestureSession = {};
+        return reject("initial-layout-scroll-failed");
+    }
+    refreshNiriScrollingOverviewAfterLayoutScroll("scroll-begin");
+
+    return true;
+}
+
+void OverviewController::updateScrollGesture(const IPointer::SSwipeUpdateEvent& event) {
+    if (!m_scrollGestureSession.active)
+        return;
+
+    if (m_scrollGestureSession.skipNextUpdate) {
+        m_scrollGestureSession.skipNextUpdate = false;
+        return;
+    }
+
+    switch (m_scrollGestureSession.route) {
+        case ScrollGestureRoute::Layout:
+            (void)scrollActiveLayoutByGestureDelta(event, m_scrollGestureSession.direction, m_scrollGestureSession.deltaScale);
+            refreshNiriScrollingOverviewAfterLayoutScroll("scroll-update");
+            break;
+        case ScrollGestureRoute::None:
+        default:
+            break;
+    }
+}
+
+void OverviewController::endScrollGesture(bool cancelled) {
+    if (!m_scrollGestureSession.active)
+        return;
+
+    const bool deferScrollingFollowFocusRestore = m_scrollGestureSession.restoreScrollingFollowFocus;
+    const bool forceInputRefocus = !isVisible() && !cancelled && m_scrollGestureSession.route == ScrollGestureRoute::Layout;
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] scroll gesture end cancelled=" << (cancelled ? 1 : 0) << " samples=" << m_scrollGestureSession.debugSamples
+            << " deferScrollingFollowFocusRestore=" << (deferScrollingFollowFocusRestore ? 1 : 0)
+            << " forceInputRefocus=" << (forceInputRefocus ? 1 : 0);
+        debugLog(out.str());
+    }
+
+    m_scrollGestureSession = {};
+
+    if (forceInputRefocus && g_pInputManager) {
+        if (debugLogsEnabled())
+            debugLog("[hymission] scroll gesture end force input refocus");
+        g_pInputManager->refocus();
+    }
+
+    if (deferScrollingFollowFocusRestore)
+        m_restoreScrollingFollowFocusAfterScrollMouseMove = true;
 }
 
 bool OverviewController::beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction) {
@@ -4391,6 +4778,9 @@ void OverviewController::setInputFollowMouseOverride(bool disable) {
 }
 
 void OverviewController::setScrollingFollowFocusOverride(bool disable) {
+    if (!disable && m_restoreScrollingFollowFocusAfterScrollMouseMove)
+        m_restoreScrollingFollowFocusAfterScrollMouseMove = false;
+
     if (!hasScrollingWorkspace() && !isScrollingWorkspace(activeLayoutWorkspace()))
         return;
 

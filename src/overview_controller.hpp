@@ -69,6 +69,10 @@ class OverviewController {
     [[nodiscard]] bool            beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction);
     void                          updateOverviewWorkspaceSwipeGesture(double delta);
     void                          endOverviewWorkspaceSwipeGesture(bool cancelled);
+    [[nodiscard]] bool            beginScrollGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction,
+                                                     const IPointer::SSwipeUpdateEvent& event, float deltaScale);
+    void                          updateScrollGesture(const IPointer::SSwipeUpdateEvent& event);
+    void                          endScrollGesture(bool cancelled);
     void                          refreshAfterOfficialScrollMove(const char* source);
 
     void renderStage(eRenderStage stage);
@@ -267,6 +271,22 @@ class OverviewController {
         float        deltaScale = 1.0F;
     };
 
+    enum class ScrollGestureRoute {
+        None,
+        Layout,
+    };
+
+    struct ScrollGestureSession {
+        bool                      active = false;
+        HymissionScrollMode       mode = HymissionScrollMode::Layout;
+        ScrollGestureRoute        route = ScrollGestureRoute::None;
+        eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_HORIZONTAL;
+        float                     deltaScale = 1.0F;
+        std::size_t               debugSamples = 0;
+        bool                      skipNextUpdate = false;
+        bool                      restoreScrollingFollowFocus = false;
+    };
+
     struct WorkspaceNameBackup {
         PHLWORKSPACE workspace;
         std::string  name;
@@ -376,12 +396,19 @@ class OverviewController {
     [[nodiscard]] bool         barSingleMissionControlEnabled() const;
     [[nodiscard]] bool         showFocusIndicatorEnabled() const;
     [[nodiscard]] bool         niriModeEnabled() const;
+    [[nodiscard]] double       niriScrollPixelsPerDelta() const;
     [[nodiscard]] double       niriWorkspaceScale() const;
     [[nodiscard]] bool         debugLogsEnabled() const;
     [[nodiscard]] bool         debugSurfaceLogsEnabled() const;
     [[nodiscard]] PHLWORKSPACE activeLayoutWorkspace() const;
     [[nodiscard]] bool         isScrollingWorkspace(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] bool         hasScrollingWorkspace() const;
+    [[nodiscard]] GestureAxis  gestureAxisForDirection(eTrackpadGestureDirection direction) const;
+    [[nodiscard]] ScrollingLayoutDirection scrollingLayoutDirection() const;
+    [[nodiscard]] bool         canScrollActiveLayoutWithGesture(eTrackpadGestureDirection direction) const;
+    [[nodiscard]] double       scrollLayoutPixelsPerGestureDelta(ScrollingLayoutDirection direction) const;
+    [[nodiscard]] double       scrollLayoutPrimaryDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) const;
+    [[nodiscard]] bool         scrollActiveLayoutByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale);
     void                       refreshNiriScrollingOverviewAfterLayoutScroll(const char* source);
     [[nodiscard]] bool         shouldSyncRealFocusDuringOverview() const;
     [[nodiscard]] bool         allowsWorkspaceSwitchInOverview() const;
@@ -627,6 +654,7 @@ class OverviewController {
     bool                      m_restoreInputFollowMouseAfterPostClose = false;
     bool                      m_scrollingFollowFocusOverridden = false;
     long                      m_scrollingFollowFocusBackup = 1;
+    bool                      m_restoreScrollingFollowFocusAfterScrollMouseMove = false;
     bool                      m_animationsEnabledOverridden = false;
     long                      m_animationsEnabledBackup = 1;
     SP<CEventLoopTimer>       m_animationsEnabledRestoreTimer;
@@ -661,6 +689,7 @@ class OverviewController {
     std::vector<GestureRegistration> m_registeredGestures;
     std::vector<WorkspaceNameBackup> m_workspaceNameBackups;
     GestureSession            m_gestureSession;
+    ScrollGestureSession      m_scrollGestureSession;
     WorkspaceSwipeGestureContext m_workspaceSwipeGesture;
     WorkspaceTransition      m_workspaceTransition;
     StripPreviewContext      m_stripPreviewContext;
