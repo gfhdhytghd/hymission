@@ -1574,34 +1574,6 @@ void hkRenderLayer(void* rendererThisptr, PHLLS layer, PHLMONITOR monitor, const
     g_controller->renderLayerHook(rendererThisptr, layer, monitor, now, popups, lockscreen);
 }
 
-SDispatchResult hkFullscreenActive(std::string args) {
-    if (!g_controller)
-        return {};
-
-    return g_controller->fullscreenDispatcherHook(std::move(args));
-}
-
-SDispatchResult hkFullscreenStateActive(std::string args) {
-    if (!g_controller)
-        return {};
-
-    return g_controller->fullscreenStateDispatcherHook(std::move(args));
-}
-
-SDispatchResult hkChangeWorkspace(std::string args) {
-    if (!g_controller)
-        return {};
-
-    return g_controller->changeWorkspaceDispatcherHook(std::move(args));
-}
-
-SDispatchResult hkFocusWorkspaceOnCurrentMonitor(std::string args) {
-    if (!g_controller)
-        return {};
-
-    return g_controller->focusWorkspaceOnCurrentMonitorDispatcherHook(std::move(args));
-}
-
 void hkWorkspaceSwipeBegin(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e) {
     if (!g_controller)
         return;
@@ -1670,10 +1642,7 @@ OverviewController::~OverviewController() {
     setScrollingFollowFocusOverride(false);
     setAnimationsEnabledOverride(false);
     deactivateHooks();
-    if (m_changeWorkspaceHook)
-        m_changeWorkspaceHook->unhook();
-    if (m_focusWorkspaceOnCurrentMonitorHook)
-        m_focusWorkspaceOnCurrentMonitorHook->unhook();
+    restoreWrappedDispatchers();
     if (m_workspaceSwipeBeginFunctionHook)
         m_workspaceSwipeBeginFunctionHook->unhook();
     if (m_workspaceSwipeUpdateFunctionHook)
@@ -1709,14 +1678,6 @@ OverviewController::~OverviewController() {
         HyprlandAPI::removeFunctionHook(m_handle, m_shadowDrawHook);
     if (m_calculateUVForSurfaceHook)
         HyprlandAPI::removeFunctionHook(m_handle, m_calculateUVForSurfaceHook);
-    if (m_fullscreenActiveHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_fullscreenActiveHook);
-    if (m_fullscreenStateActiveHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_fullscreenStateActiveHook);
-    if (m_changeWorkspaceHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_changeWorkspaceHook);
-    if (m_focusWorkspaceOnCurrentMonitorHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_focusWorkspaceOnCurrentMonitorHook);
     if (m_workspaceSwipeBeginFunctionHook)
         HyprlandAPI::removeFunctionHook(m_handle, m_workspaceSwipeBeginFunctionHook);
     if (m_workspaceSwipeUpdateFunctionHook)
@@ -4985,20 +4946,24 @@ bool OverviewController::installHooks() {
         return false;
     }
 
-    if (!hookFunction("fullscreenActive", "CKeybindManager::fullscreenActive(", m_fullscreenActiveHook, reinterpret_cast<void*>(&hkFullscreenActive))) {
-        notify("[hymission] failed to hook fullscreenActive", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+    if (!wrapDispatcher("fullscreen", m_fullscreenActiveOriginal, [this](std::string args) { return fullscreenDispatcherHook(std::move(args)); })) {
+        notify("[hymission] failed to wrap fullscreen dispatcher", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         return false;
     }
+    m_fullscreenActiveDispatcherWrapped = true;
 
-    if (!hookFunction("fullscreenStateActive", "CKeybindManager::fullscreenStateActive(", m_fullscreenStateActiveHook,
-                      reinterpret_cast<void*>(&hkFullscreenStateActive))) {
-        notify("[hymission] failed to hook fullscreenStateActive", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+    if (!wrapDispatcher("fullscreenstate", m_fullscreenStateActiveOriginal, [this](std::string args) { return fullscreenStateDispatcherHook(std::move(args)); })) {
+        notify("[hymission] failed to wrap fullscreenstate dispatcher", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         return false;
     }
+    m_fullscreenStateDispatcherWrapped = true;
 
-    (void)hookFunction("changeworkspace", "CKeybindManager::changeworkspace(", m_changeWorkspaceHook, reinterpret_cast<void*>(&hkChangeWorkspace));
-    (void)hookFunction("focusWorkspaceOnCurrentMonitor", "CKeybindManager::focusWorkspaceOnCurrentMonitor(", m_focusWorkspaceOnCurrentMonitorHook,
-                       reinterpret_cast<void*>(&hkFocusWorkspaceOnCurrentMonitor));
+    m_changeWorkspaceDispatcherWrapped =
+        wrapDispatcher("workspace", m_changeWorkspaceOriginal, [this](std::string args) { return changeWorkspaceDispatcherHook(std::move(args)); });
+    m_focusWorkspaceOnCurrentMonitorDispatcherWrapped = wrapDispatcher(
+        "focusworkspaceoncurrentmonitor",
+        m_focusWorkspaceOnCurrentMonitorOriginal,
+        [this](std::string args) { return focusWorkspaceOnCurrentMonitorDispatcherHook(std::move(args)); });
     (void)hookFunction("begin", "CWorkspaceSwipeGesture::begin(", m_workspaceSwipeBeginFunctionHook, reinterpret_cast<void*>(&hkWorkspaceSwipeBegin));
     (void)hookFunction("update", "CWorkspaceSwipeGesture::update(", m_workspaceSwipeUpdateFunctionHook, reinterpret_cast<void*>(&hkWorkspaceSwipeUpdate));
     (void)hookFunction("end", "CWorkspaceSwipeGesture::end(", m_workspaceSwipeEndFunctionHook, reinterpret_cast<void*>(&hkWorkspaceSwipeEnd));
@@ -5018,10 +4983,10 @@ bool OverviewController::installHooks() {
     m_shadowDrawOriginal = nullptr;
     m_calculateUVForSurfaceOriginal = nullptr;
     m_renderLayerOriginal = nullptr;
-    m_fullscreenActiveOriginal = nullptr;
-    m_fullscreenStateActiveOriginal = nullptr;
-    m_changeWorkspaceOriginal = nullptr;
-    m_focusWorkspaceOnCurrentMonitorOriginal = nullptr;
+    if (!m_changeWorkspaceDispatcherWrapped)
+        m_changeWorkspaceOriginal = nullptr;
+    if (!m_focusWorkspaceOnCurrentMonitorDispatcherWrapped)
+        m_focusWorkspaceOnCurrentMonitorOriginal = nullptr;
     m_workspaceSwipeBeginOriginal = nullptr;
     m_workspaceSwipeUpdateOriginal = nullptr;
     m_workspaceSwipeEndOriginal = nullptr;
@@ -5029,8 +4994,6 @@ bool OverviewController::installHooks() {
     m_dispatcherGestureUpdateOriginal = nullptr;
     m_dispatcherGestureEndOriginal = nullptr;
 
-    activateOptionalHook(m_changeWorkspaceHook, m_changeWorkspaceOriginal, "changeworkspace");
-    activateOptionalHook(m_focusWorkspaceOnCurrentMonitorHook, m_focusWorkspaceOnCurrentMonitorOriginal, "focusWorkspaceOnCurrentMonitor");
     activateOptionalHook(m_workspaceSwipeBeginFunctionHook, m_workspaceSwipeBeginOriginal, "workspace swipe begin");
     activateOptionalHook(m_workspaceSwipeUpdateFunctionHook, m_workspaceSwipeUpdateOriginal, "workspace swipe update");
     activateOptionalHook(m_workspaceSwipeEndFunctionHook, m_workspaceSwipeEndOriginal, "workspace swipe end");
@@ -5045,14 +5008,12 @@ bool OverviewController::activateHooks() {
         return true;
 
     if (!m_shouldRenderWindowHook || !m_surfaceTexBoxHook || !m_surfaceBoundingBoxHook || !m_surfaceOpaqueRegionHook || !m_surfaceVisibleRegionHook || !m_surfaceDrawHook ||
-        !m_surfaceNeedsLiveBlurHook || !m_surfaceNeedsPrecomputeBlurHook || !m_borderDrawHook || !m_shadowDrawHook || !m_calculateUVForSurfaceHook ||
-        !m_fullscreenActiveHook || !m_fullscreenStateActiveHook)
+        !m_surfaceNeedsLiveBlurHook || !m_surfaceNeedsPrecomputeBlurHook || !m_borderDrawHook || !m_shadowDrawHook || !m_calculateUVForSurfaceHook)
         return false;
 
     const bool hooked = m_shouldRenderWindowHook->hook() && m_surfaceTexBoxHook->hook() && m_surfaceBoundingBoxHook->hook() && m_surfaceOpaqueRegionHook->hook() &&
         m_surfaceVisibleRegionHook->hook() && m_surfaceDrawHook->hook() && m_surfaceNeedsLiveBlurHook->hook() && m_surfaceNeedsPrecomputeBlurHook->hook() &&
-        m_borderDrawHook->hook() && m_shadowDrawHook->hook() && m_calculateUVForSurfaceHook->hook() && m_fullscreenActiveHook->hook() &&
-        m_fullscreenStateActiveHook->hook();
+        m_borderDrawHook->hook() && m_shadowDrawHook->hook() && m_calculateUVForSurfaceHook->hook();
     if (!hooked) {
         notify("[hymission] surface pass hook attach failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         if (m_shouldRenderWindowHook)
@@ -5077,10 +5038,6 @@ bool OverviewController::activateHooks() {
             m_shadowDrawHook->unhook();
         if (m_calculateUVForSurfaceHook)
             m_calculateUVForSurfaceHook->unhook();
-        if (m_fullscreenActiveHook)
-            m_fullscreenActiveHook->unhook();
-        if (m_fullscreenStateActiveHook)
-            m_fullscreenStateActiveHook->unhook();
         return false;
     }
 
@@ -5106,8 +5063,6 @@ bool OverviewController::activateHooks() {
             m_renderLayerOriginal = nullptr;
         }
     }
-    m_fullscreenActiveOriginal = reinterpret_cast<DispatcherFn>(m_fullscreenActiveHook->m_original);
-    m_fullscreenStateActiveOriginal = reinterpret_cast<DispatcherFn>(m_fullscreenStateActiveHook->m_original);
     m_hooksActive = true;
     return true;
 }
@@ -5140,11 +5095,6 @@ void OverviewController::deactivateHooks() {
         m_shadowDrawHook->unhook();
     if (m_calculateUVForSurfaceHook)
         m_calculateUVForSurfaceHook->unhook();
-    if (m_fullscreenActiveHook)
-        m_fullscreenActiveHook->unhook();
-    if (m_fullscreenStateActiveHook)
-        m_fullscreenStateActiveHook->unhook();
-
     m_shouldRenderWindowOriginal = nullptr;
     m_surfaceTexBoxOriginal = nullptr;
     m_surfaceBoundingBoxOriginal = nullptr;
@@ -5171,6 +5121,40 @@ bool OverviewController::hookFunction(const std::string& symbolName, const std::
 
     hook = HyprlandAPI::createFunctionHook(m_handle, source, destination);
     return hook != nullptr;
+}
+
+bool OverviewController::wrapDispatcher(const std::string& name, DispatcherHandler& original, DispatcherHandler replacement) {
+    if (!g_pKeybindManager)
+        return false;
+
+    const auto it = g_pKeybindManager->m_dispatchers.find(name);
+    if (it == g_pKeybindManager->m_dispatchers.end())
+        return false;
+
+    original = it->second;
+    it->second = std::move(replacement);
+    return true;
+}
+
+void OverviewController::restoreWrappedDispatchers() {
+    if (!g_pKeybindManager)
+        return;
+
+    const auto restore = [&](const char* name, bool& wrapped, DispatcherHandler& original) {
+        if (!wrapped)
+            return;
+
+        if (original)
+            g_pKeybindManager->m_dispatchers[name] = std::move(original);
+
+        original = nullptr;
+        wrapped = false;
+    };
+
+    restore("fullscreen", m_fullscreenActiveDispatcherWrapped, m_fullscreenActiveOriginal);
+    restore("fullscreenstate", m_fullscreenStateDispatcherWrapped, m_fullscreenStateActiveOriginal);
+    restore("workspace", m_changeWorkspaceDispatcherWrapped, m_changeWorkspaceOriginal);
+    restore("focusworkspaceoncurrentmonitor", m_focusWorkspaceOnCurrentMonitorDispatcherWrapped, m_focusWorkspaceOnCurrentMonitorOriginal);
 }
 
 void* OverviewController::findFunction(const std::string& symbolName, const std::string& demangledNeedle) const {
@@ -7427,8 +7411,8 @@ void OverviewController::queuePostCloseDispatcher(PostCloseDispatcher dispatcher
 }
 
 SDispatchResult OverviewController::runHookedDispatcher(PostCloseDispatcher dispatcher, std::string args) {
-    DispatcherFn original = nullptr;
-    const char*  label = nullptr;
+    DispatcherHandler original;
+    const char*       label = nullptr;
     switch (dispatcher) {
         case PostCloseDispatcher::Fullscreen:
             original = m_fullscreenActiveOriginal;

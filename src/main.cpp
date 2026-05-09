@@ -2,6 +2,7 @@
 #include <sstream>
 #include <string>
 
+#include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/config/values/types/FloatValue.hpp>
 #include <hyprland/src/config/values/types/IntValue.hpp>
 #include <hyprland/src/config/values/types/StringValue.hpp>
@@ -317,22 +318,24 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     registerDispatcher("hymission:close", dispatchClose);
     registerDispatcher("hymission:debug_current_layout", dispatchDebugCurrentLayout);
 
-    const auto registerLuaFunction = [&](const char* name, PLUGIN_LUA_FN fn) {
-        if (!HyprlandAPI::addLuaFunction(g_pluginHandle, "hymission", name, fn)) {
-            HyprlandAPI::addNotification(
-                g_pluginHandle,
-                std::string("[hymission] failed to register lua function hl.plugin.hymission.") + name,
-                CHyprColor(1.0, 0.2, 0.2, 1.0),
-                5000);
-        }
-    };
+    if (Config::mgr() && Config::mgr()->type() == Config::CONFIG_LUA) {
+        const auto registerLuaFunction = [&](const char* name, PLUGIN_LUA_FN fn) {
+            if (!HyprlandAPI::addLuaFunction(g_pluginHandle, "hymission", name, fn)) {
+                HyprlandAPI::addNotification(
+                    g_pluginHandle,
+                    std::string("[hymission] failed to register lua function hl.plugin.hymission.") + name,
+                    CHyprColor(1.0, 0.2, 0.2, 1.0),
+                    5000);
+            }
+        };
 
-    registerLuaFunction("toggle", luaToggle);
-    registerLuaFunction("open", luaOpen);
-    registerLuaFunction("close", luaClose);
-    registerLuaFunction("debug_current_layout", luaDebugCurrentLayout);
-    registerLuaFunction("dispatch", luaDispatch);
-    registerLuaFunction("gesture", luaGesture);
+        registerLuaFunction("toggle", luaToggle);
+        registerLuaFunction("open", luaOpen);
+        registerLuaFunction("close", luaClose);
+        registerLuaFunction("debug_current_layout", luaDebugCurrentLayout);
+        registerLuaFunction("dispatch", luaDispatch);
+        registerLuaFunction("gesture", luaGesture);
+    }
 
     if (!HyprlandAPI::reloadConfig()) {
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] reloadConfig failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);

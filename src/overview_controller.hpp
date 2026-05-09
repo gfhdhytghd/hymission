@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -365,7 +366,7 @@ class OverviewController {
     using RenderLayerFn = void (*)(void*, PHLLS, PHLMONITOR, const Time::steady_tp&, bool, bool);
     using BorderDrawFn = void (*)(void*, PHLMONITOR, const float&);
     using CalculateUVForSurfaceFn = void (*)(void*, PHLWINDOW, SP<CWLSurfaceResource>, PHLMONITOR, bool, const Vector2D&, const Vector2D&, bool);
-    using DispatcherFn = SDispatchResult (*)(std::string);
+    using DispatcherHandler = std::function<SDispatchResult(std::string)>;
     using WorkspaceSwipeBeginFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureBegin&);
     using WorkspaceSwipeUpdateFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureUpdate&);
     using WorkspaceSwipeEndFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureEnd&);
@@ -441,6 +442,8 @@ class OverviewController {
     void                       deactivateHooks();
     [[nodiscard]] bool         hookFunction(const std::string& symbolName, const std::string& demangledNeedle, CFunctionHook*& hook, void* destination);
     [[nodiscard]] void*        findFunction(const std::string& symbolName, const std::string& demangledNeedle) const;
+    [[nodiscard]] bool         wrapDispatcher(const std::string& name, DispatcherHandler& original, DispatcherHandler replacement);
+    void                       restoreWrappedDispatchers();
 
     [[nodiscard]] bool         isAnimating() const;
     [[nodiscard]] bool         isVisible() const;
@@ -608,10 +611,6 @@ class OverviewController {
     CFunctionHook*            m_borderDrawHook = nullptr;
     CFunctionHook*            m_shadowDrawHook = nullptr;
     CFunctionHook*            m_calculateUVForSurfaceHook = nullptr;
-    CFunctionHook*            m_fullscreenActiveHook = nullptr;
-    CFunctionHook*            m_fullscreenStateActiveHook = nullptr;
-    CFunctionHook*            m_changeWorkspaceHook = nullptr;
-    CFunctionHook*            m_focusWorkspaceOnCurrentMonitorHook = nullptr;
     CFunctionHook*            m_workspaceSwipeBeginFunctionHook = nullptr;
     CFunctionHook*            m_workspaceSwipeUpdateFunctionHook = nullptr;
     CFunctionHook*            m_workspaceSwipeEndFunctionHook = nullptr;
@@ -631,10 +630,14 @@ class OverviewController {
     BorderDrawFn              m_borderDrawOriginal = nullptr;
     BorderDrawFn              m_shadowDrawOriginal = nullptr;
     CalculateUVForSurfaceFn   m_calculateUVForSurfaceOriginal = nullptr;
-    DispatcherFn              m_fullscreenActiveOriginal = nullptr;
-    DispatcherFn              m_fullscreenStateActiveOriginal = nullptr;
-    DispatcherFn              m_changeWorkspaceOriginal = nullptr;
-    DispatcherFn              m_focusWorkspaceOnCurrentMonitorOriginal = nullptr;
+    DispatcherHandler         m_fullscreenActiveOriginal;
+    DispatcherHandler         m_fullscreenStateActiveOriginal;
+    DispatcherHandler         m_changeWorkspaceOriginal;
+    DispatcherHandler         m_focusWorkspaceOnCurrentMonitorOriginal;
+    bool                      m_fullscreenActiveDispatcherWrapped = false;
+    bool                      m_fullscreenStateDispatcherWrapped = false;
+    bool                      m_changeWorkspaceDispatcherWrapped = false;
+    bool                      m_focusWorkspaceOnCurrentMonitorDispatcherWrapped = false;
     WorkspaceSwipeBeginFn     m_workspaceSwipeBeginOriginal = nullptr;
     WorkspaceSwipeUpdateFn    m_workspaceSwipeUpdateOriginal = nullptr;
     WorkspaceSwipeEndFn       m_workspaceSwipeEndOriginal = nullptr;
