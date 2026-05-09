@@ -220,6 +220,22 @@ plugin {
 }
 ```
 
+Lua config uses the same names under `plugin.hymission`:
+
+```lua
+hl.config({
+    plugin = {
+        hymission = {
+            outer_padding_top = 92,
+            layout_engine = "grid",
+            niri_mode = 0,
+            switch_release_key = "Super_L",
+            workspace_strip_anchor = "left",
+        },
+    },
+})
+```
+
 ### Layout options
 
 | Option | Type | Default | Description |

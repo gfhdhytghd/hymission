@@ -163,7 +163,7 @@ class OverviewController {
 
     struct WorkspaceStripEntry {
         struct Snapshot {
-            CFramebuffer framebuffer;
+            SP<Render::IFramebuffer> framebuffer;
         };
 
         struct WindowPreview {
@@ -351,8 +351,8 @@ class OverviewController {
         Rect       capturedRectGlobal;
         Rect       proxyRectGlobal;
         Vector2D   snapshotSize;
-        SP<CFramebuffer> framebuffer;
-        std::array<SP<CFramebuffer>, 4> blurredFramebuffers;
+        SP<Render::IFramebuffer> framebuffer;
+        std::array<SP<Render::IFramebuffer>, 4> blurredFramebuffers;
     };
 
     using SurfaceGetTexBoxFn = CBox (*)(void*);
