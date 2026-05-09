@@ -1636,8 +1636,8 @@ OverviewController::~OverviewController() {
     setInputFollowMouseOverride(false);
     setScrollingFollowFocusOverride(false);
     setAnimationsEnabledOverride(false);
-    deactivateHooks();
     restoreWrappedDispatchers();
+    deactivateHooks();
     if (m_workspaceSwipeBeginFunctionHook)
         m_workspaceSwipeBeginFunctionHook->unhook();
     if (m_workspaceSwipeUpdateFunctionHook)
@@ -5102,8 +5102,6 @@ void OverviewController::deactivateHooks() {
     m_shadowDrawOriginal = nullptr;
     m_calculateUVForSurfaceOriginal = nullptr;
     m_renderLayerOriginal = nullptr;
-    m_fullscreenActiveOriginal = nullptr;
-    m_fullscreenStateActiveOriginal = nullptr;
     m_surfaceRenderDataTransformDepth = 0;
     m_hooksActive = false;
     g_pHyprRenderer->m_directScanoutBlocked = false;
