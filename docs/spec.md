@@ -188,14 +188,13 @@ gesture-only 参数：
 
 ### 6.1.1 Trackpad Gesture
 
-- 只接管 Hyprland 官方 gesture 语法里的 `dispatcher, hymission:toggle,...` / `dispatcher, hymission:open,...` / `dispatcher, hymission:scroll,...`
+- 只接管 Hyprland 官方 gesture 语法里的 `dispatcher, hymission:toggle,...` / `dispatcher, hymission:open,...`；scrolling layout 平移复用 Hyprland 官方 `scrollMove`
 - 推荐写法：`gesture = 4, vertical, dispatcher, hymission:toggle,forceall`
-- niri mode 推荐写法：`gesture = 3, horizontal, dispatcher, hymission:scroll,layout`、`gesture = 3, vertical, workspace`
+- niri mode 推荐写法：`gesture = 3, horizontal, scrollMove`、`gesture = 3, vertical, workspace`
 - `recommand` 只允许出现在 `hymission:toggle` 的 gesture 配置里；dispatcher 不支持该参数
-- `hymission:scroll` 只接受 `layout` 参数；它是连续 `ITrackpadGesture`，不是普通 dispatcher release 触发
 - 不支持非官方简写 `gesture = 4, vertical, hymission:toggle,forceall`
 - `vertical` 和 `horizontal` 都要求具备跟手动画；`horizontal` 体感上等价于把左右映射成上下
-- `up` / `down` / `left` / `right` 继续走 Hyprland 默认 dispatcher gesture 语义；`swipe` 只由 `hymission:scroll` 接管
+- `up` / `down` / `left` / `right` / `swipe` 继续走 Hyprland 默认 gesture 语义，除非是插件显式接管的 overview / workspace path
 - 默认语义是 state-aware：overview 关闭时按配置方向打开；`hymission:toggle,*` 在 overview 已可见时允许任意方向发起退出；`hymission:open,*` 在 overview 已可见时仍保持 no-op
 - `recommand` 语义是双段式：hidden 时正向进入 `forceall`，反向进入 `onlycurrentworkspace`，且 compact side 固定为 `onlycurrentworkspace`，不受 `only_active_workspace` 默认 scope 影响
 - `recommand` 在 overview 已可见时，两侧都允许任意方向先退出到 hidden
@@ -211,9 +210,8 @@ gesture-only 参数：
 - 当当前 overview scope 只展示活动 workspace，且 `workspace_change_keeps_overview = 1` 时，Hyprland 原生 `gesture = ..., workspace` 必须在 overview 内被接管为 monitor-local 的 overview-to-overview 连续滑动
 - 上述 workspace gesture 必须复用当前 Hyprland 本地实现的 `workspace_swipe_distance`、`workspace_swipe_invert`、`workspace_swipe_min_speed_to_force`、`workspace_swipe_cancel_ratio`、`workspace_swipe_create_new`、`workspace_swipe_direction_lock`、`workspace_swipe_direction_lock_threshold`、`workspace_swipe_forever`、`workspace_swipe_use_r` 和 `general:gaps_workspaces`
 - overview 内的 workspace gesture 中间帧不得出现原生普通 workspace 切换动画；屏幕上只能看到 source overview 与 target overview 的滑动过渡
-- `hymission:scroll,layout` 按 `scrolling:direction = right|left|down|up` 选择匹配轴，并连续调用 scrolling layout 的 `move +/-N`
+- `scrollMove` 的平移、惯性投影、snap 行为由 Hyprland 官方实现负责；overview 可见且 `niri_mode = 1` 时，hymission 只在官方 gesture 更新后刷新 niri overview 的 preview geometry
 - overview 可见且 `niri_mode = 1` 时，strip 仍只是边缘 workspace preview；标准 `gesture = ..., workspace` 继续驱动主 overview 的 workspace-to-workspace 过渡
-- `hymission:scroll` 不提供 workspace 子模式；workspace swipe 统一使用标准 `gesture = ..., workspace`
 
 ### 6.2 鼠标
 
@@ -314,7 +312,6 @@ workspace 切换补充语义：
 - `expand_selected_window`
 - `overview_focus_follows_mouse`
 - `niri_mode`
-- `niri_scroll_pixels_per_delta`
 - `niri_workspace_scale`
 - `gesture_invert_vertical`
 - `only_active_workspace`
@@ -336,7 +333,6 @@ workspace 切换补充语义：
 - `expand_selected_window` 让 overview 当前选中项在布局阶段获得额外权重，从而放大并挤开相邻 preview；它依赖 `selectedIndex`，因此在 `overview_focus_follows_mouse = 1` 时通常也会跟随 hover 触发 relayout
 - `overview_focus_follows_mouse` 控制 overview 内部选中项是否跟随鼠标，以及在允许时是否把当前选中项实时同步到真实 focus；当 overview 打开前 `input:follow_mouse = 0` 时，它退化为“只改 overview 内部选中项 + 退出时提交”
 - `niri_mode` 默认关闭；打开后只改变边缘 workspace strip 的排布：active-centered、monitor aspect ratio、允许缩略图列表溢出屏幕
-- `niri_scroll_pixels_per_delta` 影响 `hymission:scroll,layout` 在 overview 外连续发送 `layoutMsg move` 的幅度；默认 `1.0` 表示约把一次 `gestures:workspace_swipe_distance` 的手指位移映射为一个 viewport 的 scrolling-layout 位移
 - `niri_workspace_scale` 控制 niri mode 下 strip 内 workspace preview 相对 strip cross-axis 的缩放，默认 `1.0`，范围 `0.05..1.0`
 - `gesture_invert_vertical` 只影响被插件接管的 vertical overview gesture；它不改变普通 dispatcher、键盘输入或 Hyprland 其他 gesture 的方向
 - 如果退出 overview 时提交的真实目标窗口仍不在屏内，允许临时保持该窗口为真实 focus，直到下一次真实鼠标事件；只有当目标窗口在当前 monitor 上存在可见区域时，才允许顺带移动光标去对齐真实 focus

@@ -9,11 +9,8 @@
 namespace {
 
 using hymission::Direction;
-using hymission::GestureAxis;
-using hymission::HymissionScrollMode;
 using hymission::Rect;
 using hymission::RecommandVisibleGestureMode;
-using hymission::ScrollingLayoutDirection;
 using hymission::WorkspaceStripAnchor;
 using hymission::WorkspaceStripEmptyMode;
 using hymission::WorkspaceStripReservation;
@@ -125,35 +122,6 @@ int main() {
     ok &= expect(parseWorkspaceStripEmptyMode(" Continuous ") == WorkspaceStripEmptyMode::Continuous,
                  "continuous empty-mode parsing should ignore case and whitespace");
     ok &= expect(parseWorkspaceStripEmptyMode("unexpected") == WorkspaceStripEmptyMode::Existing, "invalid empty-mode should fall back to existing");
-
-    ok &= expect(parseHymissionScrollMode("layout") == std::optional<HymissionScrollMode>{HymissionScrollMode::Layout}, "layout niri scroll mode should parse");
-    ok &= expect(!parseHymissionScrollMode(" workspace ").has_value(), "workspace should stay on Hyprland's standard workspace gesture");
-    ok &= expect(!parseHymissionScrollMode("Both").has_value(), "combined layout/workspace scroll mode should not parse");
-    ok &= expect(!parseHymissionScrollMode("unexpected").has_value(), "invalid niri scroll mode should fail");
-
-    ok &= expect(parseScrollingLayoutDirection("left") == ScrollingLayoutDirection::Left, "left scrolling direction should parse");
-    ok &= expect(parseScrollingLayoutDirection("DOWN") == ScrollingLayoutDirection::Down, "down scrolling direction parsing should ignore case");
-    ok &= expect(parseScrollingLayoutDirection(" up ") == ScrollingLayoutDirection::Up, "up scrolling direction parsing should ignore whitespace");
-    ok &= expect(parseScrollingLayoutDirection("unexpected") == ScrollingLayoutDirection::Right, "invalid scrolling direction should fall back to right");
-
-    ok &= expect(axisForScrollingLayoutDirection(ScrollingLayoutDirection::Right) == GestureAxis::Horizontal, "right scrolling direction should use horizontal gestures");
-    ok &= expect(axisForScrollingLayoutDirection(ScrollingLayoutDirection::Left) == GestureAxis::Horizontal, "left scrolling direction should use horizontal gestures");
-    ok &= expect(axisForScrollingLayoutDirection(ScrollingLayoutDirection::Down) == GestureAxis::Vertical, "down scrolling direction should use vertical gestures");
-    ok &= expect(axisForScrollingLayoutDirection(ScrollingLayoutDirection::Up) == GestureAxis::Vertical, "up scrolling direction should use vertical gestures");
-    ok &= expect(scrollingLayoutGestureAxisMatches(ScrollingLayoutDirection::Down, GestureAxis::Vertical),
-                 "vertical gestures should match down scrolling layouts");
-    ok &= expect(!scrollingLayoutGestureAxisMatches(ScrollingLayoutDirection::Down, GestureAxis::Horizontal),
-                 "horizontal gestures should not match down scrolling layouts");
-    ok &= expect(closeEnough(scrollingLayoutMoveAmount(ScrollingLayoutDirection::Right, -12.0, 2.0), -24.0),
-                 "right scrolling move amount should preserve gesture sign");
-    ok &= expect(closeEnough(scrollingLayoutMoveAmount(ScrollingLayoutDirection::Left, -12.0, 2.0), 24.0),
-                 "left scrolling move amount should invert gesture sign");
-    ok &= expect(closeEnough(scrollingLayoutMoveAmount(ScrollingLayoutDirection::Down, 5.0, 3.0), 15.0),
-                 "down scrolling move amount should preserve gesture sign");
-    ok &= expect(closeEnough(scrollingLayoutMoveAmount(ScrollingLayoutDirection::Up, 5.0, 3.0), -15.0),
-                 "up scrolling move amount should invert gesture sign");
-    ok &= expect(closeEnough(scrollingLayoutMoveAmount(ScrollingLayoutDirection::Right, 5.0, -3.0), 0.0),
-                 "negative niri scroll sensitivity should clamp to zero");
 
     ok &= expect(isWorkspaceStripHorizontal(WorkspaceStripAnchor::Top), "top strip should be horizontal");
     ok &= expect(!isWorkspaceStripHorizontal(WorkspaceStripAnchor::Left), "left strip should be vertical");

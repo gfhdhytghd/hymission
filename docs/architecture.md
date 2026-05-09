@@ -120,7 +120,7 @@
 - trackpad gesture hook：
   - 官方 `gesture = ..., dispatcher, hymission:*`
   - overview 内部对 workspace swipe 的接管与复用
-  - `hymission:scroll,layout` 的连续 gesture：overview 外按 scrolling layout 方向发 `layoutMsg move`
+  - 官方 `scrollMove` gesture：niri overview 可见时在原生 scrolling 平移后刷新 preview geometry
   - niri mode 下，边缘 workspace strip 使用 active-centered overflow preview；标准 workspace gesture 仍驱动主 overview 的 workspace 过渡
 
 结论仍然不变：`hymission` 以 render hook 为主路径，而不是 `IWindowTransformer`。
