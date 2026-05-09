@@ -150,11 +150,6 @@ enum class GestureDispatcherKind : uint8_t {
     Open,
 };
 
-struct SurfacePassElementMirror {
-    void*                             vtable = nullptr;
-    CSurfacePassElement::SRenderData  data;
-};
-
 class ScopedFlag {
   public:
     explicit ScopedFlag(bool& flag, bool value = true) : m_flag(flag), m_previous(flag) {
@@ -1485,7 +1480,7 @@ CSurfacePassElement::SRenderData* surfaceRenderDataMutable(void* surfacePassThis
     if (!surfacePassThisptr)
         return nullptr;
 
-    return &reinterpret_cast<SurfacePassElementMirror*>(surfacePassThisptr)->data;
+    return &reinterpret_cast<CSurfacePassElement*>(surfacePassThisptr)->m_data;
 }
 
 CBox hkSurfaceTexBox(void* surfacePassThisptr) {
