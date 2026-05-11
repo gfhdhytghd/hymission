@@ -83,6 +83,12 @@ class OverviewController {
     bool                shouldRenderWindowHook(const PHLWINDOW& window, const PHLMONITOR& monitor);
     void                borderDrawHook(void* borderDecorationThisptr, const PHLMONITOR& monitor, const float& alpha);
     void                shadowDrawHook(void* shadowDecorationThisptr, const PHLMONITOR& monitor, const float& alpha);
+    // Same pattern as borderDrawHook / shadowDrawHook, but for the
+    // hyprwm/hyprland-plugins hyprbars per-window title bar. Optional —
+    // only installed if the hyprbars plugin is loaded. Suppresses the
+    // hyprbars draw call for windows hymission is rendering as overview
+    // tiles, so the bars don't sit on top of the scaled previews.
+    void                hyprbarsDrawHook(void* hyprbarsThisptr, const PHLMONITOR& monitor, const float& alpha);
     void                calculateUVForSurfaceHook(const PHLWINDOW& window, SP<CWLSurfaceResource> surface, const PHLMONITOR& monitor, bool main, const Vector2D& projSize,
                                                   const Vector2D& projSizeUnscaled, bool fixMisalignedFSV1);
     void                renderLayerHook(void* rendererThisptr, PHLLS layer, PHLMONITOR monitor, const Time::steady_tp& now, bool popups, bool lockscreen);
@@ -432,6 +438,12 @@ class OverviewController {
     void                       setInputFollowMouseOverride(bool disable);
     void                       setScrollingFollowFocusOverride(bool disable);
     void                       setAnimationsEnabledOverride(bool disable, std::optional<std::chrono::milliseconds> restoreDelay = std::nullopt);
+    // Temporarily force `debug:damage_tracking = 0` while overview is active.
+    // Hyprland's damage tracking culls scaled overview windows when the cursor
+    // damage region doesn't intersect the (downscaled) tile box, causing
+    // colorful noise / flicker on mouse hover. Documented upstream in
+    // gfhdhytghd/hymission#2 — patch was never merged.
+    void                       setDamageTrackingOverride(bool disable);
     void                       applyWorkspaceNameOverrides(const State& state);
     void                       restoreWorkspaceNameOverrides();
     void                       clearRegisteredTrackpadGestures();
@@ -441,6 +453,20 @@ class OverviewController {
     void                       deactivateHooks();
     [[nodiscard]] bool         hookFunction(const std::string& symbolName, const std::string& demangledNeedle, CFunctionHook*& hook, void* destination);
     [[nodiscard]] void*        findFunction(const std::string& symbolName, const std::string& demangledNeedle) const;
+    // hyprbars (hyprwm/hyprland-plugins) lives in its own .so loaded with
+    // RTLD_LAZY+RTLD_LOCAL by Hyprland and is typically more than 2GB away
+    // in address space from the Hyprland binary. Hyprland's CFunctionHook
+    // uses a 32-bit relative jump and bails when source and trampoline are
+    // >2GB apart, so we cannot use HyprlandAPI::createFunctionHook against
+    // CHyprBar::draw. Instead we patch CHyprBar's vtable: dlsym the vtable
+    // symbol _ZTV8CHyprBar, find the slot whose pointer matches the dlsym
+    // of the draw symbol, mprotect that page RW, and swap the slot to point
+    // at hkHyprbarsDraw. Restore on deactivate. Optional — silently no-ops
+    // when hyprbars is not loaded.
+    [[nodiscard]] bool         installHyprbarsVtableHook();
+    void                       activateHyprbarsVtableHook();
+    void                       deactivateHyprbarsVtableHook();
+    [[nodiscard]] void*        dlsymInHyprbars(const char* mangledSymbol) const;
 
     [[nodiscard]] bool         isAnimating() const;
     [[nodiscard]] bool         isVisible() const;
@@ -595,6 +621,8 @@ class OverviewController {
                       bool keepEmptyParticipatingMonitors = false, bool suppressWorkspaceStrip = false, PHLWINDOW preferredSelectedWindow = {}) const;
     State  m_state;
     HANDLE m_handle = nullptr;
+    bool   m_damageTrackingOverridden = false;
+    long   m_damageTrackingBackup     = 2; // Hyprland default
 
     CFunctionHook*            m_surfaceTexBoxHook = nullptr;
     CFunctionHook*            m_surfaceBoundingBoxHook = nullptr;
@@ -607,6 +635,8 @@ class OverviewController {
     CFunctionHook*            m_renderLayerHook = nullptr;
     CFunctionHook*            m_borderDrawHook = nullptr;
     CFunctionHook*            m_shadowDrawHook = nullptr;
+    void**                    m_hyprbarsVtableSlot = nullptr; // address of the draw slot inside CHyprBar's vtable
+    bool                      m_hyprbarsVtableSwapped = false;
     CFunctionHook*            m_calculateUVForSurfaceHook = nullptr;
     CFunctionHook*            m_fullscreenActiveHook = nullptr;
     CFunctionHook*            m_fullscreenStateActiveHook = nullptr;
@@ -630,6 +660,7 @@ class OverviewController {
     RenderLayerFn             m_renderLayerOriginal = nullptr;
     BorderDrawFn              m_borderDrawOriginal = nullptr;
     BorderDrawFn              m_shadowDrawOriginal = nullptr;
+    BorderDrawFn              m_hyprbarsDrawOriginal = nullptr;
     CalculateUVForSurfaceFn   m_calculateUVForSurfaceOriginal = nullptr;
     DispatcherFn              m_fullscreenActiveOriginal = nullptr;
     DispatcherFn              m_fullscreenStateActiveOriginal = nullptr;
