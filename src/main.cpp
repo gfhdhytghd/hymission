@@ -35,7 +35,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
 #define CONF(name, value) HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:" name, {value})
     CONF("outer_padding", 32L);
-    CONF("outer_padding_top", 92L);
+    CONF("outer_padding_top", 32L);
     CONF("outer_padding_right", 32L);
     CONF("outer_padding_bottom", 32L);
     CONF("outer_padding_left", 32L);

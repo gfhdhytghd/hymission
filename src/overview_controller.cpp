@@ -5415,10 +5415,22 @@ Rect OverviewController::overviewContentRectForMonitor(const PHLMONITOR& monitor
     if (!monitor)
         return {};
 
-    if (!workspaceStripEnabled(state))
-        return makeRect(0.0, 0.0, monitor->m_size.x, monitor->m_size.y);
+    // Subtract layer-shell exclusive zones (e.g. waybar / quickshell-dms top
+    // bars and bottom docks) so preview tiles don't render under them. The
+    // user's outer_padding_* values still apply on top of this.
+    const double reservedTop    = monitor->m_reservedArea.top();
+    const double reservedRight  = monitor->m_reservedArea.right();
+    const double reservedBottom = monitor->m_reservedArea.bottom();
+    const double reservedLeft   = monitor->m_reservedArea.left();
 
-    const auto reservation = reserveWorkspaceStripBand(makeRect(0.0, 0.0, monitor->m_size.x, monitor->m_size.y),
+    const Rect available = makeRect(reservedLeft, reservedTop,
+                                    std::max(1.0, monitor->m_size.x - reservedLeft - reservedRight),
+                                    std::max(1.0, monitor->m_size.y - reservedTop - reservedBottom));
+
+    if (!workspaceStripEnabled(state))
+        return available;
+
+    const auto reservation = reserveWorkspaceStripBand(available,
                                                        parseWorkspaceStripAnchor(workspaceStripAnchor()), workspaceStripThickness(monitor), workspaceStripGap());
     return makeRect(reservation.content.x, reservation.content.y, reservation.content.width, reservation.content.height);
 }
