@@ -36,6 +36,7 @@
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/managers/animation/AnimationManager.hpp>
 #include <hyprland/src/managers/animation/DesktopAnimationManager.hpp>
+#include <hyprland/src/managers/CursorManager.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
 #include <hyprland/src/managers/EventManager.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
@@ -74,6 +75,7 @@ class OverviewOverlayPassElement final : public IPassElement {
 
         m_controller->renderHiddenStripLayerProxies();
         m_controller->renderSelectionChrome();
+        m_controller->renderCloseButtons();
         m_controller->renderWorkspaceStrip();
     }
 
@@ -2148,6 +2150,19 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
     const auto effectiveHoveredStripIndex = m_state.hoveredStripIndex ? m_state.hoveredStripIndex : cachedHoveredStripIndex;
     const auto effectiveHoveredIndex = m_state.hoveredIndex ? m_state.hoveredIndex : cachedHoveredIndex;
 
+    // Close-button click takes priority over tile selection. Fire on the
+    // press edge so quick clicks feel snappy, then swallow the matching
+    // release to keep the rest of handleMouseButton from acting on it.
+    if (m_state.hoveredCloseIndex && effectiveState == WL_POINTER_BUTTON_STATE_PRESSED) {
+        requestCloseHoveredWindow();
+        m_closeButtonPressLatched = true;
+        return true;
+    }
+    if (m_closeButtonPressLatched && effectiveState == WL_POINTER_BUTTON_STATE_RELEASED) {
+        m_closeButtonPressLatched = false;
+        return true;
+    }
+
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] mouse button state=" << static_cast<int>(effectiveState) << " button=" << effectiveButton
@@ -3013,6 +3028,18 @@ bool OverviewController::barSingleMissionControlEnabled() const {
 
 bool OverviewController::showFocusIndicatorEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:show_focus_indicator", 0) != 0;
+}
+
+bool OverviewController::closeButtonsEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:close_button_enabled", 1) != 0;
+}
+
+double OverviewController::closeButtonSize() const {
+    return std::max(8.0, static_cast<double>(getConfigInt(m_handle, "plugin:hymission:close_button_size", 18)));
+}
+
+double OverviewController::closeButtonInset() const {
+    return static_cast<double>(getConfigInt(m_handle, "plugin:hymission:close_button_inset", 0));
 }
 
 bool OverviewController::niriModeEnabled() const {
@@ -6351,6 +6378,44 @@ Rect OverviewController::currentPreviewRect(const ManagedWindow& window) const {
     return window.targetGlobal;
 }
 
+Rect OverviewController::closeButtonRectFor(const ManagedWindow& window) const {
+    const Rect   tile  = currentPreviewRect(window);
+    const double size  = closeButtonSize();
+    // Hide the button on tiles that are too small to host it without
+    // dominating the preview.
+    if (tile.width < size * 4.0 || tile.height < size * 4.0)
+        return {};
+    // macOS-style: the button is centered on the tile's top-left corner so
+    // it sits half on, half off the tile, badge-style. closeButtonInset()
+    // is interpreted as an extra outward shift past the corner (negative
+    // = pull toward tile center, positive = push further out).
+    const double offset = size * 0.5 + closeButtonInset();
+    return makeRect(tile.x - offset, tile.y - offset, size, size);
+}
+
+std::optional<std::size_t> OverviewController::hitTestCloseButton(double x, double y) const {
+    if (!closeButtonsEnabled() || !isVisible() || m_state.phase != Phase::Active)
+        return std::nullopt;
+
+    for (std::size_t index = 0; index < m_state.windows.size(); ++index) {
+        const Rect rect = closeButtonRectFor(m_state.windows[index]);
+        if (rect.width <= 0.0 || rect.height <= 0.0)
+            continue;
+        if (rectContainsPoint(rect, x, y))
+            return index;
+    }
+    return std::nullopt;
+}
+
+void OverviewController::requestCloseHoveredWindow() {
+    if (!m_state.hoveredCloseIndex || *m_state.hoveredCloseIndex >= m_state.windows.size())
+        return;
+    auto window = m_state.windows[*m_state.hoveredCloseIndex].window;
+    if (!window || !g_pCompositor)
+        return;
+    g_pCompositor->closeWindow(window);
+}
+
 double OverviewController::visualProgress() const {
     if (m_gestureSession.active)
         return clampUnit(m_gestureSession.openness);
@@ -7820,6 +7885,11 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
 }
 
 void OverviewController::deactivate() {
+    if (m_closeCursorOverride) {
+        if (g_pCursorManager)
+            g_pCursorManager->setCursorFromName("left_ptr");
+        m_closeCursorOverride = false;
+    }
     const auto monitor = m_state.ownerMonitor;
     const auto ownedMonitors = m_state.participatingMonitors;
     const auto fullscreenActiveOriginal = m_fullscreenActiveOriginal;
@@ -8246,7 +8316,21 @@ void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncR
     const auto now = std::chrono::steady_clock::now();
 
     m_state.hoveredStripIndex = hitTestStripTarget(pointer.x, pointer.y);
+    m_state.hoveredCloseIndex = draggingWindow ? std::optional<std::size_t>{} : hitTestCloseButton(pointer.x, pointer.y);
     m_state.hoveredIndex = (draggingWindow || m_state.hoveredStripIndex) ? std::optional<std::size_t>{} : hitTestTarget(pointer.x, pointer.y);
+
+    // Cursor: switch to "pointer" while hovering a close button, restore
+    // when leaving. Only call setCursorFromName on transition so we don't
+    // fight the focused client's cursor every mouse-move frame.
+    if (m_state.hoveredCloseIndex && !m_closeCursorOverride) {
+        if (g_pCursorManager)
+            g_pCursorManager->setCursorFromName("pointer");
+        m_closeCursorOverride = true;
+    } else if (!m_state.hoveredCloseIndex && m_closeCursorOverride) {
+        if (g_pCursorManager)
+            g_pCursorManager->setCursorFromName("left_ptr");
+        m_closeCursorOverride = false;
+    }
 
     const bool wantsSelectionRetarget =
         !draggingWindow && syncSelection && m_state.hoveredIndex && focusFollowsMouseEnabled() && allowSelectionRetarget &&
@@ -9061,6 +9145,70 @@ void OverviewController::renderSelectionChrome() const {
         const Rect  ghost = rectToMonitorRenderLocal(ghostGlobal, renderMonitor);
         g_pHyprOpenGL->renderRect(toBox(ghost), CHyprColor(0.16, 0.20, 0.24, 0.28 * progress), {});
         renderOutline(ghostGlobal, CHyprColor(0.95, 0.97, 1.0, 0.82 * progress), 2.0);
+    }
+}
+
+void OverviewController::renderCloseButtons() const {
+    if (!closeButtonsEnabled())
+        return;
+
+    const double progress = visualProgress();
+    if (progress <= 0.0 || m_state.phase != Phase::Active)
+        return;
+
+    const auto renderMonitor = g_pHyprOpenGL->m_renderData.pMonitor.lock();
+    if (!renderMonitor)
+        return;
+
+    // macOS-style close button: filled circle (gray idle / red on hover)
+    // with a white "x" drawn as two diagonal stroke rectangles. Drawing the
+    // X as primitives instead of as a glyph keeps it perfectly centered
+    // inside the disk regardless of font metrics.
+    const CHyprColor idleFill {0.16, 0.16, 0.18, 0.92 * progress};
+    const CHyprColor hoverFill{0.95, 0.30, 0.28, 0.95 * progress};
+    const CHyprColor glyphCol {1.00, 1.00, 1.00, 0.98 * progress};
+
+    for (std::size_t index = 0; index < m_state.windows.size(); ++index) {
+        const auto& managed = m_state.windows[index];
+        if (managed.targetMonitor != renderMonitor)
+            continue;
+
+        const Rect rectGlobal = closeButtonRectFor(managed);
+        if (rectGlobal.width <= 0.0 || rectGlobal.height <= 0.0)
+            continue;
+
+        const Rect rectLocal = rectToMonitorRenderLocal(rectGlobal, renderMonitor);
+        const bool hovered   = m_state.hoveredCloseIndex && *m_state.hoveredCloseIndex == index;
+
+        // Disk: square rect rounded to half its side becomes a circle.
+        CHyprOpenGLImpl::SRectRenderData circleData{};
+        circleData.round = static_cast<int>(std::round(rectLocal.width * 0.5));
+        g_pHyprOpenGL->renderRect(toBox(rectLocal), hovered ? hoverFill : idleFill, circleData);
+
+        // X strokes: two diagonals across an inner box. Drawn as a high
+        // density of small overlapping squares along each line — cheap,
+        // produces a clean anti-aliased look thanks to the renderer's
+        // built-in alpha blending of overlapping pixels.
+        const double pad     = rectLocal.width * 0.34;            // X uses ~32% of disk diameter
+        const double xL      = rectLocal.x + pad;
+        const double xR      = rectLocal.x + rectLocal.width  - pad;
+        const double yT      = rectLocal.y + pad;
+        const double yB      = rectLocal.y + rectLocal.height - pad;
+        const double diag    = std::hypot(xR - xL, yB - yT);
+        const double stroke  = std::max(1.0, rectLocal.width * 0.085);
+        // Two samples per pixel of diagonal length so the line reads
+        // smooth at any button size.
+        const int    samples = std::max(16, static_cast<int>(std::round(diag * 2.0)));
+
+        for (int s = 0; s <= samples; ++s) {
+            const double t = static_cast<double>(s) / static_cast<double>(samples);
+            const double x1 = xL + (xR - xL) * t;
+            const double y1 = yT + (yB - yT) * t;
+            g_pHyprOpenGL->renderRect(toBox(makeRect(x1 - stroke * 0.5, y1 - stroke * 0.5, stroke, stroke)), glyphCol, {});
+            const double x2 = xR - (xR - xL) * t;
+            const double y2 = yT + (yB - yT) * t;
+            g_pHyprOpenGL->renderRect(toBox(makeRect(x2 - stroke * 0.5, y2 - stroke * 0.5, stroke, stroke)), glyphCol, {});
+        }
     }
 }
 
