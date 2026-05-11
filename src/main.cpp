@@ -60,7 +60,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("only_active_workspace", 0L);
     CONF("only_active_monitor", 0L);
     CONF("show_special", 0L);
-    CONF("toggle_switch_mode", 1L);
+    CONF("toggle_switch_mode", 0L);
     CONF("switch_toggle_auto_next", 1L);
     CONF("workspace_change_keeps_overview", 1L);
     CONF("workspace_strip_thickness", 160L);
