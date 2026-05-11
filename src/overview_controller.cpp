@@ -132,7 +132,13 @@ constexpr double RECOMMAND_STAGE_TRANSFER = 0.18;
 constexpr double SELECTED_WINDOW_LAYOUT_EMPHASIS = 1.18;
 constexpr double HOVER_SELECTION_RETARGET_DISTANCE = 18.0;
 constexpr auto   HOVER_SELECTION_RETARGET_COOLDOWN = std::chrono::milliseconds(static_cast<int>(RELAYOUT_DURATION_MS + 48.0));
-constexpr auto   HOVER_SELECTION_RETARGET_DWELL = std::chrono::milliseconds(48);
+// Cursor must hover-pause on a candidate window for this long before the
+// expand-on-hover relayout kicks in. 48ms was short enough that fast mouse
+// motion toward a target would dwell on intermediate windows just long
+// enough to trigger a relayout, which then shifted the target out from
+// under the cursor. 150ms is still well under human reaction time but
+// filters out incidental cross-through.
+constexpr auto   HOVER_SELECTION_RETARGET_DWELL = std::chrono::milliseconds(150);
 constexpr auto   TOGGLE_SWITCH_RELEASE_POLL_INTERVAL = std::chrono::milliseconds(16);
 constexpr auto   MISSION_CONTROL_WORKSPACE_NAME = "Mission Control";
 constexpr auto   MISSION_CONTROL_HIDDEN_WORKSPACE_PREFIX = "__hymission_hidden__:";
