@@ -205,6 +205,7 @@ class OverviewController {
         std::vector<WindowSlot>                slots;
         std::optional<std::size_t>             hoveredStripIndex;
         std::optional<std::size_t>             hoveredIndex;
+        std::optional<std::size_t>             hoveredCloseIndex; // tile whose close button the cursor is on
         std::optional<std::size_t>             selectedIndex;
         double                                 animationProgress = 0.0;
         double                                 animationFromVisual = 0.0;
@@ -575,6 +576,15 @@ class OverviewController {
     void                        clearToggleSwitchSession();
     void latchHoverSelectionAnchor(const Vector2D& pointer);
     [[nodiscard]] bool hoverSelectionRetargetLocked(const Vector2D& pointer, const std::optional<std::size_t>& hoveredIndex) const;
+
+    // macOS-style close button on each preview tile.
+    [[nodiscard]] bool                       closeButtonsEnabled() const;
+    [[nodiscard]] double                     closeButtonSize() const;
+    [[nodiscard]] double                     closeButtonInset() const;
+    [[nodiscard]] Rect                       closeButtonRectFor(const ManagedWindow& window) const;
+    [[nodiscard]] std::optional<std::size_t> hitTestCloseButton(double x, double y) const;
+    void                                     renderCloseButtons() const;
+    void                                     requestCloseHoveredWindow();
     [[nodiscard]] bool workspaceStripEntriesMatchForSnapshot(const WorkspaceStripEntry& lhs, const WorkspaceStripEntry& rhs) const;
     void carryOverWorkspaceStripSnapshots(State& next, const State& previous) const;
     void renderWorkspaceStrip() const;
@@ -700,6 +710,8 @@ class OverviewController {
     bool                     m_stripSnapshotsDirty = false;
     bool                     m_stripSnapshotRefreshScheduled = false;
     bool                     m_primaryButtonPressed = false;
+    bool                     m_closeButtonPressLatched = false; // swallow release after close-button click
+    bool                     m_closeCursorOverride = false;     // forcing the "pointer" cursor while hover
     std::optional<std::size_t> m_pressedStripIndex;
     std::optional<std::size_t> m_pressedWindowIndex;
     std::optional<std::size_t> m_draggedWindowIndex;

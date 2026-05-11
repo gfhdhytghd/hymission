@@ -35,6 +35,19 @@ add_library(hymission SHARED
 )
 
 target_include_directories(hymission PRIVATE ${HYPR_DEPS_INCLUDE_DIRS})
+
+# Hyprland headers (both upstream and the hyprpm-cached copy) contain
+# relative includes like "managers/eventLoop/EventLoopManager.hpp" that
+# only resolve when the compiler is invoked with -I<hyprland>/src in the
+# search path (Hyprland's own build does this implicitly). Adding the
+# /src subdirectory of every hyprland include dir lets those resolve here
+# too without depending on hyprpm internals.
+foreach(inc ${HYPR_DEPS_INCLUDE_DIRS})
+  if(EXISTS "${inc}/hyprland/src")
+    target_include_directories(hymission PRIVATE "${inc}/hyprland/src")
+  endif()
+endforeach()
+
 target_link_directories(hymission PRIVATE ${HYPR_DEPS_LIBRARY_DIRS})
 target_link_libraries(hymission PRIVATE ${HYPR_DEPS_LIBRARIES})
 
