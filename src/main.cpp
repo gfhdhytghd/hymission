@@ -267,6 +267,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("min_preview_short_edge", 32);
     FLOAT_CONF("small_window_boost", 1.35F);
     FLOAT_CONF("max_preview_scale", 0.95F);
+    FLOAT_CONF("workspace_overview_max_preview_scale", 0.95F);
     FLOAT_CONF("min_slot_scale", 0.10F);
     FLOAT_CONF("natural_scale_flex", 0.22F);
     FLOAT_CONF("layout_scale_weight", 1.0F);
@@ -348,7 +349,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         .name = "hymission",
         .description = "Mission Control style overview prototype",
         .author = "wilf",
-        .version = "0.3.0",
+        .version = "0.3.1",
     };
 }
 

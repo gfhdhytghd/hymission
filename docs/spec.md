@@ -94,7 +94,8 @@ v1 overview 排除：
 - preview 必须等比缩放
 - 不裁切内容
 - 不允许为适配布局而改变窗口逻辑宽高比
-- 单个 preview 的最终 scale 不得超过 `max_preview_scale`
+- all/multi-workspace overview 中单个 preview 的最终 scale 不得超过 `max_preview_scale`
+- active-workspace overview 中单个 preview 的最终 scale 不得超过 `workspace_overview_max_preview_scale`
 
 ### 4.3 当前默认算法
 
@@ -308,6 +309,7 @@ workspace 切换补充语义：
 - `min_preview_short_edge`
 - `small_window_boost`
 - `max_preview_scale`
+- `workspace_overview_max_preview_scale`
 - `min_slot_scale`
 - `layout_engine`
 - `layout_scale_weight`
@@ -332,7 +334,7 @@ workspace 切换补充语义：
 约束：
 
 - 旧配置 `outer_padding` 允许继续作为统一回退值存在，但新的方向配置优先级更高
-- `outer_padding*`、`row_spacing`、`column_spacing`、`min_window_length`、`min_preview_short_edge`、`small_window_boost`、`max_preview_scale`、`min_slot_scale`、`layout_engine`、`layout_scale_weight`、`layout_space_weight` 当前只控制布局算法
+- `outer_padding*`、`row_spacing`、`column_spacing`、`min_window_length`、`min_preview_short_edge`、`small_window_boost`、`max_preview_scale`、`workspace_overview_max_preview_scale`、`min_slot_scale`、`layout_engine`、`layout_scale_weight`、`layout_space_weight` 当前只控制布局算法
 - `layout_engine = grid` 保持既有 row-search 几何；`layout_engine = natural` / `apple` / `expose` / `mission-control` 使用 Apple-like 自然求解器，优先保留窗口进入 overview 前的相对方位并消除重叠，且不按窗口数量主动回退 row-search；`one_workspace_per_row = 1` 时仍保留 workspace 行语义，并在每个 workspace band 内运行自然求解
 - `expand_selected_window` 让 overview 当前选中项在布局阶段获得额外权重，从而放大并挤开相邻 preview；它依赖 `selectedIndex`，因此在 `overview_focus_follows_mouse = 1` 时通常也会跟随 hover 触发 relayout
 - `overview_focus_follows_mouse` 控制 overview 内部选中项是否跟随鼠标，以及在允许时是否把当前选中项实时同步到真实 focus；当 overview 打开前 `input:follow_mouse = 0` 时，它退化为“只改 overview 内部选中项 + 退出时提交”

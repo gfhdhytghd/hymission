@@ -2931,6 +2931,13 @@ LayoutConfig OverviewController::loadLayoutConfig() const {
     };
 }
 
+LayoutConfig OverviewController::layoutConfigForState(const State& state) const {
+    LayoutConfig config = loadLayoutConfig();
+    if (state.collectionPolicy.onlyActiveWorkspace)
+        config.maxPreviewScale = getConfigFloat(m_handle, "plugin:hymission:workspace_overview_max_preview_scale", config.maxPreviewScale);
+    return config;
+}
+
 OverviewController::CollectionPolicy OverviewController::loadCollectionPolicy(ScopeOverride requestedScope) const {
     if (requestedScope == ScopeOverride::OnlyCurrentWorkspace) {
         return {
@@ -9166,6 +9173,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     snapshot->framebuffer = createFramebuffer("hymission workspace strip snapshot");
     if (!snapshot->framebuffer || !snapshot->framebuffer->alloc(fbWidth, fbHeight))
         return;
+    snapshot->framebuffer->setImageDescription(monitor->workBufferImageDescription());
     setFramebufferLinearFiltering(*snapshot->framebuffer);
 
     State previewState;
@@ -9212,6 +9220,40 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     const auto previousSpecialWorkspace = monitor->m_activeSpecialWorkspace;
     const bool previousBlockSurfaceFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
     const bool previousBlockScreenShader = g_pHyprRenderer->m_renderData.blockScreenShader;
+    struct WorkspaceRenderState {
+        PHLWORKSPACE workspace;
+        bool         visible = false;
+        Vector2D     renderOffsetValue;
+        Vector2D     renderOffsetGoal;
+        float        alphaValue = 1.0F;
+        float        alphaGoal = 1.0F;
+    };
+    const auto captureWorkspaceRenderState = [](const PHLWORKSPACE& workspace) -> std::optional<WorkspaceRenderState> {
+        if (!workspace)
+            return std::nullopt;
+        return WorkspaceRenderState{
+            .workspace = workspace,
+            .visible = workspace->m_visible,
+            .renderOffsetValue = workspace->m_renderOffset->value(),
+            .renderOffsetGoal = workspace->m_renderOffset->goal(),
+            .alphaValue = workspace->m_alpha->value(),
+            .alphaGoal = workspace->m_alpha->goal(),
+        };
+    };
+    const auto restoreWorkspaceRenderState = [](const std::optional<WorkspaceRenderState>& state) {
+        if (!state || !state->workspace)
+            return;
+
+        state->workspace->m_visible = state->visible;
+        state->workspace->m_renderOffset->setValueAndWarp(state->renderOffsetValue);
+        if (state->renderOffsetGoal != state->renderOffsetValue)
+            *state->workspace->m_renderOffset = state->renderOffsetGoal;
+        state->workspace->m_alpha->setValueAndWarp(state->alphaValue);
+        if (std::abs(state->alphaGoal - state->alphaValue) > 0.0001F)
+            *state->workspace->m_alpha = state->alphaGoal;
+    };
+    const auto previousWorkspaceRenderState = previousWorkspace != targetWorkspace ? captureWorkspaceRenderState(previousWorkspace) : std::nullopt;
+    const auto targetWorkspaceRenderState = targetWorkspace ? captureWorkspaceRenderState(targetWorkspace) : std::nullopt;
     bool targetVisibilityChanged = false;
     bool previousVisibilityChanged = false;
     bool targetAnimationActivated = false;
@@ -9306,6 +9348,8 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         previousWorkspace->m_visible = false;
         previousVisibilityChanged = true;
         g_pDesktopAnimationManager->startAnimation(previousWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_OUT, false, true);
+        previousWorkspace->m_renderOffset->setValueAndWarp(Vector2D{});
+        previousWorkspace->m_alpha->setValueAndWarp(0.F);
         previousAnimationActivated = true;
     }
 
@@ -9319,6 +9363,8 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             targetVisibilityChanged = true;
         }
         g_pDesktopAnimationManager->startAnimation(targetWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
+        targetWorkspace->m_renderOffset->setValueAndWarp(Vector2D{});
+        targetWorkspace->m_alpha->setValueAndWarp(1.F);
         targetAnimationActivated = true;
     }
 
@@ -9329,6 +9375,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         const int backgroundFbHeight = std::max(1, static_cast<int>(std::ceil(static_cast<double>(monitor->m_size.y) * renderScaleForMonitor(monitor))));
         auto      backgroundFramebuffer = createFramebuffer("hymission workspace strip background");
         if (backgroundFramebuffer && backgroundFramebuffer->alloc(backgroundFbWidth, backgroundFbHeight)) {
+            backgroundFramebuffer->setImageDescription(monitor->workBufferImageDescription());
             setFramebufferLinearFiltering(*backgroundFramebuffer);
             renderedScaledBackgroundOnly =
                 renderBackgroundLayersIntoFramebuffer(backgroundFramebuffer, renderNow) &&
@@ -9370,6 +9417,9 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         previousWorkspace->m_visible = true;
     if (previousAnimationActivated && previousWorkspace)
         g_pDesktopAnimationManager->startAnimation(previousWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
+
+    restoreWorkspaceRenderState(previousWorkspaceRenderState);
+    restoreWorkspaceRenderState(targetWorkspaceRenderState);
 
     g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockSurfaceFeedback;
     --m_stripSnapshotRenderDepth;
@@ -9916,7 +9966,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     std::unordered_map<MONITORID, std::vector<WindowInput>> inputsByMonitor;
     std::unordered_map<MONITORID, std::size_t> directNiriOverviewWindowsByMonitor;
     const bool useWorkspaceRows = workspaceRowsEnabled(m_handle);
-    LayoutConfig config = loadLayoutConfig();
+    LayoutConfig config = layoutConfigForState(state);
     config.preserveInputOrder = preserveExistingOrder || orderByRecentUse;
     config.forceRowGroups = useWorkspaceRows;
     config.rankScaleByInputOrder = orderByRecentUse;

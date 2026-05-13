@@ -376,6 +376,7 @@ class OverviewController {
     using ScrollMoveGestureEndFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureEnd&);
     using HandleGestureFn = std::optional<std::string> (*)(void*, const std::string&, const std::string&);
     [[nodiscard]] LayoutConfig loadLayoutConfig() const;
+    [[nodiscard]] LayoutConfig layoutConfigForState(const State& state) const;
     [[nodiscard]] CollectionPolicy loadCollectionPolicy(ScopeOverride requestedScope) const;
     [[nodiscard]] std::optional<ScopeOverride> parseScopeOverride(const std::string& args, std::string& error) const;
     [[nodiscard]] bool         expandSelectedWindowEnabled() const;

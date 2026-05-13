@@ -249,6 +249,7 @@ plugin {
         min_preview_short_edge = 32
         small_window_boost = 1.35
         max_preview_scale = 0.95
+        workspace_overview_max_preview_scale = 0.95
         min_slot_scale = 0.10
         natural_scale_flex = 0.22
         layout_engine = grid
@@ -320,7 +321,8 @@ hl.config({
 | `min_window_length` | int | `120` | Minimum edge length used before layout scoring. |
 | `min_preview_short_edge` | int | `32` | Minimum rendered short edge for previews, used to keep ultra-wide, ultra-tall, or very small windows recognizable. |
 | `small_window_boost` | float | `1.35` | Weight boost applied to smaller windows during layout. |
-| `max_preview_scale` | float | `0.95` | Maximum preview scale. |
+| `max_preview_scale` | float | `0.95` | Maximum preview scale for all-workspace / multi-workspace overview. |
+| `workspace_overview_max_preview_scale` | float | `0.95` | Maximum preview scale for active-workspace overview, including niri direct overview. |
 | `min_slot_scale` | float | `0.10` | Minimum allowed slot scale. |
 | `natural_scale_flex` | float | `0.22` | Natural-engine-only free scale range. Values are clamped to `0.0` - `0.25`; recent-first multi-workspace ordering keeps earlier windows visibly larger, while natural layouts may use larger per-window scale differences to fill sparse space. |
 | `layout_engine` | string | `grid` | Geometry solver. `grid` keeps the existing row-search layout; `natural`, `apple`, `expose`, and `mission-control` enable the Apple-like natural solver that tries to preserve original window positions while removing overlap. The natural engine attempts every window count and only uses row-search as an emergency fallback if solving fails. |
