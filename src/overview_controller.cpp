@@ -9154,6 +9154,20 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
 
     const int fbWidth = std::max(1, static_cast<int>(std::ceil(thumb.width * entry.monitor->m_scale)));
     const int fbHeight = std::max(1, static_cast<int>(std::ceil(thumb.height * entry.monitor->m_scale)));
+    const auto workspaceGeometryForFramebuffer = [](const PHLMONITOR& monitor, int width, int height) {
+        if (!monitor || monitor->m_pixelSize.x <= 0.0 || monitor->m_pixelSize.y <= 0.0)
+            return CBox(0.0, 0.0, static_cast<double>(width), static_cast<double>(height));
+
+        const double monitorAspect = monitor->m_pixelSize.x / monitor->m_pixelSize.y;
+        double       geometryWidth = static_cast<double>(std::max(1, width));
+        double       geometryHeight = geometryWidth / monitorAspect;
+        if (geometryHeight > static_cast<double>(height)) {
+            geometryHeight = static_cast<double>(std::max(1, height));
+            geometryWidth = geometryHeight * monitorAspect;
+        }
+
+        return CBox((static_cast<double>(width) - geometryWidth) * 0.5, (static_cast<double>(height) - geometryHeight) * 0.5, geometryWidth, geometryHeight);
+    };
     using RenderWorkspaceFn = void (*)(Render::IHyprRenderer*, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp&, const CBox&);
 
     static RenderWorkspaceFn renderWorkspaceFn = nullptr;
@@ -9256,8 +9270,6 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     const auto targetWorkspaceRenderState = targetWorkspace ? captureWorkspaceRenderState(targetWorkspace) : std::nullopt;
     bool targetVisibilityChanged = false;
     bool previousVisibilityChanged = false;
-    bool targetAnimationActivated = false;
-    bool previousAnimationActivated = false;
 
     const auto applyFullscreenOverrideForState = [](State& state, bool suppress) {
         if (suppress) {
@@ -9347,10 +9359,8 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     if (renderWorkspaceContents && targetWorkspace && previousWorkspace && !targetIsCurrentWorkspace && previousWorkspace->m_visible) {
         previousWorkspace->m_visible = false;
         previousVisibilityChanged = true;
-        g_pDesktopAnimationManager->startAnimation(previousWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_OUT, false, true);
         previousWorkspace->m_renderOffset->setValueAndWarp(Vector2D{});
         previousWorkspace->m_alpha->setValueAndWarp(0.F);
-        previousAnimationActivated = true;
     }
 
     if (renderWorkspaceContents && targetWorkspace && !targetIsCurrentWorkspace)
@@ -9362,10 +9372,8 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             targetWorkspace->m_visible = true;
             targetVisibilityChanged = true;
         }
-        g_pDesktopAnimationManager->startAnimation(targetWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
         targetWorkspace->m_renderOffset->setValueAndWarp(Vector2D{});
         targetWorkspace->m_alpha->setValueAndWarp(1.F);
-        targetAnimationActivated = true;
     }
 
     const auto renderNow = Time::steadyNow();
@@ -9390,7 +9398,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         g_pHyprRenderer->draw(CClearPassElement::SClearData{.color = CHyprColor{0.05, 0.06, 0.08, 1.0}}, fakeDamage);
         renderBackgroundLayers(renderNow);
         if (renderWorkspaceContents && targetWorkspace && renderWorkspaceFn)
-            renderWorkspaceFn(g_pHyprRenderer.get(), monitor, targetWorkspace, renderNow, CBox(0.0, 0.0, static_cast<double>(fbWidth), static_cast<double>(fbHeight)));
+            renderWorkspaceFn(g_pHyprRenderer.get(), monitor, targetWorkspace, renderNow, workspaceGeometryForFramebuffer(monitor, fbWidth, fbHeight));
         g_pHyprRenderer->m_renderData.blockScreenShader = true;
         g_pHyprRenderer->endRender();
         g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockScreenShader;
@@ -9403,8 +9411,6 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         m_stripPreviewContext.active = false;
     }
 
-    if (targetAnimationActivated)
-        g_pDesktopAnimationManager->startAnimation(targetWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_OUT, false, true);
     if (targetVisibilityChanged && targetWorkspace)
         targetWorkspace->m_visible = false;
 
@@ -9415,8 +9421,6 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
 
     if (previousVisibilityChanged && previousWorkspace)
         previousWorkspace->m_visible = true;
-    if (previousAnimationActivated && previousWorkspace)
-        g_pDesktopAnimationManager->startAnimation(previousWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
 
     restoreWorkspaceRenderState(previousWorkspaceRenderState);
     restoreWorkspaceRenderState(targetWorkspaceRenderState);
