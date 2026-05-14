@@ -109,6 +109,9 @@ class OverviewController {
     void                       workspaceSwipeBeginHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e);
     void                       workspaceSwipeUpdateHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e);
     void                       workspaceSwipeEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e);
+    void                       unifiedWorkspaceSwipeBeginHook(void* gestureThisptr);
+    void                       unifiedWorkspaceSwipeUpdateHook(void* gestureThisptr, double delta);
+    void                       unifiedWorkspaceSwipeEndHook(void* gestureThisptr);
     [[nodiscard]] bool         handleTouchDown(const ITouch::SDownEvent& event);
     [[nodiscard]] bool         handleTouchMotion(const ITouch::SMotionEvent& event);
     [[nodiscard]] bool         handleTouchUp(const ITouch::SUpEvent& event, bool cancelled = false);
@@ -392,6 +395,9 @@ class OverviewController {
     using WorkspaceSwipeBeginFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureBegin&);
     using WorkspaceSwipeUpdateFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureUpdate&);
     using WorkspaceSwipeEndFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureEnd&);
+    using UnifiedWorkspaceSwipeBeginFn = void (*)(void*);
+    using UnifiedWorkspaceSwipeUpdateFn = void (*)(void*, double);
+    using UnifiedWorkspaceSwipeEndFn = void (*)(void*);
     using ScrollMoveGestureBeginFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureBegin&);
     using ScrollMoveGestureUpdateFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureUpdate&);
     using ScrollMoveGestureEndFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureEnd&);
@@ -644,6 +650,9 @@ class OverviewController {
     CFunctionHook*            m_workspaceSwipeBeginFunctionHook = nullptr;
     CFunctionHook*            m_workspaceSwipeUpdateFunctionHook = nullptr;
     CFunctionHook*            m_workspaceSwipeEndFunctionHook = nullptr;
+    CFunctionHook*            m_unifiedWorkspaceSwipeBeginFunctionHook = nullptr;
+    CFunctionHook*            m_unifiedWorkspaceSwipeUpdateFunctionHook = nullptr;
+    CFunctionHook*            m_unifiedWorkspaceSwipeEndFunctionHook = nullptr;
     CFunctionHook*            m_scrollMoveGestureBeginFunctionHook = nullptr;
     CFunctionHook*            m_scrollMoveGestureUpdateFunctionHook = nullptr;
     CFunctionHook*            m_scrollMoveGestureEndFunctionHook = nullptr;
@@ -671,6 +680,9 @@ class OverviewController {
     WorkspaceSwipeBeginFn     m_workspaceSwipeBeginOriginal = nullptr;
     WorkspaceSwipeUpdateFn    m_workspaceSwipeUpdateOriginal = nullptr;
     WorkspaceSwipeEndFn       m_workspaceSwipeEndOriginal = nullptr;
+    UnifiedWorkspaceSwipeBeginFn  m_unifiedWorkspaceSwipeBeginOriginal = nullptr;
+    UnifiedWorkspaceSwipeUpdateFn m_unifiedWorkspaceSwipeUpdateOriginal = nullptr;
+    UnifiedWorkspaceSwipeEndFn    m_unifiedWorkspaceSwipeEndOriginal = nullptr;
     ScrollMoveGestureBeginFn  m_scrollMoveGestureBeginOriginal = nullptr;
     ScrollMoveGestureUpdateFn m_scrollMoveGestureUpdateOriginal = nullptr;
     ScrollMoveGestureEndFn    m_scrollMoveGestureEndOriginal = nullptr;

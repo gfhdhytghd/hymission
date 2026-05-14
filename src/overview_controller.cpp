@@ -1773,6 +1773,27 @@ void hkWorkspaceSwipeEnd(void* gestureThisptr, const ITrackpadGesture::STrackpad
     g_controller->workspaceSwipeEndHook(gestureThisptr, e);
 }
 
+void hkUnifiedWorkspaceSwipeBegin(void* gestureThisptr) {
+    if (!g_controller)
+        return;
+
+    g_controller->unifiedWorkspaceSwipeBeginHook(gestureThisptr);
+}
+
+void hkUnifiedWorkspaceSwipeUpdate(void* gestureThisptr, double delta) {
+    if (!g_controller)
+        return;
+
+    g_controller->unifiedWorkspaceSwipeUpdateHook(gestureThisptr, delta);
+}
+
+void hkUnifiedWorkspaceSwipeEnd(void* gestureThisptr) {
+    if (!g_controller)
+        return;
+
+    g_controller->unifiedWorkspaceSwipeEndHook(gestureThisptr);
+}
+
 void hkScrollMoveGestureBegin(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e) {
     if (!g_controller)
         return;
@@ -1827,6 +1848,12 @@ OverviewController::~OverviewController() {
         m_workspaceSwipeUpdateFunctionHook->unhook();
     if (m_workspaceSwipeEndFunctionHook)
         m_workspaceSwipeEndFunctionHook->unhook();
+    if (m_unifiedWorkspaceSwipeBeginFunctionHook)
+        m_unifiedWorkspaceSwipeBeginFunctionHook->unhook();
+    if (m_unifiedWorkspaceSwipeUpdateFunctionHook)
+        m_unifiedWorkspaceSwipeUpdateFunctionHook->unhook();
+    if (m_unifiedWorkspaceSwipeEndFunctionHook)
+        m_unifiedWorkspaceSwipeEndFunctionHook->unhook();
     if (m_scrollMoveGestureBeginFunctionHook)
         m_scrollMoveGestureBeginFunctionHook->unhook();
     if (m_scrollMoveGestureUpdateFunctionHook)
@@ -1862,6 +1889,12 @@ OverviewController::~OverviewController() {
         HyprlandAPI::removeFunctionHook(m_handle, m_workspaceSwipeUpdateFunctionHook);
     if (m_workspaceSwipeEndFunctionHook)
         HyprlandAPI::removeFunctionHook(m_handle, m_workspaceSwipeEndFunctionHook);
+    if (m_unifiedWorkspaceSwipeBeginFunctionHook)
+        HyprlandAPI::removeFunctionHook(m_handle, m_unifiedWorkspaceSwipeBeginFunctionHook);
+    if (m_unifiedWorkspaceSwipeUpdateFunctionHook)
+        HyprlandAPI::removeFunctionHook(m_handle, m_unifiedWorkspaceSwipeUpdateFunctionHook);
+    if (m_unifiedWorkspaceSwipeEndFunctionHook)
+        HyprlandAPI::removeFunctionHook(m_handle, m_unifiedWorkspaceSwipeEndFunctionHook);
     if (m_scrollMoveGestureBeginFunctionHook)
         HyprlandAPI::removeFunctionHook(m_handle, m_scrollMoveGestureBeginFunctionHook);
     if (m_scrollMoveGestureUpdateFunctionHook)
@@ -2929,6 +2962,56 @@ void OverviewController::workspaceSwipeEndHook(void* gestureThisptr, const ITrac
         return;
 
     m_workspaceSwipeEndOriginal(gestureThisptr, e);
+}
+
+void OverviewController::unifiedWorkspaceSwipeBeginHook(void* gestureThisptr) {
+    if (!m_unifiedWorkspaceSwipeBeginOriginal)
+        return;
+
+    if (shouldBlockWorkspaceSwitchInOverview()) {
+        if (debugLogsEnabled())
+            debugLog("[hymission] block unified workspace swipe begin during multi-workspace overview");
+        return;
+    }
+
+    if (allowsWorkspaceSwitchInOverview()) {
+        const auto direction = workspaceSwipeUsesVerticalAxis(activeLayoutWorkspace()) ? TRACKPAD_GESTURE_DIR_VERTICAL : TRACKPAD_GESTURE_DIR_HORIZONTAL;
+        if (!beginOverviewWorkspaceSwipeGesture(direction) && debugLogsEnabled())
+            debugLog("[hymission] consume unified workspace swipe begin during active-workspace overview");
+        return;
+    }
+
+    m_unifiedWorkspaceSwipeBeginOriginal(gestureThisptr);
+}
+
+void OverviewController::unifiedWorkspaceSwipeUpdateHook(void* gestureThisptr, double delta) {
+    if (!m_unifiedWorkspaceSwipeUpdateOriginal)
+        return;
+
+    if (m_workspaceSwipeGesture.active) {
+        setOverviewWorkspaceSwipeGestureDelta(delta);
+        return;
+    }
+
+    if (shouldBlockWorkspaceSwitchInOverview() || allowsWorkspaceSwitchInOverview())
+        return;
+
+    m_unifiedWorkspaceSwipeUpdateOriginal(gestureThisptr, delta);
+}
+
+void OverviewController::unifiedWorkspaceSwipeEndHook(void* gestureThisptr) {
+    if (!m_unifiedWorkspaceSwipeEndOriginal)
+        return;
+
+    if (m_workspaceSwipeGesture.active) {
+        endOverviewWorkspaceSwipeGesture(false);
+        return;
+    }
+
+    if (shouldBlockWorkspaceSwitchInOverview() || allowsWorkspaceSwitchInOverview())
+        return;
+
+    m_unifiedWorkspaceSwipeEndOriginal(gestureThisptr);
 }
 
 bool OverviewController::handleTouchDown(const ITouch::SDownEvent& event) {
@@ -5413,6 +5496,12 @@ bool OverviewController::installHooks() {
     (void)hookFunction("begin", "CWorkspaceSwipeGesture::begin(", m_workspaceSwipeBeginFunctionHook, reinterpret_cast<void*>(&hkWorkspaceSwipeBegin));
     (void)hookFunction("update", "CWorkspaceSwipeGesture::update(", m_workspaceSwipeUpdateFunctionHook, reinterpret_cast<void*>(&hkWorkspaceSwipeUpdate));
     (void)hookFunction("end", "CWorkspaceSwipeGesture::end(", m_workspaceSwipeEndFunctionHook, reinterpret_cast<void*>(&hkWorkspaceSwipeEnd));
+    (void)hookFunction("begin", "CUnifiedWorkspaceSwipeGesture::begin(", m_unifiedWorkspaceSwipeBeginFunctionHook,
+                       reinterpret_cast<void*>(&hkUnifiedWorkspaceSwipeBegin));
+    (void)hookFunction("update", "CUnifiedWorkspaceSwipeGesture::update(", m_unifiedWorkspaceSwipeUpdateFunctionHook,
+                       reinterpret_cast<void*>(&hkUnifiedWorkspaceSwipeUpdate));
+    (void)hookFunction("end", "CUnifiedWorkspaceSwipeGesture::end(", m_unifiedWorkspaceSwipeEndFunctionHook,
+                       reinterpret_cast<void*>(&hkUnifiedWorkspaceSwipeEnd));
     (void)hookFunction("begin", "CScrollMoveTrackpadGesture::begin(", m_scrollMoveGestureBeginFunctionHook, reinterpret_cast<void*>(&hkScrollMoveGestureBegin));
     (void)hookFunction("update", "CScrollMoveTrackpadGesture::update(", m_scrollMoveGestureUpdateFunctionHook, reinterpret_cast<void*>(&hkScrollMoveGestureUpdate));
     (void)hookFunction("end", "CScrollMoveTrackpadGesture::end(", m_scrollMoveGestureEndFunctionHook, reinterpret_cast<void*>(&hkScrollMoveGestureEnd));
@@ -5436,6 +5525,9 @@ bool OverviewController::installHooks() {
     m_workspaceSwipeBeginOriginal = nullptr;
     m_workspaceSwipeUpdateOriginal = nullptr;
     m_workspaceSwipeEndOriginal = nullptr;
+    m_unifiedWorkspaceSwipeBeginOriginal = nullptr;
+    m_unifiedWorkspaceSwipeUpdateOriginal = nullptr;
+    m_unifiedWorkspaceSwipeEndOriginal = nullptr;
     m_scrollMoveGestureBeginOriginal = nullptr;
     m_scrollMoveGestureUpdateOriginal = nullptr;
     m_scrollMoveGestureEndOriginal = nullptr;
@@ -5443,6 +5535,9 @@ bool OverviewController::installHooks() {
     activateOptionalHook(m_workspaceSwipeBeginFunctionHook, m_workspaceSwipeBeginOriginal, "workspace swipe begin");
     activateOptionalHook(m_workspaceSwipeUpdateFunctionHook, m_workspaceSwipeUpdateOriginal, "workspace swipe update");
     activateOptionalHook(m_workspaceSwipeEndFunctionHook, m_workspaceSwipeEndOriginal, "workspace swipe end");
+    activateOptionalHook(m_unifiedWorkspaceSwipeBeginFunctionHook, m_unifiedWorkspaceSwipeBeginOriginal, "unified workspace swipe begin");
+    activateOptionalHook(m_unifiedWorkspaceSwipeUpdateFunctionHook, m_unifiedWorkspaceSwipeUpdateOriginal, "unified workspace swipe update");
+    activateOptionalHook(m_unifiedWorkspaceSwipeEndFunctionHook, m_unifiedWorkspaceSwipeEndOriginal, "unified workspace swipe end");
     activateOptionalHook(m_scrollMoveGestureBeginFunctionHook, m_scrollMoveGestureBeginOriginal, "scroll move gesture begin");
     activateOptionalHook(m_scrollMoveGestureUpdateFunctionHook, m_scrollMoveGestureUpdateOriginal, "scroll move gesture update");
     activateOptionalHook(m_scrollMoveGestureEndFunctionHook, m_scrollMoveGestureEndOriginal, "scroll move gesture end");
