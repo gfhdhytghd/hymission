@@ -6259,7 +6259,7 @@ bool OverviewController::prepareSurfaceRenderData(void* surfacePassThisptr, cons
     const bool transformed = transformSurfaceRenderDataForWindow(renderData->pWindow, monitor, *renderData);
     if (transformed) {
         renderData->alpha = managedPreviewAlphaFor(renderData->pWindow, snapshot.alpha);
-        if (!renderData->pWindow->m_fadingOut && snapshot.fadeAlpha <= 0.001F)
+        if (!renderData->pWindow->m_fadingOut)
             renderData->fadeAlpha = 1.0F;
     }
 
