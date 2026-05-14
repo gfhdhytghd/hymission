@@ -169,6 +169,7 @@ class OverviewController {
         };
 
         struct WindowPreview {
+            PHLWINDOW window;
             Rect  naturalGlobal;
             float alpha = 1.0F;
             bool  focused = false;

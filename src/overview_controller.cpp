@@ -9168,15 +9168,15 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
 
         return CBox((static_cast<double>(width) - geometryWidth) * 0.5, (static_cast<double>(height) - geometryHeight) * 0.5, geometryWidth, geometryHeight);
     };
-    using RenderWorkspaceFn = void (*)(Render::IHyprRenderer*, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp&, const CBox&);
+    using RenderWindowFn = void (*)(Render::IHyprRenderer*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, Render::eRenderPassMode, bool, bool);
 
-    static RenderWorkspaceFn renderWorkspaceFn = nullptr;
-    static bool              renderWorkspaceResolved = false;
-    if (!renderWorkspaceResolved) {
-        renderWorkspaceResolved = true;
-        renderWorkspaceFn = reinterpret_cast<RenderWorkspaceFn>(findFunction("renderWorkspace", "IHyprRenderer::renderWorkspace"));
-        if (!renderWorkspaceFn)
-            debugLog("[hymission] failed to resolve IHyprRenderer::renderWorkspace for strip snapshots");
+    static RenderWindowFn renderWindowFn = nullptr;
+    static bool           renderWindowResolved = false;
+    if (!renderWindowResolved) {
+        renderWindowResolved = true;
+        renderWindowFn = reinterpret_cast<RenderWindowFn>(findFunction("renderWindow", "IHyprRenderer::renderWindow"));
+        if (!renderWindowFn)
+            debugLog("[hymission] failed to resolve IHyprRenderer::renderWindow for strip snapshots");
     }
 
     const auto monitor = entry.monitor;
@@ -9219,6 +9219,44 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             }
         }
 
+        if (previewState.windows.empty() && !entry.windows.empty()) {
+            previewState.ownerMonitor = monitor;
+            previewState.ownerWorkspace = targetWorkspace;
+            previewState.collectionPolicy = loadCollectionPolicy(ScopeOverride::OnlyCurrentWorkspace);
+            previewState.suppressWorkspaceStrip = true;
+            previewState.participatingMonitors = {monitor};
+            previewState.managedWorkspaces = {targetWorkspace};
+            previewState.focusDuringOverview = Desktop::focusState()->window();
+
+            previewState.windows.reserve(entry.windows.size());
+            for (const auto& preview : entry.windows) {
+                if (!preview.window)
+                    continue;
+
+                const Rect local = rectToMonitorLocal(preview.naturalGlobal, monitor);
+                const auto index = previewState.windows.size();
+                previewState.windows.push_back({
+                    .window = preview.window,
+                    .targetMonitor = monitor,
+                    .title = preview.window->m_title,
+                    .naturalGlobal = preview.naturalGlobal,
+                    .exitGlobal = preview.naturalGlobal,
+                    .relayoutFromGlobal = preview.naturalGlobal,
+                    .targetGlobal = preview.naturalGlobal,
+                    .slot =
+                        {
+                            .index = index,
+                            .natural = local,
+                            .target = local,
+                            .scale = 1.0,
+                        },
+                    .previewAlpha = preview.alpha,
+                    .isFloating = preview.window->m_isFloating,
+                    .isPinned = preview.window->m_pinned,
+                });
+            }
+        }
+
         // Decide from the thumbnail's own preview build, not the outer strip's
         // cached bookkeeping, whether this workspace still has content to draw.
         renderWorkspaceContents = !previewState.windows.empty();
@@ -9226,7 +9264,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
 
     // Once a real workspace has no non-fading window previews left, snapshot it
     // as background-only so the strip does not freeze a close-animation frame.
-    if (renderWorkspaceContents && !renderWorkspaceFn)
+    if (renderWorkspaceContents && !renderWindowFn)
         return;
     const bool targetIsCurrentWorkspace = isCurrentActiveWorkspaceStripEntry(entry);
 
@@ -9234,6 +9272,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     const auto previousSpecialWorkspace = monitor->m_activeSpecialWorkspace;
     const bool previousBlockSurfaceFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
     const bool previousBlockScreenShader = g_pHyprRenderer->m_renderData.blockScreenShader;
+    const bool previousRenderingSnapshot = g_pHyprRenderer->m_bRenderingSnapshot;
     struct WorkspaceRenderState {
         PHLWORKSPACE workspace;
         bool         visible = false;
@@ -9269,7 +9308,6 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     const auto previousWorkspaceRenderState = previousWorkspace != targetWorkspace ? captureWorkspaceRenderState(previousWorkspace) : std::nullopt;
     const auto targetWorkspaceRenderState = targetWorkspace ? captureWorkspaceRenderState(targetWorkspace) : std::nullopt;
     bool targetVisibilityChanged = false;
-    bool previousVisibilityChanged = false;
 
     const auto applyFullscreenOverrideForState = [](State& state, bool suppress) {
         if (suppress) {
@@ -9353,16 +9391,6 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         applyFullscreenOverrideForState(m_stripPreviewContext.state, true);
     }
 
-    // Rendering the current active workspace into a thumbnail can reuse the
-    // live monitor state directly. Avoid flipping active workspace / special
-    // workspace / desktop animation state for that path.
-    if (renderWorkspaceContents && targetWorkspace && previousWorkspace && !targetIsCurrentWorkspace && previousWorkspace->m_visible) {
-        previousWorkspace->m_visible = false;
-        previousVisibilityChanged = true;
-        previousWorkspace->m_renderOffset->setValueAndWarp(Vector2D{});
-        previousWorkspace->m_alpha->setValueAndWarp(0.F);
-    }
-
     if (renderWorkspaceContents && targetWorkspace && !targetIsCurrentWorkspace)
         monitor->m_activeSpecialWorkspace.reset();
 
@@ -9397,8 +9425,35 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, snapshot->framebuffer);
         g_pHyprRenderer->draw(CClearPassElement::SClearData{.color = CHyprColor{0.05, 0.06, 0.08, 1.0}}, fakeDamage);
         renderBackgroundLayers(renderNow);
-        if (renderWorkspaceContents && targetWorkspace && renderWorkspaceFn)
-            renderWorkspaceFn(g_pHyprRenderer.get(), monitor, targetWorkspace, renderNow, workspaceGeometryForFramebuffer(monitor, fbWidth, fbHeight));
+        if (renderWorkspaceContents && targetWorkspace && renderWindowFn) {
+            const CBox geometry = workspaceGeometryForFramebuffer(monitor, fbWidth, fbHeight);
+            Render::SRenderModifData renderModif;
+            if (geometry.x != 0.0 || geometry.y != 0.0)
+                renderModif.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_TRANSLATE, Vector2D{geometry.x, geometry.y});
+            const float scale = monitor->m_pixelSize.x > 0.0 ? static_cast<float>(geometry.width / monitor->m_pixelSize.x) : 1.0F;
+            if (std::abs(scale - 1.0F) > 0.0001F)
+                renderModif.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_SCALE, scale);
+
+            const bool hasRenderModif = !renderModif.modifs.empty();
+            if (hasRenderModif)
+                g_pHyprRenderer->draw(CRendererHintsPassElement::SData{.renderModif = renderModif});
+
+            g_pHyprRenderer->m_bRenderingSnapshot = true;
+            const auto renderPreviewWindows = [&](bool floating) {
+                for (const auto& managed : m_stripPreviewContext.state.windows) {
+                    if (!managed.window || managed.isFloating != floating)
+                        continue;
+
+                    renderWindowFn(g_pHyprRenderer.get(), managed.window, monitor, renderNow, false, Render::RENDER_PASS_ALL, false, true);
+                }
+            };
+            renderPreviewWindows(false);
+            renderPreviewWindows(true);
+            g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
+
+            if (hasRenderModif)
+                g_pHyprRenderer->draw(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}});
+        }
         g_pHyprRenderer->m_renderData.blockScreenShader = true;
         g_pHyprRenderer->endRender();
         g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockScreenShader;
@@ -9419,12 +9474,10 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         monitor->m_activeWorkspace = previousWorkspace;
     }
 
-    if (previousVisibilityChanged && previousWorkspace)
-        previousWorkspace->m_visible = true;
-
     restoreWorkspaceRenderState(previousWorkspaceRenderState);
     restoreWorkspaceRenderState(targetWorkspaceRenderState);
 
+    g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
     g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockSurfaceFeedback;
     --m_stripSnapshotRenderDepth;
 
@@ -9720,6 +9773,7 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
             if (window->m_pinned) {
                 if (entry.monitor == targetMonitor && entry.workspace == entry.monitor->m_activeWorkspace) {
                     entry.windows.push_back({
+                        .window = window,
                         .naturalGlobal = naturalGlobal,
                         .alpha = previewAlpha,
                         .focused = window == focusWindow,
@@ -9730,6 +9784,7 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
 
             if (window->m_workspace && entry.workspace == window->m_workspace) {
                 entry.windows.push_back({
+                    .window = window,
                     .naturalGlobal = naturalGlobal,
                     .alpha = previewAlpha,
                     .focused = window == focusWindow,
