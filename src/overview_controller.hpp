@@ -500,6 +500,7 @@ class OverviewController {
                                                                     PHLWORKSPACE& workspace, bool& syntheticEmpty) const;
     [[nodiscard]] bool         beginOverviewWorkspaceTransition(const PHLMONITOR& monitor, WORKSPACEID workspaceId, std::string workspaceName, PHLWORKSPACE workspace,
                                                                bool syntheticEmpty, WorkspaceTransitionMode mode);
+    [[nodiscard]] bool         beginExternalOverviewWorkspaceTransition(const PHLWORKSPACE& workspace);
     [[nodiscard]] bool         startOverviewWorkspaceTransitionByStep(const PHLMONITOR& monitor, int step, WorkspaceTransitionMode mode);
     void                       updateOverviewWorkspaceTransition();
     void                       requestOverviewWorkspaceTransitionCommit(bool followGesture = false);
@@ -557,7 +558,7 @@ class OverviewController {
     void                       updateSelectedWindowLayout(const PHLWINDOW& previousSelectedWindow);
     void                       clearPendingWindowGeometryRetry();
     void                       scheduleVisibleStateRebuild();
-    void                       scheduleWorkspaceChangeHandling(const PHLWORKSPACE& workspace, OverviewWorkspaceChangeAction action);
+    void                       scheduleWorkspaceChangeHandling(const PHLWORKSPACE& workspace, OverviewWorkspaceChangeAction action, bool allowExternalTransition = false);
     void                       schedulePendingWindowGeometryRetry(const PHLWINDOW& window);
     void                       updatePendingWindowGeometryRetry(const PHLWINDOW& window);
     [[nodiscard]] bool         matchesPendingLiveFocusWorkspaceChange(const PHLWORKSPACE& workspace) const;
@@ -688,6 +689,7 @@ class OverviewController {
     PHLWINDOWREF              m_pendingWindowGeometryRetryTarget;
     PHLWORKSPACEREF           m_pendingWorkspaceChange;
     std::optional<OverviewWorkspaceChangeAction> m_pendingWorkspaceChangeAction;
+    bool                      m_pendingWorkspaceChangeAllowExternalTransition = false;
     bool                      m_visibleStateRebuildScheduled = false;
     std::size_t               m_visibleStateRebuildGeneration = 0;
     bool                      m_workspaceChangeHandlingScheduled = false;

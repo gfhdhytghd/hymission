@@ -2620,6 +2620,9 @@ void OverviewController::handleWorkspaceChange(PHLWORKSPACE workspace) {
         clearPendingStripWorkspaceChange();
     }
 
+    const bool allowExternalTransition =
+        action == OverviewWorkspaceChangeAction::Rebuild && !liveFocusWorkspaceChange && !stripWorkspaceChange && !m_workspaceTransition.active;
+
     if (insideRenderLifecycle()) {
         if (debugLogsEnabled()) {
             std::ostringstream out;
@@ -2630,11 +2633,14 @@ void OverviewController::handleWorkspaceChange(PHLWORKSPACE workspace) {
             debugLog(out.str());
         }
 
-        scheduleWorkspaceChangeHandling(workspace, action);
+        scheduleWorkspaceChangeHandling(workspace, action, allowExternalTransition);
         return;
     }
 
     if (action == OverviewWorkspaceChangeAction::Rebuild) {
+        if (allowExternalTransition && beginExternalOverviewWorkspaceTransition(workspace))
+            return;
+
         if (m_workspaceTransition.active)
             clearOverviewWorkspaceTransition();
         rebuildVisibleState();
@@ -4500,6 +4506,49 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
             << " synthetic=" << (syntheticEmpty ? 1 : 0) << " mode="
             << (mode == WorkspaceTransitionMode::Gesture ? "gesture" : mode == WorkspaceTransitionMode::TimedCommit ? "commit" : "revert")
             << " axis=" << (m_workspaceTransition.axis == WorkspaceTransitionAxis::Vertical ? "vertical" : "horizontal");
+        debugLog(out.str());
+    }
+
+    damageOwnedMonitors();
+    return true;
+}
+
+bool OverviewController::beginExternalOverviewWorkspaceTransition(const PHLWORKSPACE& workspace) {
+    if (!workspace || workspace->m_isSpecialWorkspace || !allowsWorkspaceSwitchInOverview() || m_workspaceTransition.active || m_gestureSession.active ||
+        m_state.phase != Phase::Active)
+        return false;
+
+    const auto previousWorkspace = m_state.ownerWorkspace;
+    if (!previousWorkspace || previousWorkspace == workspace || previousWorkspace->m_isSpecialWorkspace)
+        return false;
+
+    auto monitor = workspace->m_monitor.lock();
+    if (!monitor && m_state.ownerMonitor && m_state.ownerMonitor->m_activeWorkspace == workspace)
+        monitor = m_state.ownerMonitor;
+    if (!monitor)
+        monitor = Desktop::focusState()->monitor();
+    if (!monitor || !containsHandle(m_state.participatingMonitors, monitor) || monitor->m_activeWorkspace != workspace)
+        return false;
+
+    int step = workspace->m_id > previousWorkspace->m_id ? 1 : -1;
+    if (shouldWrapWorkspaceIds(workspace->m_id, previousWorkspace->m_id))
+        step = -step;
+
+    if (!beginOverviewWorkspaceTransition(monitor, workspace->m_id, workspace->m_name, workspace, false, WorkspaceTransitionMode::TimedCommit))
+        return false;
+
+    m_workspaceTransition.step = step;
+    m_workspaceTransition.initialDirection = 0;
+    m_workspaceTransition.delta = 0.0;
+    m_workspaceTransition.animationFromDelta = 0.0;
+    m_workspaceTransition.animationToDelta = static_cast<double>(step) * m_workspaceTransition.distance;
+    m_workspaceTransition.animationProgress = 0.0;
+    m_workspaceTransition.animationStart = {};
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] external workspace change converted to overview transition previous=" << debugWorkspaceLabel(previousWorkspace)
+            << " target=" << debugWorkspaceLabel(workspace) << " step=" << step;
         debugLog(out.str());
     }
 
@@ -7483,9 +7532,10 @@ void OverviewController::scheduleVisibleStateRebuild() {
     });
 }
 
-void OverviewController::scheduleWorkspaceChangeHandling(const PHLWORKSPACE& workspace, OverviewWorkspaceChangeAction action) {
+void OverviewController::scheduleWorkspaceChangeHandling(const PHLWORKSPACE& workspace, OverviewWorkspaceChangeAction action, bool allowExternalTransition) {
     m_pendingWorkspaceChange = workspace;
     m_pendingWorkspaceChangeAction = action;
+    m_pendingWorkspaceChangeAllowExternalTransition = allowExternalTransition;
 
     if (m_workspaceChangeHandlingScheduled)
         return;
@@ -7493,6 +7543,13 @@ void OverviewController::scheduleWorkspaceChangeHandling(const PHLWORKSPACE& wor
     if (!g_pEventLoopManager) {
         if (!insideRenderLifecycle()) {
             if (action == OverviewWorkspaceChangeAction::Rebuild) {
+                if (allowExternalTransition && beginExternalOverviewWorkspaceTransition(workspace)) {
+                    m_pendingWorkspaceChange.reset();
+                    m_pendingWorkspaceChangeAction.reset();
+                    m_pendingWorkspaceChangeAllowExternalTransition = false;
+                    return;
+                }
+
                 if (m_workspaceTransition.active)
                     clearOverviewWorkspaceTransition();
                 rebuildVisibleState();
@@ -7501,6 +7558,7 @@ void OverviewController::scheduleWorkspaceChangeHandling(const PHLWORKSPACE& wor
             }
             m_pendingWorkspaceChange.reset();
             m_pendingWorkspaceChangeAction.reset();
+            m_pendingWorkspaceChangeAllowExternalTransition = false;
         }
         return;
     }
@@ -7513,17 +7571,25 @@ void OverviewController::scheduleWorkspaceChangeHandling(const PHLWORKSPACE& wor
 
         m_workspaceChangeHandlingScheduled = false;
         const auto workspace = m_pendingWorkspaceChange.lock();
-        if (!workspace || !m_pendingWorkspaceChangeAction.has_value())
+        if (!workspace || !m_pendingWorkspaceChangeAction.has_value()) {
+            m_pendingWorkspaceChangeAction.reset();
+            m_pendingWorkspaceChangeAllowExternalTransition = false;
             return;
+        }
         const auto action = *m_pendingWorkspaceChangeAction;
+        const bool allowExternalTransition = m_pendingWorkspaceChangeAllowExternalTransition;
         m_pendingWorkspaceChangeAction.reset();
+        m_pendingWorkspaceChangeAllowExternalTransition = false;
 
         if (insideRenderLifecycle()) {
-            scheduleWorkspaceChangeHandling(workspace, action);
+            scheduleWorkspaceChangeHandling(workspace, action, allowExternalTransition);
             return;
         }
 
         if (action == OverviewWorkspaceChangeAction::Rebuild) {
+            if (allowExternalTransition && beginExternalOverviewWorkspaceTransition(workspace))
+                return;
+
             if (m_workspaceTransition.active)
                 clearOverviewWorkspaceTransition();
             rebuildVisibleState();
