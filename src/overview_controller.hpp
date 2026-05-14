@@ -15,6 +15,7 @@
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
 #include <hyprland/src/devices/IPointer.hpp>
+#include <hyprland/src/devices/ITouch.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/helpers/signal/Signal.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
@@ -68,6 +69,7 @@ class OverviewController {
     [[nodiscard]] bool            blocksWorkspaceSwitchInOverviewForGestures() const;
     [[nodiscard]] bool            beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction);
     void                          updateOverviewWorkspaceSwipeGesture(double delta);
+    void                          setOverviewWorkspaceSwipeGestureDelta(double delta);
     void                          endOverviewWorkspaceSwipeGesture(bool cancelled);
     [[nodiscard]] bool            beginScrollGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction,
                                                      const IPointer::SSwipeUpdateEvent& event, float deltaScale);
@@ -107,6 +109,9 @@ class OverviewController {
     void                       workspaceSwipeBeginHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e);
     void                       workspaceSwipeUpdateHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e);
     void                       workspaceSwipeEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e);
+    [[nodiscard]] bool         handleTouchDown(const ITouch::SDownEvent& event);
+    [[nodiscard]] bool         handleTouchMotion(const ITouch::SMotionEvent& event);
+    [[nodiscard]] bool         handleTouchUp(const ITouch::SUpEvent& event, bool cancelled = false);
     void                       scrollMoveGestureBeginHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e);
     void                       scrollMoveGestureUpdateHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e);
     void                       scrollMoveGestureEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e);
@@ -349,6 +354,11 @@ class OverviewController {
         bool                      active = false;
         PHLMONITOR                monitor;
         eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_NONE;
+        double                    gestureDelta = 0.0;
+        bool                      touchActive = false;
+        int32_t                   touchId = 0;
+        bool                      touchVertical = false;
+        bool                      touchFromHighEdge = false;
     };
 
     struct StripPreviewContext {
@@ -559,6 +569,7 @@ class OverviewController {
     void                       clearPendingWindowGeometryRetry();
     void                       scheduleVisibleStateRebuild();
     void                       scheduleWorkspaceChangeHandling(const PHLWORKSPACE& workspace, OverviewWorkspaceChangeAction action, bool allowExternalTransition = false);
+    void                       updateOverviewWorkspaceSwipeGestureAdjusted(double delta, bool absolute);
     void                       schedulePendingWindowGeometryRetry(const PHLWINDOW& window);
     void                       updatePendingWindowGeometryRetry(const PHLWINDOW& window);
     [[nodiscard]] bool         matchesPendingLiveFocusWorkspaceChange(const PHLWORKSPACE& workspace) const;
@@ -741,6 +752,10 @@ class OverviewController {
     CHyprSignalListener       m_renderStageListener;
     CHyprSignalListener       m_mouseMoveListener;
     CHyprSignalListener       m_mouseButtonListener;
+    CHyprSignalListener       m_touchDownListener;
+    CHyprSignalListener       m_touchMotionListener;
+    CHyprSignalListener       m_touchUpListener;
+    CHyprSignalListener       m_touchCancelListener;
     CHyprSignalListener       m_keyboardListener;
     CHyprSignalListener       m_windowOpenListener;
     CHyprSignalListener       m_windowDestroyListener;

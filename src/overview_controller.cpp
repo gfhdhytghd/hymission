@@ -1891,6 +1891,22 @@ bool OverviewController::initialize() {
         if (handleMouseButton(copiedEvent))
             info.cancelled = true;
     });
+    m_touchDownListener = events.input.touch.down.listen([this](const ITouch::SDownEvent& event, Event::SCallbackInfo& info) {
+        if (handleTouchDown(event))
+            info.cancelled = true;
+    });
+    m_touchMotionListener = events.input.touch.motion.listen([this](const ITouch::SMotionEvent& event, Event::SCallbackInfo& info) {
+        if (handleTouchMotion(event))
+            info.cancelled = true;
+    });
+    m_touchUpListener = events.input.touch.up.listen([this](const ITouch::SUpEvent& event, Event::SCallbackInfo& info) {
+        if (handleTouchUp(event))
+            info.cancelled = true;
+    });
+    m_touchCancelListener = events.input.touch.cancel.listen([this](const ITouch::SCancelEvent& event, Event::SCallbackInfo& info) {
+        if (handleTouchUp(ITouch::SUpEvent{.timeMs = event.timeMs, .touchID = event.touchID}, true))
+            info.cancelled = true;
+    });
     m_keyboardListener = events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) { handleKeyboard(event, info); });
     m_windowOpenListener = events.window.open.listen([this](PHLWINDOW window) { handleWindowSetChange(window, WindowSetChangeKind::General); });
     m_windowDestroyListener = events.window.destroy.listen([this](PHLWINDOW window) {
@@ -2913,6 +2929,83 @@ void OverviewController::workspaceSwipeEndHook(void* gestureThisptr, const ITrac
         return;
 
     m_workspaceSwipeEndOriginal(gestureThisptr, e);
+}
+
+bool OverviewController::handleTouchDown(const ITouch::SDownEvent& event) {
+    if (!isVisible() || m_state.phase != Phase::Active || getConfigInt(m_handle, "gestures:workspace_swipe_touch", 0) == 0)
+        return false;
+
+    PHLMONITOR monitor;
+    if (event.device && !event.device->m_boundOutput.empty())
+        monitor = g_pCompositor->getMonitorFromName(event.device->m_boundOutput);
+    if (!monitor)
+        monitor = Desktop::focusState()->monitor();
+    if (!monitor || !containsHandle(m_state.participatingMonitors, monitor))
+        monitor = m_state.ownerMonitor;
+    if (!monitor)
+        return false;
+
+    const auto workspace = monitor->m_activeWorkspace ? monitor->m_activeWorkspace : activeLayoutWorkspace();
+    const bool vertical = workspaceSwipeUsesVerticalAxis(workspace);
+    const double primary = vertical ? event.pos.y : event.pos.x;
+    constexpr double TOUCH_EDGE_THRESHOLD = 0.08;
+    if (primary > TOUCH_EDGE_THRESHOLD && primary < 1.0 - TOUCH_EDGE_THRESHOLD)
+        return false;
+
+    if (shouldBlockWorkspaceSwitchInOverview())
+        return true;
+
+    if (!allowsWorkspaceSwitchInOverview())
+        return false;
+
+    if (m_gestureSession.active || m_workspaceSwipeGesture.active || m_workspaceTransition.active)
+        return true;
+
+    if (!beginOverviewWorkspaceSwipeGesture(vertical ? TRACKPAD_GESTURE_DIR_VERTICAL : TRACKPAD_GESTURE_DIR_HORIZONTAL))
+        return true;
+
+    m_workspaceSwipeGesture.monitor = monitor;
+    m_workspaceSwipeGesture.touchActive = true;
+    m_workspaceSwipeGesture.touchId = event.touchID;
+    m_workspaceSwipeGesture.touchVertical = vertical;
+    m_workspaceSwipeGesture.touchFromHighEdge = primary > 0.5;
+    m_workspaceSwipeGesture.gestureDelta = 0.0;
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] overview touch workspace swipe begin monitor=" << monitor->m_name << " edge="
+            << (m_workspaceSwipeGesture.touchFromHighEdge ? "high" : "low") << " axis=" << (vertical ? "vertical" : "horizontal");
+        debugLog(out.str());
+    }
+
+    return true;
+}
+
+bool OverviewController::handleTouchMotion(const ITouch::SMotionEvent& event) {
+    if (!m_workspaceSwipeGesture.active || !m_workspaceSwipeGesture.touchActive || event.touchID != m_workspaceSwipeGesture.touchId)
+        return false;
+
+    const double primary = m_workspaceSwipeGesture.touchVertical ? event.pos.y : event.pos.x;
+    const double gestureDistance = gestureSwipeDistance();
+    const bool touchInvert = getConfigInt(m_handle, "gestures:workspace_swipe_touch_invert", 0) != 0;
+
+    double adjustedDelta = 0.0;
+    if (m_workspaceSwipeGesture.touchFromHighEdge)
+        adjustedDelta = gestureDistance * (touchInvert ? primary - 1.0 : 1.0 - primary);
+    else
+        adjustedDelta = gestureDistance * (touchInvert ? primary : -primary);
+
+    setOverviewWorkspaceSwipeGestureDelta(adjustedDelta);
+    return true;
+}
+
+bool OverviewController::handleTouchUp(const ITouch::SUpEvent& event, bool cancelled) {
+    if (!m_workspaceSwipeGesture.active || !m_workspaceSwipeGesture.touchActive || event.touchID != m_workspaceSwipeGesture.touchId)
+        return false;
+
+    m_workspaceSwipeGesture.touchActive = false;
+    endOverviewWorkspaceSwipeGesture(cancelled);
+    return true;
 }
 
 void OverviewController::scrollMoveGestureBeginHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e) {
@@ -4629,15 +4722,20 @@ bool OverviewController::startOverviewWorkspaceTransitionByStep(const PHLMONITOR
 }
 
 void OverviewController::updateOverviewWorkspaceSwipeGesture(double delta) {
+    updateOverviewWorkspaceSwipeGestureAdjusted(workspaceSwipeInvertEnabled() ? -delta : delta, false);
+}
+
+void OverviewController::setOverviewWorkspaceSwipeGestureDelta(double delta) {
+    updateOverviewWorkspaceSwipeGestureAdjusted(delta, true);
+}
+
+void OverviewController::updateOverviewWorkspaceSwipeGestureAdjusted(double delta, bool absolute) {
     if (!m_workspaceSwipeGesture.active || !m_workspaceSwipeGesture.monitor)
         return;
 
-    const double signedDelta = workspaceSwipeInvertEnabled() ? -delta : delta;
-    if (std::abs(signedDelta) < 0.0001)
-        return;
-
-    const double candidateTotal = (m_workspaceTransition.active ? m_workspaceTransition.delta : 0.0) + signedDelta;
+    const double candidateTotal = absolute ? delta : m_workspaceSwipeGesture.gestureDelta + delta;
     if (std::abs(candidateTotal) < 0.0001) {
+        m_workspaceSwipeGesture.gestureDelta = 0.0;
         if (m_workspaceTransition.active) {
             m_workspaceTransition.delta = 0.0;
             damageOwnedMonitors();
@@ -4651,17 +4749,21 @@ void OverviewController::updateOverviewWorkspaceSwipeGesture(double delta) {
             return;
     }
 
-    double nextDelta = candidateTotal;
+    double nextGestureDelta = candidateTotal;
     if (gestureSwipeDirectionLockEnabled()) {
-        if (m_workspaceTransition.initialDirection != 0 && m_workspaceTransition.initialDirection != (nextDelta < 0.0 ? -1 : 1)) {
-            nextDelta = 0.0;
-        } else if (m_workspaceTransition.initialDirection == 0 && std::abs(nextDelta) > gestureSwipeDirectionLockThreshold()) {
-            m_workspaceTransition.initialDirection = nextDelta < 0.0 ? -1 : 1;
+        if (m_workspaceTransition.initialDirection != 0 && m_workspaceTransition.initialDirection != (nextGestureDelta < 0.0 ? -1 : 1)) {
+            nextGestureDelta = 0.0;
+        } else if (m_workspaceTransition.initialDirection == 0 && std::abs(nextGestureDelta) > gestureSwipeDirectionLockThreshold()) {
+            m_workspaceTransition.initialDirection = nextGestureDelta < 0.0 ? -1 : 1;
         }
     }
 
+    const double gestureDistance = gestureSwipeDistance();
+    nextGestureDelta = std::clamp(nextGestureDelta, -gestureDistance, gestureDistance);
+
     const double previousDelta = m_workspaceTransition.delta;
-    m_workspaceTransition.delta = std::clamp(nextDelta, -m_workspaceTransition.distance, m_workspaceTransition.distance);
+    m_workspaceSwipeGesture.gestureDelta = nextGestureDelta;
+    m_workspaceTransition.delta = (nextGestureDelta / gestureDistance) * m_workspaceTransition.distance;
     const double deltaStep = std::abs(previousDelta - m_workspaceTransition.delta);
     m_workspaceTransition.avgSpeed = (m_workspaceTransition.avgSpeed * static_cast<double>(m_workspaceTransition.speedPoints) + deltaStep) /
         static_cast<double>(m_workspaceTransition.speedPoints + 1);
@@ -4669,29 +4771,33 @@ void OverviewController::updateOverviewWorkspaceSwipeGesture(double delta) {
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
-        out << "[hymission] overview workspace swipe update delta=" << m_workspaceTransition.delta << " avgSpeed=" << m_workspaceTransition.avgSpeed
-            << " step=" << m_workspaceTransition.step;
+        out << "[hymission] overview workspace swipe update gestureDelta=" << m_workspaceSwipeGesture.gestureDelta
+            << " visualDelta=" << m_workspaceTransition.delta << " avgSpeed=" << m_workspaceTransition.avgSpeed << " step=" << m_workspaceTransition.step;
         debugLog(out.str());
     }
 
     damageOwnedMonitors();
 
-    if (gestureSwipeForeverEnabled() && std::abs(m_workspaceTransition.delta) >= m_workspaceTransition.distance - 0.5)
+    if (gestureSwipeForeverEnabled() && std::abs(m_workspaceSwipeGesture.gestureDelta) >= gestureDistance - 0.5)
         requestOverviewWorkspaceTransitionCommit(true);
 }
 
 void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
-    m_workspaceSwipeGesture.active = false;
+    const double gestureDelta = m_workspaceSwipeGesture.gestureDelta;
+    const bool touchActive = m_workspaceSwipeGesture.touchActive;
+    m_workspaceSwipeGesture = {};
 
     if (!m_workspaceTransition.active)
         return;
 
     const double cancelRatio = std::clamp(getConfigFloat(m_handle, "gestures:workspace_swipe_cancel_ratio", 0.5), 0.0, 1.0);
+    const double gestureDistance = gestureSwipeDistance();
     const double speedThreshold = gestureForceSpeedThreshold();
+    const double visualSpeedThreshold = speedThreshold * (m_workspaceTransition.distance / gestureDistance);
     const bool revert =
-        cancelled || ((std::abs(m_workspaceTransition.delta) < m_workspaceTransition.distance * cancelRatio &&
-                       (speedThreshold == 0.0 || m_workspaceTransition.avgSpeed < speedThreshold)) ||
-                      std::abs(m_workspaceTransition.delta) < 2.0);
+        cancelled || ((std::abs(gestureDelta) < gestureDistance * cancelRatio &&
+                       (speedThreshold == 0.0 || m_workspaceTransition.avgSpeed < visualSpeedThreshold)) ||
+                      std::abs(gestureDelta) < 2.0);
 
     m_workspaceTransition.mode = revert ? WorkspaceTransitionMode::TimedRevert : WorkspaceTransitionMode::TimedCommit;
     m_workspaceTransition.animationFromDelta = m_workspaceTransition.delta;
@@ -4702,7 +4808,8 @@ void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] overview workspace swipe end cancelled=" << (cancelled ? 1 : 0) << " revert=" << (revert ? 1 : 0)
-            << " delta=" << m_workspaceTransition.delta << " avgSpeed=" << m_workspaceTransition.avgSpeed;
+            << " touch=" << (touchActive ? 1 : 0) << " gestureDelta=" << gestureDelta << " visualDelta=" << m_workspaceTransition.delta
+            << " avgSpeed=" << m_workspaceTransition.avgSpeed;
         debugLog(out.str());
     }
 
