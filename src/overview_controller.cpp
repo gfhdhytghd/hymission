@@ -5171,13 +5171,27 @@ void OverviewController::restoreWorkspaceTransitionRenderState(const PHLWORKSPAC
         if (!backup.workspace)
             continue;
 
-        if (committedWorkspace && backup.workspace == committedWorkspace) {
-            backup.workspace->m_visible = true;
-            backup.workspace->m_forceRendering = false;
-            backup.workspace->m_renderOffset->setValueAndWarp(Vector2D{});
-            *backup.workspace->m_renderOffset = Vector2D{};
-            backup.workspace->m_alpha->setValueAndWarp(1.F);
-            *backup.workspace->m_alpha = 1.F;
+        if (committedWorkspace) {
+            const auto workspaceMonitor = backup.workspace->m_monitor.lock();
+            const bool activeOnMonitor = workspaceMonitor && workspaceMonitor->m_activeWorkspace == backup.workspace;
+            const bool committed = backup.workspace == committedWorkspace;
+
+            backup.workspace->m_visible = committed || activeOnMonitor;
+            backup.workspace->m_forceRendering = activeOnMonitor && !committed ? backup.forceRendering : false;
+
+            if (backup.workspace->m_visible && !committed) {
+                backup.workspace->m_renderOffset->setValueAndWarp(backup.renderOffsetValue);
+                if (backup.renderOffsetGoal != backup.renderOffsetValue)
+                    *backup.workspace->m_renderOffset = backup.renderOffsetGoal;
+                backup.workspace->m_alpha->setValueAndWarp(backup.alphaValue);
+                if (std::abs(backup.alphaGoal - backup.alphaValue) > 0.0001F)
+                    *backup.workspace->m_alpha = backup.alphaGoal;
+            } else {
+                backup.workspace->m_renderOffset->setValueAndWarp(Vector2D{});
+                *backup.workspace->m_renderOffset = Vector2D{};
+                backup.workspace->m_alpha->setValueAndWarp(1.F);
+                *backup.workspace->m_alpha = 1.F;
+            }
             continue;
         }
 
