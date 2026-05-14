@@ -154,6 +154,14 @@ int main() {
                  "up scrolling move amount should invert gesture sign");
     ok &= expect(closeEnough(scrollingLayoutMoveAmount(ScrollingLayoutDirection::Right, 5.0, -3.0), 0.0),
                  "negative niri scroll sensitivity should clamp to zero");
+    ok &= expect(closeEnough(niriOverviewPreviewScale({0, 0, 900, 500}, {0, 0, 3000, 500}, 0.95, 0.10, GestureAxis::Horizontal), 0.95),
+                 "horizontal niri overview should ignore scrolling-tape width when fitting scale");
+    ok &= expect(closeEnough(niriOverviewPreviewScale({0, 0, 900, 500}, {0, 0, 3000, 500}, 0.95, 0.10), 0.30),
+                 "normal niri overview fitting should still account for both axes");
+    ok &= expect(closeEnough(niriOverviewPreviewScale({0, 0, 900, 500}, {0, 0, 900, 2400}, 0.95, 0.10, GestureAxis::Vertical), 0.95),
+                 "vertical niri overview should ignore scrolling-tape height when fitting scale");
+    ok &= expect(closeEnough(niriOverviewPreviewScale({0, 0, 900, 360}, {0, 0, 900, 500}, 0.95, 0.10, GestureAxis::Horizontal), 0.72),
+                 "niri overview should still shrink when the cross axis cannot fit the configured max scale");
 
     ok &= expect(isWorkspaceStripHorizontal(WorkspaceStripAnchor::Top), "top strip should be horizontal");
     ok &= expect(!isWorkspaceStripHorizontal(WorkspaceStripAnchor::Left), "left strip should be vertical");

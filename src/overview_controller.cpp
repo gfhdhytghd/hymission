@@ -1243,8 +1243,9 @@ Rect scrollingOverviewSourceGlobalRectForWindow(const PHLWINDOW& window, const R
 }
 
 struct ScrollingOverviewGeometry {
-    Rect sourceGlobal;
-    Rect baseGlobal;
+    Rect        sourceGlobal;
+    Rect        baseGlobal;
+    GestureAxis primaryAxis = GestureAxis::Horizontal;
 };
 
 std::optional<ScrollingOverviewGeometry> scrollingOverviewTapeRowGeometryForWindow(const PHLWINDOW& window, const Rect& fallbackGlobal) {
@@ -1336,19 +1337,10 @@ std::optional<ScrollingOverviewGeometry> scrollingOverviewTapeRowGeometryForWind
     if (!targetSource)
         return std::nullopt;
 
-    Rect tapeBaseGlobal = baseGlobal;
-    const double tapePrimaryLength = std::max(1.0, cursorPrimary - rowStartPrimary);
-    if (horizontal && tapePrimaryLength > baseGlobal.width) {
-        tapeBaseGlobal.x = rowStartPrimary;
-        tapeBaseGlobal.width = tapePrimaryLength;
-    } else if (!horizontal && tapePrimaryLength > baseGlobal.height) {
-        tapeBaseGlobal.y = rowStartPrimary;
-        tapeBaseGlobal.height = tapePrimaryLength;
-    }
-
     return ScrollingOverviewGeometry{
         .sourceGlobal = *targetSource,
-        .baseGlobal = tapeBaseGlobal,
+        .baseGlobal = baseGlobal,
+        .primaryAxis = horizontal ? GestureAxis::Horizontal : GestureAxis::Vertical,
     };
 }
 
@@ -10612,7 +10604,8 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         return state.managedWorkspaces.size();
     };
     const auto niriOverviewSlotForSource = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal, const Rect& baseGlobal,
-                                               std::size_t windowIndex, bool allowPinned) -> std::optional<WindowSlot> {
+                                               std::size_t windowIndex, bool allowPinned,
+                                               std::optional<GestureAxis> overflowAxis) -> std::optional<WindowSlot> {
         if (!allowDirectNiriOverviewLayout)
             return std::nullopt;
 
@@ -10637,9 +10630,10 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         if (baseGlobal.width <= 1.0 || baseGlobal.height <= 1.0)
             return std::nullopt;
 
-        const double fitScale = std::min(previewArea.width / baseGlobal.width, previewArea.height / baseGlobal.height);
-        const double maxScale = std::max(config.minSlotScale, config.maxPreviewScale);
-        const double scale = std::max(config.minSlotScale, std::min(fitScale, maxScale));
+        const double scale = niriOverviewPreviewScale(previewArea, baseGlobal, config.maxPreviewScale, config.minSlotScale, overflowAxis);
+        if (scale <= 0.0)
+            return std::nullopt;
+
         const double scaledViewportWidth = baseGlobal.width * scale;
         const double scaledViewportHeight = baseGlobal.height * scale;
         const double viewportX = previewArea.x + (previewArea.width - scaledViewportWidth) * 0.5;
@@ -10668,7 +10662,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         if (!isFloatingOverviewWindow(window))
             return std::nullopt;
 
-        return niriOverviewSlotForSource(window, targetMonitor, sourceGlobal, niriFloatingOverviewBaseGlobalRect(targetMonitor), windowIndex, true);
+        return niriOverviewSlotForSource(window, targetMonitor, sourceGlobal, niriFloatingOverviewBaseGlobalRect(targetMonitor), windowIndex, true, std::nullopt);
     };
     const auto niriScrollingOverviewSlotForWindow = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
                                                         std::size_t windowIndex, Rect& resolvedSourceGlobal) -> std::optional<WindowSlot> {
@@ -10678,15 +10672,17 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
         Rect sourceForOverview = sourceGlobal;
         Rect baseGlobal;
+        std::optional<GestureAxis> overflowAxis;
         if (const auto rowGeometry = scrollingOverviewTapeRowGeometryForWindow(window, sourceGlobal)) {
             sourceForOverview = rowGeometry->sourceGlobal;
             baseGlobal = rowGeometry->baseGlobal;
+            overflowAxis = rowGeometry->primaryAxis;
         } else {
             const CBox workAreaBox = window && window->m_workspace && window->m_workspace->m_space ? window->m_workspace->m_space->workArea() : CBox{};
             baseGlobal = makeRect(workAreaBox.x, workAreaBox.y, workAreaBox.width, workAreaBox.height);
         }
 
-        auto slot = niriOverviewSlotForSource(window, targetMonitor, sourceForOverview, baseGlobal, windowIndex, false);
+        auto slot = niriOverviewSlotForSource(window, targetMonitor, sourceForOverview, baseGlobal, windowIndex, false, overflowAxis);
         if (slot)
             resolvedSourceGlobal = sourceForOverview;
         return slot;

@@ -280,6 +280,20 @@ double scrollingLayoutMoveAmount(ScrollingLayoutDirection direction, double prim
     return primaryDelta * sign * std::max(0.0, sensitivity);
 }
 
+double niriOverviewPreviewScale(const Rect& previewArea, const Rect& baseArea, double maxPreviewScale, double minSlotScale, std::optional<GestureAxis> overflowAxis) {
+    if (previewArea.width <= 1.0 || previewArea.height <= 1.0 || baseArea.width <= 1.0 || baseArea.height <= 1.0)
+        return 0.0;
+
+    double fitScale = std::min(previewArea.width / baseArea.width, previewArea.height / baseArea.height);
+    if (overflowAxis == GestureAxis::Horizontal)
+        fitScale = previewArea.height / baseArea.height;
+    else if (overflowAxis == GestureAxis::Vertical)
+        fitScale = previewArea.width / baseArea.width;
+
+    const double maxScale = std::max(minSlotScale, maxPreviewScale);
+    return std::max(minSlotScale, std::min(fitScale, maxScale));
+}
+
 bool isWorkspaceStripHorizontal(WorkspaceStripAnchor anchor) {
     return anchor == WorkspaceStripAnchor::Top;
 }
