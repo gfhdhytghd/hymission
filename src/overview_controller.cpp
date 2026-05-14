@@ -4492,6 +4492,8 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
     if (mode == WorkspaceTransitionMode::TimedCommit)
         m_workspaceTransition.animationToDelta = static_cast<double>(m_workspaceTransition.step) * m_workspaceTransition.distance;
 
+    armWorkspaceTransitionRenderState();
+
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] overview workspace transition begin monitor=" << monitor->m_name << " targetId=" << workspaceId
@@ -4758,7 +4760,7 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         next.relayoutProgress = 1.0;
         next.relayoutStart = {};
 
-        clearOverviewWorkspaceTransition();
+        clearOverviewWorkspaceTransition(targetWorkspace);
         carryOverWorkspaceStripSnapshots(next, m_state);
         m_state = std::move(next);
         applyWorkspaceNameOverrides(m_state);
@@ -4797,7 +4799,81 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
     damageOwnedMonitors();
 }
 
-void OverviewController::clearOverviewWorkspaceTransition() {
+void OverviewController::armWorkspaceTransitionRenderState() {
+    restoreWorkspaceTransitionRenderState();
+
+    if (!m_workspaceTransition.active)
+        return;
+
+    std::vector<PHLWORKSPACE> workspaces;
+    const auto appendWorkspace = [&](const PHLWORKSPACE& workspace) {
+        if (!workspace || containsHandle(workspaces, workspace))
+            return;
+        workspaces.push_back(workspace);
+    };
+
+    for (const auto& workspace : m_workspaceTransition.sourceState.managedWorkspaces)
+        appendWorkspace(workspace);
+    for (const auto& workspace : m_workspaceTransition.targetState.managedWorkspaces)
+        appendWorkspace(workspace);
+
+    m_workspaceTransitionRenderStateBackups.reserve(workspaces.size());
+    for (const auto& workspace : workspaces) {
+        m_workspaceTransitionRenderStateBackups.push_back({
+            .workspace = workspace,
+            .visible = workspace->m_visible,
+            .forceRendering = workspace->m_forceRendering,
+            .renderOffsetValue = workspace->m_renderOffset->value(),
+            .renderOffsetGoal = workspace->m_renderOffset->goal(),
+            .alphaValue = workspace->m_alpha->value(),
+            .alphaGoal = workspace->m_alpha->goal(),
+        });
+
+        workspace->m_visible = true;
+        workspace->m_forceRendering = true;
+        workspace->m_renderOffset->setValueAndWarp(Vector2D{});
+        *workspace->m_renderOffset = Vector2D{};
+        workspace->m_alpha->setValueAndWarp(1.F);
+        *workspace->m_alpha = 1.F;
+    }
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] arm workspace transition render state count=" << m_workspaceTransitionRenderStateBackups.size();
+        debugLog(out.str());
+    }
+}
+
+void OverviewController::restoreWorkspaceTransitionRenderState(const PHLWORKSPACE& committedWorkspace) {
+    for (const auto& backup : m_workspaceTransitionRenderStateBackups) {
+        if (!backup.workspace)
+            continue;
+
+        if (committedWorkspace && backup.workspace == committedWorkspace) {
+            backup.workspace->m_visible = true;
+            backup.workspace->m_forceRendering = false;
+            backup.workspace->m_renderOffset->setValueAndWarp(Vector2D{});
+            *backup.workspace->m_renderOffset = Vector2D{};
+            backup.workspace->m_alpha->setValueAndWarp(1.F);
+            *backup.workspace->m_alpha = 1.F;
+            continue;
+        }
+
+        backup.workspace->m_visible = backup.visible;
+        backup.workspace->m_forceRendering = backup.forceRendering;
+        backup.workspace->m_renderOffset->setValueAndWarp(backup.renderOffsetValue);
+        if (backup.renderOffsetGoal != backup.renderOffsetValue)
+            *backup.workspace->m_renderOffset = backup.renderOffsetGoal;
+        backup.workspace->m_alpha->setValueAndWarp(backup.alphaValue);
+        if (std::abs(backup.alphaGoal - backup.alphaValue) > 0.0001F)
+            *backup.workspace->m_alpha = backup.alphaGoal;
+    }
+
+    m_workspaceTransitionRenderStateBackups.clear();
+}
+
+void OverviewController::clearOverviewWorkspaceTransition(const PHLWORKSPACE& committedWorkspace) {
+    restoreWorkspaceTransitionRenderState(committedWorkspace);
     clearPendingWindowGeometryRetry();
     m_workspaceTransitionCommitScheduled = false;
     m_pendingWorkspaceTransitionCommitFollowGesture = false;

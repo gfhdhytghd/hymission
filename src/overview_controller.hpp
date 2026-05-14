@@ -335,6 +335,16 @@ class OverviewController {
         std::chrono::steady_clock::time_point  animationStart = {};
     };
 
+    struct WorkspaceTransitionRenderStateBackup {
+        PHLWORKSPACE workspace;
+        bool         visible = false;
+        bool         forceRendering = false;
+        Vector2D     renderOffsetValue;
+        Vector2D     renderOffsetGoal;
+        float        alphaValue = 1.0F;
+        float        alphaGoal = 1.0F;
+    };
+
     struct WorkspaceSwipeGestureContext {
         bool                      active = false;
         PHLMONITOR                monitor;
@@ -493,7 +503,9 @@ class OverviewController {
     void                       updateOverviewWorkspaceTransition();
     void                       requestOverviewWorkspaceTransitionCommit(bool followGesture = false);
     void                       commitOverviewWorkspaceTransition(bool followGesture = false);
-    void                       clearOverviewWorkspaceTransition();
+    void                       clearOverviewWorkspaceTransition(const PHLWORKSPACE& committedWorkspace = {});
+    void                       armWorkspaceTransitionRenderState();
+    void                       restoreWorkspaceTransitionRenderState(const PHLWORKSPACE& committedWorkspace = {});
     [[nodiscard]] SDispatchResult startOverviewWorkspaceTransitionForDispatcher(const std::string& args, bool currentMonitorOnly);
     [[nodiscard]] std::optional<WindowTransform> windowTransformFor(const PHLWINDOW& window, const PHLMONITOR& monitor) const;
     [[nodiscard]] bool                          transformSurfaceRenderDataForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor,
@@ -694,6 +706,7 @@ class OverviewController {
     ScrollGestureSession      m_scrollGestureSession;
     WorkspaceSwipeGestureContext m_workspaceSwipeGesture;
     WorkspaceTransition      m_workspaceTransition;
+    std::vector<WorkspaceTransitionRenderStateBackup> m_workspaceTransitionRenderStateBackups;
     StripPreviewContext      m_stripPreviewContext;
     std::vector<HiddenStripLayerProxy> m_hiddenStripLayerProxies;
     bool                     m_applyingWorkspaceTransitionCommit = false;
