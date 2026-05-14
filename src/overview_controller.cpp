@@ -409,6 +409,31 @@ const char* scrollingDirectionName(ScrollingLayoutDirection direction) {
     }
 }
 
+double swipeDistanceForDirection(const ITrackpadGesture::STrackpadGestureBegin& e) {
+    if (!e.swipe)
+        return 0.0;
+
+    if (e.direction == TRACKPAD_GESTURE_DIR_LEFT || e.direction == TRACKPAD_GESTURE_DIR_RIGHT || e.direction == TRACKPAD_GESTURE_DIR_HORIZONTAL)
+        return static_cast<double>(e.scale) * (e.direction == TRACKPAD_GESTURE_DIR_LEFT ? -e.swipe->delta.x : e.swipe->delta.x);
+
+    if (e.direction == TRACKPAD_GESTURE_DIR_UP || e.direction == TRACKPAD_GESTURE_DIR_DOWN || e.direction == TRACKPAD_GESTURE_DIR_VERTICAL)
+        return static_cast<double>(e.scale) * (e.direction == TRACKPAD_GESTURE_DIR_UP ? -e.swipe->delta.y : e.swipe->delta.y);
+
+    if (e.direction == TRACKPAD_GESTURE_DIR_SWIPE)
+        return static_cast<double>(e.scale) * e.swipe->delta.size();
+
+    return static_cast<double>(e.scale) * e.swipe->delta.size();
+}
+
+double swipeDistanceForDirection(const ITrackpadGesture::STrackpadGestureUpdate& e) {
+    return swipeDistanceForDirection(ITrackpadGesture::STrackpadGestureBegin{
+        .swipe = e.swipe,
+        .pinch = e.pinch,
+        .direction = e.direction,
+        .scale = e.scale,
+    });
+}
+
 bool shouldWrapWorkspaceIds(const WORKSPACEID targetId, const WORKSPACEID currentId) {
     static auto PWORKSPACEWRAPAROUND = CConfigValue<Hyprlang::INT>("animations:workspace_wraparound");
 
@@ -2840,6 +2865,17 @@ void OverviewController::workspaceSwipeBeginHook(void* gestureThisptr, const ITr
         return;
     }
 
+    if (allowsWorkspaceSwitchInOverview()) {
+        const auto direction = e.direction != TRACKPAD_GESTURE_DIR_NONE ?
+            e.direction :
+            (workspaceSwipeUsesVerticalAxis(activeLayoutWorkspace()) ? TRACKPAD_GESTURE_DIR_VERTICAL : TRACKPAD_GESTURE_DIR_HORIZONTAL);
+        if (beginOverviewWorkspaceSwipeGesture(direction))
+            updateOverviewWorkspaceSwipeGesture(swipeDistanceForDirection(e));
+        else if (debugLogsEnabled())
+            debugLog("[hymission] consume native workspace swipe begin during active-workspace overview");
+        return;
+    }
+
     m_workspaceSwipeBeginOriginal(gestureThisptr, e);
 }
 
@@ -2847,7 +2883,15 @@ void OverviewController::workspaceSwipeUpdateHook(void* gestureThisptr, const IT
     if (!m_workspaceSwipeUpdateOriginal)
         return;
 
+    if (m_workspaceSwipeGesture.active) {
+        updateOverviewWorkspaceSwipeGesture(swipeDistanceForDirection(e));
+        return;
+    }
+
     if (shouldBlockWorkspaceSwitchInOverview())
+        return;
+
+    if (allowsWorkspaceSwitchInOverview())
         return;
 
     m_workspaceSwipeUpdateOriginal(gestureThisptr, e);
@@ -2857,7 +2901,15 @@ void OverviewController::workspaceSwipeEndHook(void* gestureThisptr, const ITrac
     if (!m_workspaceSwipeEndOriginal)
         return;
 
+    if (m_workspaceSwipeGesture.active) {
+        endOverviewWorkspaceSwipeGesture(e.swipe ? e.swipe->cancelled : true);
+        return;
+    }
+
     if (shouldBlockWorkspaceSwitchInOverview())
+        return;
+
+    if (allowsWorkspaceSwitchInOverview())
         return;
 
     m_workspaceSwipeEndOriginal(gestureThisptr, e);
