@@ -466,6 +466,7 @@ class OverviewController {
     void                       restoreWorkspaceNameOverrides();
     void                       clearRegisteredTrackpadGestures();
     void                       rememberRegisteredTrackpadGesture(const GestureRegistration& gesture);
+    void                       replaceNativeWorkspaceGestures(const char* source = "?");
     [[nodiscard]] bool         installHooks();
     [[nodiscard]] bool         activateHooks();
     void                       deactivateHooks();
@@ -777,6 +778,7 @@ class OverviewController {
     CHyprSignalListener       m_workspaceActiveListener;
     CHyprSignalListener       m_monitorRemovedListener;
     CHyprSignalListener       m_monitorFocusedListener;
+    CHyprSignalListener       m_configReloadedListener;
 };
 
 } // namespace hymission

@@ -4,6 +4,7 @@
 #include <any>
 #include <cmath>
 #include <cctype>
+#include <expected>
 #include <fstream>
 #include <limits>
 #include <linux/input-event-codes.h>
@@ -19,6 +20,7 @@
 
 #define private public
 #include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
+#include <hyprland/src/managers/input/trackpad/TrackpadGestures.hpp>
 #undef private
 
 #include <hyprland/src/Compositor.hpp>
@@ -41,7 +43,6 @@
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopTimer.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
-#include <hyprland/src/managers/input/trackpad/TrackpadGestures.hpp>
 #include <hyprland/src/managers/input/trackpad/gestures/ITrackpadGesture.hpp>
 #include <hyprland/src/managers/input/trackpad/gestures/ScrollMoveGesture.hpp>
 #include <hyprland/src/managers/input/trackpad/gestures/WorkspaceSwipeGesture.hpp>
@@ -1959,6 +1960,9 @@ bool OverviewController::initialize() {
         if (isVisible() && shouldHandleInput())
             updateHoveredFromPointer(false, false, false, false, "monitor-focused");
     });
+    m_configReloadedListener = events.config.reloaded.listen([this] { replaceNativeWorkspaceGestures("config-reloaded"); });
+
+    replaceNativeWorkspaceGestures("initialize");
 
     return true;
 }
@@ -3916,6 +3920,33 @@ void OverviewController::rememberRegisteredTrackpadGesture(const GestureRegistra
             std::abs(existing.deltaScale - gesture.deltaScale) <= 0.0001F && existing.disableInhibit == gesture.disableInhibit;
     });
     m_registeredGestures.push_back(gesture);
+}
+
+void OverviewController::replaceNativeWorkspaceGestures(const char* source) {
+    if (!g_pTrackpadGestures)
+        return;
+
+    std::size_t replaced = 0;
+    for (const auto& gesture : g_pTrackpadGestures->m_gestures) {
+        if (!gesture || !gesture->gesture || !dynamic_cast<CWorkspaceSwipeGesture*>(gesture->gesture.get()))
+            continue;
+
+        gesture->gesture = makeUnique<CHymissionWorkspaceTrackpadGesture>(gesture->direction, gesture->deltaScale);
+        rememberRegisteredTrackpadGesture({
+            .fingerCount = gesture->fingerCount,
+            .direction = gesture->direction,
+            .modMask = gesture->modMask,
+            .deltaScale = gesture->deltaScale,
+            .disableInhibit = gesture->disableInhibit,
+        });
+        ++replaced;
+    }
+
+    if (replaced > 0 && debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] replaced native workspace gestures count=" << replaced << " source=" << (source ? source : "?");
+        debugLog(out.str());
+    }
 }
 
 std::optional<std::string> OverviewController::handleGestureConfigHook(const std::string& keyword, const std::string& value) {
