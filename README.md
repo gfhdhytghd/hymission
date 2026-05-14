@@ -9,9 +9,12 @@
 > Hyprland plugins run inside the compositor process. Install plugins only from sources you trust.
 > `hymission` may not work correctly on NVIDIA GPUs/drivers.
 
+> [!WARNING]
+> This software is 99% vibe coded with OpenAI CodeX, but have been manual audited, warn in case you mind it.
+
 **Inspired By Apple Mission Control**
 
-**Referenced [hyprexpo](https://github.com/hyprwm/hyprland-plugins/tree/main/hyprexpo), [hycov](https://github.com/ernestoCruz05/hycov), and [hyprscrolling (Hyprspace)](https://github.com/KZDKM/Hyprspace).**
+**Referenced [hyprexpo](https://github.com/hyprwm/hyprland-plugins/tree/main/hyprexpo), [hycov](https://github.com/ernestoCruz05/hycov), and [Hyprspace](https://github.com/KZDKM/Hyprspace).**
 ## Features
 
 - Mission Control-style overview with animated window previews
