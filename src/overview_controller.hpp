@@ -706,6 +706,7 @@ class OverviewController {
     bool                     m_toggleSwitchReleaseArmed = false;
     std::size_t              m_stripSnapshotRenderDepth = 0;
     bool                     m_renderingRawStripSnapshot = false;
+    PHLWORKSPACE             m_rawStripSnapshotWorkspace;
     bool                     m_stripSnapshotsDirty = false;
     bool                     m_stripSnapshotRefreshScheduled = false;
     bool                     m_primaryButtonPressed = false;

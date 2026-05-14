@@ -1274,8 +1274,9 @@ std::optional<ScrollingOverviewGeometry> scrollingOverviewTapeRowGeometryForWind
 
     std::stable_sort(columns.begin(), columns.end(), [](const ColumnEntry& lhs, const ColumnEntry& rhs) { return lhs.primary < rhs.primary; });
 
-    const double rowStartPrimary = columns.front().primary;
-    double       cursorPrimary = rowStartPrimary;
+    const double       rowStartPrimary = columns.front().primary;
+    double             cursorPrimary = rowStartPrimary;
+    std::optional<Rect> targetSource;
     for (const auto& columnEntry : columns) {
         const auto& column = columnEntry.column;
         for (const auto& candidate : column->targetDatas) {
@@ -1295,18 +1296,34 @@ std::optional<ScrollingOverviewGeometry> scrollingOverviewTapeRowGeometryForWind
             Rect source = centeredSurfaceRectInLayoutBox(layoutBox, fallbackGlobal);
             if (horizontal) {
                 source.x = cursorPrimary + (stepPrimary - source.width) * 0.5;
+                source.y = baseGlobal.y + (baseGlobal.height - source.height) * 0.5;
             } else {
+                source.x = baseGlobal.x + (baseGlobal.width - source.width) * 0.5;
                 source.y = cursorPrimary + (stepPrimary - source.height) * 0.5;
             }
 
-            return ScrollingOverviewGeometry{
-                .sourceGlobal = source,
-                .baseGlobal = baseGlobal,
-            };
+            targetSource = source;
+            cursorPrimary += stepPrimary;
         }
     }
 
-    return std::nullopt;
+    if (!targetSource)
+        return std::nullopt;
+
+    Rect tapeBaseGlobal = baseGlobal;
+    const double tapePrimaryLength = std::max(1.0, cursorPrimary - rowStartPrimary);
+    if (horizontal && tapePrimaryLength > baseGlobal.width) {
+        tapeBaseGlobal.x = rowStartPrimary;
+        tapeBaseGlobal.width = tapePrimaryLength;
+    } else if (!horizontal && tapePrimaryLength > baseGlobal.height) {
+        tapeBaseGlobal.y = rowStartPrimary;
+        tapeBaseGlobal.height = tapePrimaryLength;
+    }
+
+    return ScrollingOverviewGeometry{
+        .sourceGlobal = *targetSource,
+        .baseGlobal = tapeBaseGlobal,
+    };
 }
 
 Rect floatingOverviewSourceGlobalRectForWindow(const PHLWINDOW& window, const Rect& fallbackGlobal) {
@@ -2628,6 +2645,19 @@ void OverviewController::handleMonitorChange(PHLMONITOR monitor) {
 bool OverviewController::shouldRenderWindowHook(const PHLWINDOW& window, const PHLMONITOR& monitor) {
     if (!m_shouldRenderWindowOriginal)
         return false;
+
+    if (m_renderingRawStripSnapshot && window && monitor && ownsMonitor(monitor)) {
+        if (window->m_workspace != m_rawStripSnapshotWorkspace) {
+            if (debugLogsEnabled()) {
+                std::ostringstream out;
+                out << "[hymission] strip snapshot hide non-target workspace window " << debugWindowLabel(window) << " monitor=" << monitor->m_name;
+                debugLog(out.str());
+            }
+            return false;
+        }
+
+        return m_shouldRenderWindowOriginal(g_pHyprRenderer.get(), window, monitor);
+    }
 
     if (isVisible() && window && monitor && ownsMonitor(monitor) && hasManagedWindow(window) && previewMonitorForWindow(window) == monitor) {
         if (debugLogsEnabled()) {
@@ -9412,10 +9442,13 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         g_pHyprRenderer->draw(CClearPassElement::SClearData{.color = CHyprColor{0.05, 0.06, 0.08, 1.0}}, fakeDamage);
         renderBackgroundLayers(renderNow);
         if (renderWorkspaceContents && targetWorkspace) {
+            const auto previousRawStripSnapshotWorkspace = m_rawStripSnapshotWorkspace;
             const ScopedFlag rawStripSnapshot(m_renderingRawStripSnapshot);
+            m_rawStripSnapshotWorkspace = targetWorkspace;
             g_pHyprRenderer->m_bRenderingSnapshot = true;
             renderWorkspaceFn(g_pHyprRenderer.get(), monitor, targetWorkspace, renderNow, CBox{0.0, 0.0, renderFramebuffer->m_size.x, renderFramebuffer->m_size.y});
             g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
+            m_rawStripSnapshotWorkspace = previousRawStripSnapshotWorkspace;
         }
         g_pHyprRenderer->m_renderData.blockScreenShader = true;
         g_pHyprRenderer->endRender();
