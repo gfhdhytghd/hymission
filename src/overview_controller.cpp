@@ -1216,6 +1216,101 @@ Rect scrollingOverviewSourceGlobalRectForWindow(const PHLWINDOW& window, const R
     return centeredSurfaceRectInLayoutBox(layoutBox, fallbackGlobal);
 }
 
+struct ScrollingOverviewGeometry {
+    Rect sourceGlobal;
+    Rect baseGlobal;
+};
+
+std::optional<ScrollingOverviewGeometry> scrollingOverviewTapeRowGeometryForWindow(const PHLWINDOW& window, const Rect& fallbackGlobal) {
+    if (!window || !window->m_workspace || !window->m_workspace->m_space)
+        return std::nullopt;
+
+    const auto target = window->layoutTarget();
+    if (!target || target->floating())
+        return std::nullopt;
+
+    auto* const scrolling = scrollingAlgorithmForWorkspace(window->m_workspace);
+    if (!scrolling || !scrolling->m_scrollingData || !scrolling->m_scrollingData->controller)
+        return std::nullopt;
+
+    const auto targetData = scrolling->dataFor(target);
+    if (!targetData || targetData->layoutBox.width <= 1.0 || targetData->layoutBox.height <= 1.0)
+        return std::nullopt;
+
+    const CBox workAreaBox = window->m_workspace->m_space->workArea();
+    if (workAreaBox.width <= 1.0 || workAreaBox.height <= 1.0)
+        return std::nullopt;
+
+    const auto* const controller = scrolling->m_scrollingData->controller.get();
+    const bool        horizontal = controller->isPrimaryHorizontal();
+    const Rect        baseGlobal = makeRect(workAreaBox.x, workAreaBox.y, workAreaBox.width, workAreaBox.height);
+
+    struct ColumnEntry {
+        SP<Layout::Tiled::SColumnData> column;
+        double                         primary = 0.0;
+    };
+
+    std::vector<ColumnEntry> columns;
+    columns.reserve(scrolling->m_scrollingData->columns.size());
+    for (const auto& column : scrolling->m_scrollingData->columns) {
+        if (!column || column->targetDatas.empty())
+            continue;
+
+        const auto firstTarget = std::ranges::find_if(column->targetDatas, [](const auto& candidate) {
+            return candidate && candidate->target && candidate->layoutBox.width > 1.0 && candidate->layoutBox.height > 1.0;
+        });
+        if (firstTarget == column->targetDatas.end())
+            continue;
+
+        const CBox& box = (*firstTarget)->layoutBox;
+        columns.push_back({
+            .column = column,
+            .primary = horizontal ? box.x : box.y,
+        });
+    }
+
+    if (columns.empty())
+        return std::nullopt;
+
+    std::stable_sort(columns.begin(), columns.end(), [](const ColumnEntry& lhs, const ColumnEntry& rhs) { return lhs.primary < rhs.primary; });
+
+    const double rowStartPrimary = columns.front().primary;
+    double       cursorPrimary = rowStartPrimary;
+    for (const auto& columnEntry : columns) {
+        const auto& column = columnEntry.column;
+        for (const auto& candidate : column->targetDatas) {
+            if (!candidate || !candidate->target || candidate->layoutBox.width <= 1.0 || candidate->layoutBox.height <= 1.0)
+                continue;
+
+            const CBox& layoutBox = candidate->layoutBox;
+            const double columnPrimaryLength = std::max(1.0, horizontal ? layoutBox.width : layoutBox.height);
+            const double fallbackPrimaryLength = std::max(1.0, horizontal ? fallbackGlobal.width : fallbackGlobal.height);
+            const double stepPrimary = std::max(columnPrimaryLength, fallbackPrimaryLength);
+
+            if (candidate != targetData) {
+                cursorPrimary += stepPrimary;
+                continue;
+            }
+
+            Rect source = centeredSurfaceRectInLayoutBox(layoutBox, fallbackGlobal);
+            if (horizontal) {
+                source.x = cursorPrimary + (stepPrimary - source.width) * 0.5;
+                source.y = baseGlobal.y + (baseGlobal.height - source.height) * 0.5;
+            } else {
+                source.x = baseGlobal.x + (baseGlobal.width - source.width) * 0.5;
+                source.y = cursorPrimary + (stepPrimary - source.height) * 0.5;
+            }
+
+            return ScrollingOverviewGeometry{
+                .sourceGlobal = source,
+                .baseGlobal = baseGlobal,
+            };
+        }
+    }
+
+    return std::nullopt;
+}
+
 Rect floatingOverviewSourceGlobalRectForWindow(const PHLWINDOW& window, const Rect& fallbackGlobal) {
     if (!window)
         return fallbackGlobal;
@@ -9186,7 +9281,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             .workspaceName = entry.workspaceName,
             .syntheticEmpty = false,
         }};
-        previewState = buildState(monitor, ScopeOverride::OnlyCurrentWorkspace, workspaceOverrides, true, true);
+        previewState = buildState(monitor, ScopeOverride::OnlyCurrentWorkspace, workspaceOverrides, true, false);
         previewState.phase = Phase::Active;
         previewState.animationProgress = 1.0;
         previewState.animationFromVisual = 1.0;
@@ -10098,14 +10193,25 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         return niriOverviewSlotForSource(window, targetMonitor, sourceGlobal, niriFloatingOverviewBaseGlobalRect(targetMonitor), windowIndex, true);
     };
     const auto niriScrollingOverviewSlotForWindow = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
-                                                        std::size_t windowIndex) -> std::optional<WindowSlot> {
+                                                        std::size_t windowIndex, Rect& resolvedSourceGlobal) -> std::optional<WindowSlot> {
         const auto target = window ? window->layoutTarget() : nullptr;
         if (!target || target->floating())
             return std::nullopt;
 
-        const CBox workAreaBox = window && window->m_workspace && window->m_workspace->m_space ? window->m_workspace->m_space->workArea() : CBox{};
-        const Rect baseGlobal = makeRect(workAreaBox.x, workAreaBox.y, workAreaBox.width, workAreaBox.height);
-        return niriOverviewSlotForSource(window, targetMonitor, sourceGlobal, baseGlobal, windowIndex, false);
+        Rect sourceForOverview = sourceGlobal;
+        Rect baseGlobal;
+        if (const auto rowGeometry = scrollingOverviewTapeRowGeometryForWindow(window, sourceGlobal)) {
+            sourceForOverview = rowGeometry->sourceGlobal;
+            baseGlobal = rowGeometry->baseGlobal;
+        } else {
+            const CBox workAreaBox = window && window->m_workspace && window->m_workspace->m_space ? window->m_workspace->m_space->workArea() : CBox{};
+            baseGlobal = makeRect(workAreaBox.x, workAreaBox.y, workAreaBox.width, workAreaBox.height);
+        }
+
+        auto slot = niriOverviewSlotForSource(window, targetMonitor, sourceForOverview, baseGlobal, windowIndex, false);
+        if (slot)
+            resolvedSourceGlobal = sourceForOverview;
+        return slot;
     };
 
     for (const auto& workspace : state.managedWorkspaces)
@@ -10134,9 +10240,10 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             directNiriFloatingOverlay = true;
         } else {
             const Rect scrollingSourceGlobal = scrollingOverviewSourceGlobalRectForWindow(window, naturalGlobal);
-            directNiriSlot = niriScrollingOverviewSlotForWindow(window, targetMonitor, scrollingSourceGlobal, windowIndex);
+            Rect       resolvedScrollingSourceGlobal = scrollingSourceGlobal;
+            directNiriSlot = niriScrollingOverviewSlotForWindow(window, targetMonitor, scrollingSourceGlobal, windowIndex, resolvedScrollingSourceGlobal);
             if (directNiriSlot)
-                directNiriSourceGlobal = scrollingSourceGlobal;
+                directNiriSourceGlobal = resolvedScrollingSourceGlobal;
         }
 
         state.windows.push_back({
