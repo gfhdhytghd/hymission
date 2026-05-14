@@ -5716,19 +5716,27 @@ const OverviewController::ManagedWindow* OverviewController::managedWindowFor(co
     return transientIt == state.transientClosingWindows.end() ? nullptr : &*transientIt;
 }
 
+const OverviewController::ManagedWindow* OverviewController::managedWindowForWorkspaceTransition(const PHLWINDOW& window) const {
+    if (!m_workspaceTransition.active)
+        return nullptr;
+
+    const auto* sourceManaged = managedWindowFor(m_workspaceTransition.sourceState, window, true);
+    const auto* targetManaged = managedWindowFor(m_workspaceTransition.targetState, window, true);
+    if (sourceManaged && !targetManaged)
+        return sourceManaged;
+
+    return targetManaged;
+}
+
 const OverviewController::ManagedWindow* OverviewController::managedWindowFor(const PHLWINDOW& window) const {
     if (m_stripPreviewContext.active)
         return managedWindowFor(m_stripPreviewContext.state, window, true);
 
-    if (const auto* managed = managedWindowFor(m_state, window, true); managed)
+    if (const auto* managed = managedWindowForWorkspaceTransition(window); managed)
         return managed;
 
-    if (m_workspaceTransition.active) {
-        if (const auto* managed = managedWindowFor(m_workspaceTransition.targetState, window, true); managed)
-            return managed;
-        if (const auto* managed = managedWindowFor(m_workspaceTransition.sourceState, window, true); managed)
-            return managed;
-    }
+    if (const auto* managed = managedWindowFor(m_state, window, true); managed)
+        return managed;
 
     return nullptr;
 }
@@ -5776,12 +5784,8 @@ PHLMONITOR OverviewController::previewMonitorForWindow(const PHLWINDOW& window) 
         return managed && managed->targetMonitor ? managed->targetMonitor : PHLMONITOR{};
     }
 
-    if (m_workspaceTransition.active) {
-        if (const auto* managed = managedWindowFor(m_workspaceTransition.targetState, window, true); managed && managed->targetMonitor)
-            return managed->targetMonitor;
-        if (const auto* managed = managedWindowFor(m_workspaceTransition.sourceState, window, true); managed && managed->targetMonitor)
-            return managed->targetMonitor;
-    }
+    if (const auto* managed = managedWindowForWorkspaceTransition(window); managed && managed->targetMonitor)
+        return managed->targetMonitor;
 
     const auto* managed = managedWindowFor(window);
     if (!managed || !managed->targetMonitor)
@@ -6546,7 +6550,8 @@ std::optional<Rect> OverviewController::workspaceTransitionRectForWindow(const P
 
     const double clampedDelta = std::clamp(m_workspaceTransition.delta, -m_workspaceTransition.distance, m_workspaceTransition.distance);
     const double sourceOffset = -clampedDelta;
-    const double targetOffset = sourceOffset + (clampedDelta < 0.0 ? -m_workspaceTransition.distance : m_workspaceTransition.distance);
+    const int    targetDirection = clampedDelta < -0.0001 ? -1 : clampedDelta > 0.0001 ? 1 : (m_workspaceTransition.step < 0 ? -1 : 1);
+    const double targetOffset = sourceOffset + static_cast<double>(targetDirection) * m_workspaceTransition.distance;
     const double t = m_workspaceTransition.distance > 0.0 ? clampUnit(std::abs(clampedDelta) / m_workspaceTransition.distance) : 1.0;
 
     if ((sourceManaged && sourceManaged->isPinned) || (targetManaged && targetManaged->isPinned)) {

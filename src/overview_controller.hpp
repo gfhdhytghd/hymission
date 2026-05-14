@@ -479,6 +479,7 @@ class OverviewController {
     [[nodiscard]] Vector2D     stripThumbnailPreviewOffset(const PHLMONITOR& monitor, const State& state) const;
     [[nodiscard]] std::vector<Rect> stripRects() const;
     [[nodiscard]] const ManagedWindow* managedWindowFor(const State& state, const PHLWINDOW& window, bool includeTransient = false) const;
+    [[nodiscard]] const ManagedWindow* managedWindowForWorkspaceTransition(const PHLWINDOW& window) const;
     [[nodiscard]] const ManagedWindow* managedWindowFor(const PHLWINDOW& window) const;
     [[nodiscard]] PHLWINDOW     selectedWindow() const;
     [[nodiscard]] float        managedPreviewAlphaFor(const PHLWINDOW& window, float fallback = 1.0F) const;
