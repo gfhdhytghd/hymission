@@ -9154,20 +9154,6 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
 
     const int fbWidth = std::max(1, static_cast<int>(std::ceil(thumb.width * entry.monitor->m_scale)));
     const int fbHeight = std::max(1, static_cast<int>(std::ceil(thumb.height * entry.monitor->m_scale)));
-    const auto workspaceGeometryForFramebuffer = [](const PHLMONITOR& monitor, int width, int height) {
-        if (!monitor || monitor->m_pixelSize.x <= 0.0 || monitor->m_pixelSize.y <= 0.0)
-            return CBox(0.0, 0.0, static_cast<double>(width), static_cast<double>(height));
-
-        const double monitorAspect = monitor->m_pixelSize.x / monitor->m_pixelSize.y;
-        double       geometryWidth = static_cast<double>(std::max(1, width));
-        double       geometryHeight = geometryWidth / monitorAspect;
-        if (geometryHeight > static_cast<double>(height)) {
-            geometryHeight = static_cast<double>(std::max(1, height));
-            geometryWidth = geometryHeight * monitorAspect;
-        }
-
-        return CBox((static_cast<double>(width) - geometryWidth) * 0.5, (static_cast<double>(height) - geometryHeight) * 0.5, geometryWidth, geometryHeight);
-    };
     using RenderWindowFn = void (*)(Render::IHyprRenderer*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, Render::eRenderPassMode, bool, bool);
 
     static RenderWindowFn renderWindowFn = nullptr;
@@ -9421,23 +9407,26 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     }
 
     if (!renderedScaledBackgroundOnly) {
-        CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
-        g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, snapshot->framebuffer);
+        SP<Render::IFramebuffer> renderFramebuffer = snapshot->framebuffer;
+        bool                     blitRenderedFramebuffer = false;
+        if (renderWorkspaceContents) {
+            const int renderFbWidth = std::max(1, static_cast<int>(std::ceil(static_cast<double>(monitor->m_size.x) * renderScaleForMonitor(monitor))));
+            const int renderFbHeight = std::max(1, static_cast<int>(std::ceil(static_cast<double>(monitor->m_size.y) * renderScaleForMonitor(monitor))));
+            auto      fullSizeFramebuffer = createFramebuffer("hymission workspace strip full snapshot");
+            if (fullSizeFramebuffer && fullSizeFramebuffer->alloc(renderFbWidth, renderFbHeight)) {
+                fullSizeFramebuffer->setImageDescription(monitor->workBufferImageDescription());
+                setFramebufferLinearFiltering(*fullSizeFramebuffer);
+                renderFramebuffer = fullSizeFramebuffer;
+                blitRenderedFramebuffer = true;
+                m_stripPreviewContext.framebufferSize = Vector2D{fullSizeFramebuffer->m_size.x, fullSizeFramebuffer->m_size.y};
+            }
+        }
+
+        CRegion fakeDamage{0, 0, static_cast<int>(std::lround(renderFramebuffer->m_size.x)), static_cast<int>(std::lround(renderFramebuffer->m_size.y))};
+        g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, renderFramebuffer);
         g_pHyprRenderer->draw(CClearPassElement::SClearData{.color = CHyprColor{0.05, 0.06, 0.08, 1.0}}, fakeDamage);
         renderBackgroundLayers(renderNow);
         if (renderWorkspaceContents && targetWorkspace && renderWindowFn) {
-            const CBox geometry = workspaceGeometryForFramebuffer(monitor, fbWidth, fbHeight);
-            Render::SRenderModifData renderModif;
-            if (geometry.x != 0.0 || geometry.y != 0.0)
-                renderModif.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_TRANSLATE, Vector2D{geometry.x, geometry.y});
-            const float scale = monitor->m_pixelSize.x > 0.0 ? static_cast<float>(geometry.width / monitor->m_pixelSize.x) : 1.0F;
-            if (std::abs(scale - 1.0F) > 0.0001F)
-                renderModif.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_SCALE, scale);
-
-            const bool hasRenderModif = !renderModif.modifs.empty();
-            if (hasRenderModif)
-                g_pHyprRenderer->draw(CRendererHintsPassElement::SData{.renderModif = renderModif});
-
             g_pHyprRenderer->m_bRenderingSnapshot = true;
             const auto renderPreviewWindows = [&](bool floating) {
                 for (const auto& managed : m_stripPreviewContext.state.windows) {
@@ -9450,13 +9439,15 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             renderPreviewWindows(false);
             renderPreviewWindows(true);
             g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
-
-            if (hasRenderModif)
-                g_pHyprRenderer->draw(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}});
         }
         g_pHyprRenderer->m_renderData.blockScreenShader = true;
         g_pHyprRenderer->endRender();
         g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockScreenShader;
+
+        if (blitRenderedFramebuffer) {
+            blitFramebufferRegion(*renderFramebuffer, *snapshot->framebuffer, makeRect(0.0, 0.0, renderFramebuffer->m_size.x, renderFramebuffer->m_size.y),
+                                  makeRect(0.0, 0.0, snapshot->framebuffer->m_size.x, snapshot->framebuffer->m_size.y));
+        }
     }
     if (renderWorkspaceContents) {
         applyFullscreenOverrideForState(m_stripPreviewContext.state, false);
