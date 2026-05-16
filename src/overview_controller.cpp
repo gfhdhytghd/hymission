@@ -7233,7 +7233,7 @@ bool OverviewController::activateWindowWorkspaceForFocus(const PHLWINDOW& window
             return false;
 
         workspace->m_lastFocusedWindow = window;
-        monitor->changeWorkspace(workspace, false, true, true);
+        monitor->changeWorkspace(workspace, true, true, true);
         return true;
     }
 
@@ -7241,7 +7241,7 @@ bool OverviewController::activateWindowWorkspaceForFocus(const PHLWINDOW& window
         return false;
 
     workspace->m_lastFocusedWindow = window;
-    monitor->changeWorkspace(workspace, false, true, true);
+    monitor->changeWorkspace(workspace, true, true, true);
     return true;
 }
 
