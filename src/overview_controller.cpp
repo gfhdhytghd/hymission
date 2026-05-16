@@ -1830,6 +1830,8 @@ OverviewController::~OverviewController() {
     restoreWorkspaceNameOverrides();
     g_pHyprRenderer->m_directScanoutBlocked = false;
     setFullscreenRenderOverride(false);
+    restoreOverviewRenderState();
+    restoreWorkspaceTransitionRenderState();
     setInputFollowMouseOverride(false);
     setScrollingFollowFocusOverride(false);
     setAnimationsEnabledOverride(false);
@@ -5200,6 +5202,73 @@ void OverviewController::restoreWorkspaceTransitionRenderState(const PHLWORKSPAC
     m_workspaceTransitionRenderStateBackups.clear();
 }
 
+void OverviewController::armOverviewRenderState(const State& state) {
+    restoreOverviewRenderState();
+
+    if (state.collectionPolicy.onlyActiveWorkspace)
+        return;
+
+    std::vector<PHLWORKSPACE> workspaces;
+    workspaces.reserve(state.managedWorkspaces.size());
+    const auto appendWorkspace = [&](const PHLWORKSPACE& workspace) {
+        if (!workspace || containsHandle(workspaces, workspace))
+            return;
+        workspaces.push_back(workspace);
+    };
+
+    for (const auto& workspace : state.managedWorkspaces)
+        appendWorkspace(workspace);
+
+    m_overviewRenderStateBackups.reserve(workspaces.size());
+    for (const auto& workspace : workspaces) {
+        m_overviewRenderStateBackups.push_back({
+            .workspace = workspace,
+            .visible = workspace->m_visible,
+            .forceRendering = workspace->m_forceRendering,
+            .renderOffsetValue = workspace->m_renderOffset->value(),
+            .renderOffsetGoal = workspace->m_renderOffset->goal(),
+            .alphaValue = workspace->m_alpha->value(),
+            .alphaGoal = workspace->m_alpha->goal(),
+        });
+
+        workspace->m_visible = true;
+        workspace->m_forceRendering = true;
+        workspace->m_renderOffset->setValueAndWarp(Vector2D{});
+        *workspace->m_renderOffset = Vector2D{};
+        workspace->m_alpha->setValueAndWarp(1.F);
+        *workspace->m_alpha = 1.F;
+    }
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] arm overview render state count=" << m_overviewRenderStateBackups.size();
+        debugLog(out.str());
+    }
+}
+
+void OverviewController::restoreOverviewRenderState() {
+    for (const auto& backup : m_overviewRenderStateBackups) {
+        if (!backup.workspace)
+            continue;
+
+        const auto workspaceMonitor = backup.workspace->m_monitor.lock();
+        const bool activeRegular = workspaceMonitor && workspaceMonitor->m_activeWorkspace == backup.workspace;
+        const bool activeSpecial = workspaceMonitor && workspaceMonitor->m_activeSpecialWorkspace == backup.workspace;
+        const bool activeOnMonitor = activeRegular || activeSpecial;
+
+        // Real focus may switch workspaces while all-scope overview is open, so restore
+        // visibility from the compositor's current active workspace, not the opening snapshot.
+        backup.workspace->m_visible = activeOnMonitor;
+        backup.workspace->m_forceRendering = activeOnMonitor ? backup.forceRendering : false;
+        backup.workspace->m_renderOffset->setValueAndWarp(Vector2D{});
+        *backup.workspace->m_renderOffset = Vector2D{};
+        backup.workspace->m_alpha->setValueAndWarp(1.F);
+        *backup.workspace->m_alpha = 1.F;
+    }
+
+    m_overviewRenderStateBackups.clear();
+}
+
 void OverviewController::clearOverviewWorkspaceTransition(const PHLWORKSPACE& committedWorkspace) {
     restoreWorkspaceTransitionRenderState(committedWorkspace);
     clearPendingWindowGeometryRetry();
@@ -8151,6 +8220,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     if (!activateHooks())
         return;
 
+    restoreOverviewRenderState();
     clearPendingWindowGeometryRetry();
     m_visibleStateRebuildScheduled = false;
     ++m_visibleStateRebuildGeneration;
@@ -8177,6 +8247,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     m_deactivatePending = false;
     carryOverWorkspaceStripSnapshots(next, m_state);
     m_state = std::move(next);
+    armOverviewRenderState(m_state);
     m_hoverSelectionAnchorValid = false;
     m_hoverSelectionRetargetBlockedUntil = {};
     m_hoverSelectionRetargetCandidateIndex.reset();
@@ -8525,6 +8596,7 @@ void OverviewController::deactivate() {
     clearPendingStripWorkspaceChange();
     clearStripWindowDragState();
     clearHiddenStripLayerProxies();
+    restoreOverviewRenderState();
     deactivateHooks();
     setFullscreenRenderOverride(false);
     restoreWorkspaceNameOverrides();
@@ -9244,7 +9316,9 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
 
     clearStripWindowDragState();
     carryOverWorkspaceStripSnapshots(next, m_state);
+    restoreOverviewRenderState();
     m_state = std::move(next);
+    armOverviewRenderState(m_state);
     applyWorkspaceNameOverrides(m_state);
     syncHiddenStripLayerProxies();
     refreshWorkspaceStripSnapshots();

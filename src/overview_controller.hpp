@@ -525,6 +525,8 @@ class OverviewController {
     void                       clearOverviewWorkspaceTransition(const PHLWORKSPACE& committedWorkspace = {});
     void                       armWorkspaceTransitionRenderState();
     void                       restoreWorkspaceTransitionRenderState(const PHLWORKSPACE& committedWorkspace = {});
+    void                       armOverviewRenderState(const State& state);
+    void                       restoreOverviewRenderState();
     [[nodiscard]] SDispatchResult startOverviewWorkspaceTransitionForDispatcher(const std::string& args, bool currentMonitorOnly);
     [[nodiscard]] std::optional<WindowTransform> windowTransformFor(const PHLWINDOW& window, const PHLMONITOR& monitor) const;
     [[nodiscard]] bool                          transformSurfaceRenderDataForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor,
@@ -734,6 +736,7 @@ class OverviewController {
     WorkspaceSwipeGestureContext m_workspaceSwipeGesture;
     WorkspaceTransition      m_workspaceTransition;
     std::vector<WorkspaceTransitionRenderStateBackup> m_workspaceTransitionRenderStateBackups;
+    std::vector<WorkspaceTransitionRenderStateBackup> m_overviewRenderStateBackups;
     StripPreviewContext      m_stripPreviewContext;
     std::vector<HiddenStripLayerProxy> m_hiddenStripLayerProxies;
     bool                     m_applyingWorkspaceTransitionCommit = false;
