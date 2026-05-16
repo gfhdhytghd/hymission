@@ -1145,12 +1145,6 @@ Rect stateSnapshotGlobalRectForWindow(const PHLWINDOW& window, bool goal = false
         return {};
 
     Vector2D position = renderedWindowPosition(window, goal);
-    if (window->m_workspace && !window->m_pinned && !window->m_workspace->isVisible()) {
-        // For hidden workspaces, keep the workspace render offset in the opening snapshot
-        // so forceall windows originate from their off-screen workspace position.
-        position += goal ? window->m_workspace->m_renderOffset->goal() : window->m_workspace->m_renderOffset->value();
-    }
-
     const Vector2D size = goal ? window->m_realSize->goal() : window->m_realSize->value();
     return makeRect(position.x, position.y, size.x, size.y);
 }
