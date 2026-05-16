@@ -6203,6 +6203,32 @@ PHLMONITOR OverviewController::previewMonitorForWindow(const PHLWINDOW& window) 
     return managed->targetMonitor;
 }
 
+PHLWINDOW OverviewController::hoveredWindow() const {
+    if (!m_state.hoveredIndex || *m_state.hoveredIndex >= m_state.windows.size())
+        return {};
+
+    return m_state.windows[*m_state.hoveredIndex].window;
+}
+
+PHLWINDOW OverviewController::preferredOverviewExitFocus() const {
+    const auto focusDuringOverview = m_state.focusDuringOverview && hasManagedWindow(m_state.focusDuringOverview) ? m_state.focusDuringOverview : PHLWINDOW{};
+    const auto selected = selectedWindow();
+    const auto hovered = hoveredWindow();
+
+    if (focusDuringOverview && focusDuringOverview != m_state.focusBeforeOpen)
+        return focusDuringOverview;
+    if (selected && selected != m_state.focusBeforeOpen)
+        return selected;
+    if (hovered)
+        return hovered;
+    if (focusDuringOverview)
+        return focusDuringOverview;
+    if (selected)
+        return selected;
+
+    return {};
+}
+
 const OverviewController::FullscreenWorkspaceBackup* OverviewController::fullscreenBackupForWorkspace(const PHLWORKSPACE& workspace) const {
     const auto it = std::find_if(m_state.fullscreenBackups.begin(), m_state.fullscreenBackups.end(),
                                  [&](const FullscreenWorkspaceBackup& backup) { return backup.workspace == workspace; });
@@ -7089,23 +7115,8 @@ PHLWINDOW OverviewController::resolveExitFocus(CloseMode mode) const {
     if (mode == CloseMode::Abort)
         return {};
 
-    if (mode == CloseMode::ActivateSelection) {
-        const auto selected = selectedWindow();
-        if (selected)
-            return selected;
-
-        if (m_state.focusDuringOverview && hasManagedWindow(m_state.focusDuringOverview))
-            return m_state.focusDuringOverview;
-    }
-
-    if (focusFollowsMouseEnabled()) {
-        if (m_state.focusDuringOverview && hasManagedWindow(m_state.focusDuringOverview))
-            return m_state.focusDuringOverview;
-
-        const auto selected = selectedWindow();
-        if (selected)
-            return selected;
-    }
+    if (const auto target = preferredOverviewExitFocus(); target)
+        return target;
 
     return m_state.focusBeforeOpen;
 }
@@ -7206,11 +7217,40 @@ bool OverviewController::clearWorkspaceFullscreenForExitTarget(const PHLWINDOW& 
     return true;
 }
 
+bool OverviewController::activateWindowWorkspaceForFocus(const PHLWINDOW& window) const {
+    if (!window || !window->m_isMapped || window->m_pinned || !window->m_workspace)
+        return false;
+
+    const auto workspace = window->m_workspace;
+    auto       monitor = workspace->m_monitor.lock();
+    if (!monitor)
+        monitor = window->m_monitor.lock();
+    if (!monitor)
+        return false;
+
+    if (workspace->m_isSpecialWorkspace) {
+        if (monitor->m_activeSpecialWorkspace == workspace)
+            return false;
+
+        workspace->m_lastFocusedWindow = window;
+        monitor->changeWorkspace(workspace, false, true, true);
+        return true;
+    }
+
+    if (monitor->m_activeWorkspace == workspace)
+        return false;
+
+    workspace->m_lastFocusedWindow = window;
+    monitor->changeWorkspace(workspace, false, true, true);
+    return true;
+}
+
 void OverviewController::commitOverviewExitFocus(const PHLWINDOW& window) {
     if (!window || !window->m_isMapped)
         return;
 
     const bool alreadyFocused = Desktop::focusState()->window() == window;
+    const bool activatedWorkspace = activateWindowWorkspaceForFocus(window);
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
@@ -7221,10 +7261,11 @@ void OverviewController::commitOverviewExitFocus(const PHLWINDOW& window) {
         else
             out << " activeBefore=<null>";
         out << " alreadyFocused=" << (alreadyFocused ? 1 : 0);
+        out << " activatedWorkspace=" << (activatedWorkspace ? 1 : 0);
         debugLog(out.str());
     }
 
-    if (!alreadyFocused)
+    if (!alreadyFocused || activatedWorkspace)
         focusWindowCompat(window, false, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
 
     recordWindowActivation(window, true);

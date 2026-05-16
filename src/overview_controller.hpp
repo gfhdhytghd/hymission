@@ -504,6 +504,8 @@ class OverviewController {
     [[nodiscard]] PHLMONITOR   previewMonitorForWindow(const PHLWINDOW& window) const;
     [[nodiscard]] const FullscreenWorkspaceBackup* fullscreenBackupForWorkspace(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] const FullscreenWorkspaceBackup* fullscreenBackupForWindow(const PHLWINDOW& window) const;
+    [[nodiscard]] PHLWINDOW    hoveredWindow() const;
+    [[nodiscard]] PHLWINDOW    preferredOverviewExitFocus() const;
     [[nodiscard]] Rect         liveGlobalRectForWindow(const PHLWINDOW& window) const;
     [[nodiscard]] Rect         goalGlobalRectForWindow(const PHLWINDOW& window) const;
     [[nodiscard]] bool         shouldUseGoalGeometryForStateSnapshot(const PHLWINDOW& window) const;
@@ -562,6 +564,7 @@ class OverviewController {
     [[nodiscard]] std::optional<Vector2D> visiblePointForWindowOnMonitor(const PHLWINDOW& window, const PHLMONITOR& monitor, bool preferGoal = false) const;
     [[nodiscard]] bool         clearWorkspaceFullscreenForExitTarget(const PHLWINDOW& window);
     [[nodiscard]] bool         shouldClearWorkspaceFullscreenForExitTarget(const PHLWINDOW& window) const;
+    [[nodiscard]] bool         activateWindowWorkspaceForFocus(const PHLWINDOW& window) const;
     void                       commitOverviewExitFocus(const PHLWINDOW& window);
     [[nodiscard]] bool         syncScrollingWorkspaceSpotOnWindow(const PHLWINDOW& window) const;
     void                       refreshExitLayoutForFocus(const PHLWINDOW& window) const;
