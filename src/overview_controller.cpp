@@ -3354,7 +3354,7 @@ bool OverviewController::multiWorkspaceSortRecentFirstEnabled() const {
 }
 
 bool OverviewController::toggleSwitchModeEnabled() const {
-    return getConfigInt(m_handle, "plugin:hymission:toggle_switch_mode", 1) != 0;
+    return getConfigInt(m_handle, "plugin:hymission:toggle_switch_mode", 0) != 0;
 }
 
 bool OverviewController::switchToggleAutoNextEnabled() const {
