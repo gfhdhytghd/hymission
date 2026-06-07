@@ -8582,6 +8582,25 @@ bool OverviewController::retargetGestureScope(ScopeOverride requestedScope) {
                 .syntheticEmpty = false,
             });
         }
+
+        const bool temporarilyDisabledAnimations = !m_animationsEnabledOverridden;
+        if (temporarilyDisabledAnimations)
+            setAnimationsEnabledOverride(true);
+
+        m_pendingLiveFocusWorkspaceChangeTarget = preferredWindow;
+        const bool alreadyFocused = Desktop::focusState()->window() == preferredWindow;
+        const bool activatedWorkspace = activateWindowWorkspaceForFocus(preferredWindow);
+        if (!alreadyFocused || activatedWorkspace)
+            focusWindowCompat(preferredWindow, false, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+        recordWindowActivation(preferredWindow, true);
+        (void)syncScrollingWorkspaceSpotOnWindow(preferredWindow);
+        if (g_pAnimationManager)
+            g_pAnimationManager->frameTick();
+        if (m_pendingLiveFocusWorkspaceChangeTarget.lock() == preferredWindow)
+            m_pendingLiveFocusWorkspaceChangeTarget.reset();
+
+        if (temporarilyDisabledAnimations)
+            setAnimationsEnabledOverride(false);
     }
 
     if (!monitor)
