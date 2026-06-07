@@ -461,6 +461,7 @@ class OverviewController {
     [[nodiscard]] double       gestureSwipeDirectionLockThreshold() const;
     void                       setInputFollowMouseOverride(bool disable);
     void                       setScrollingFollowFocusOverride(bool disable);
+    void                       setDamageTrackingOverride(bool disable);
     void                       setAnimationsEnabledOverride(bool disable, std::optional<std::chrono::milliseconds> restoreDelay = std::nullopt);
     void                       applyWorkspaceNameOverrides(const State& state);
     void                       restoreWorkspaceNameOverrides();
@@ -700,6 +701,8 @@ class OverviewController {
     bool                      m_scrollingFollowFocusOverridden = false;
     long                      m_scrollingFollowFocusBackup = 1;
     bool                      m_restoreScrollingFollowFocusAfterScrollMouseMove = false;
+    bool                      m_damageTrackingOverridden = false;
+    long                      m_damageTrackingBackup = 2;
     bool                      m_animationsEnabledOverridden = false;
     long                      m_animationsEnabledBackup = 1;
     SP<CEventLoopTimer>       m_animationsEnabledRestoreTimer;

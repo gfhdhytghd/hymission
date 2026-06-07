@@ -1822,6 +1822,7 @@ OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
 }
 
 OverviewController::~OverviewController() {
+    setDamageTrackingOverride(false);
     destroyGaussianBlurPipeline();
     clearToggleSwitchReleasePollTimer();
     clearRegisteredTrackpadGestures();
@@ -7280,6 +7281,9 @@ void OverviewController::commitOverviewExitFocus(const PHLWINDOW& window) {
     if (!alreadyFocused || activatedWorkspace)
         focusWindowCompat(window, false, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
 
+    if (window->m_isFloating)
+        g_pCompositor->changeWindowZOrder(window, true);
+
     recordWindowActivation(window, true);
     (void)syncScrollingWorkspaceSpotOnWindow(window);
 
@@ -8273,6 +8277,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     if (!activateHooks())
         return;
 
+    setDamageTrackingOverride(true);
     restoreOverviewRenderState();
     clearPendingWindowGeometryRetry();
     m_visibleStateRebuildScheduled = false;
@@ -8565,6 +8570,7 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
 }
 
 void OverviewController::deactivate() {
+    setDamageTrackingOverride(false);
     const auto monitor = m_state.ownerMonitor;
     const auto ownedMonitors = m_state.participatingMonitors;
     const auto fullscreenActiveOriginal = m_fullscreenActiveOriginal;
@@ -11209,6 +11215,43 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         state.focusDuringOverview = focusedWindow;
 
     return state;
+}
+
+void OverviewController::setDamageTrackingOverride(bool disable) {
+    if (disable) {
+        if (m_damageTrackingOverridden)
+            return;
+
+        m_damageTrackingBackup = getConfigInt(m_handle, "debug:damage_tracking", 2);
+        if (m_damageTrackingBackup == 0)
+            return;
+
+        const auto err = setConfigKeyword("debug:damage_tracking", "0");
+        if (!err.empty()) {
+            notify("[hymission] failed to disable debug:damage_tracking", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+            return;
+        }
+
+        m_damageTrackingOverridden = true;
+        if (debugLogsEnabled())
+            debugLog("[hymission] disabled debug:damage_tracking");
+        return;
+    }
+
+    if (!m_damageTrackingOverridden)
+        return;
+
+    const auto err = setConfigKeyword("debug:damage_tracking", std::to_string(m_damageTrackingBackup));
+    if (!err.empty()) {
+        notify("[hymission] failed to restore debug:damage_tracking", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+        return;
+    }
+    m_damageTrackingOverridden = false;
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] restored debug:damage_tracking=" << m_damageTrackingBackup;
+        debugLog(out.str());
+    }
 }
 
 } // namespace hymission
