@@ -3426,7 +3426,7 @@ bool OverviewController::showFocusIndicatorEnabled() const {
 }
 
 bool OverviewController::closeButtonsEnabled() const {
-    return getConfigInt(m_handle, "plugin:hymission:close_button_enabled", 1) != 0;
+    return getConfigInt(m_handle, "plugin:hymission:close_button_enabled", 0) != 0;
 }
 
 double OverviewController::closeButtonSize() const {
