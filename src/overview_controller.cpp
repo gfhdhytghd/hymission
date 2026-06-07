@@ -638,6 +638,17 @@ bool rectsOverlap(const Rect& lhs, const Rect& rhs) {
     return lhs.x < rhs.x + rhs.width && lhs.x + lhs.width > rhs.x && lhs.y < rhs.y + rhs.height && lhs.y + lhs.height > rhs.y;
 }
 
+void emitWorkspaceActiveEvents(const PHLWORKSPACE& workspace) {
+    if (!workspace || workspace->m_isSpecialWorkspace)
+        return;
+
+    if (g_pEventManager) {
+        g_pEventManager->postEvent(SHyprIPCEvent{"workspace", workspace->m_name});
+        g_pEventManager->postEvent(SHyprIPCEvent{"workspacev2", std::format("{},{}", workspace->m_id, workspace->m_name)});
+    }
+    Event::bus()->m_events.workspace.active.emit(workspace);
+}
+
 Rect moveRectOutsideBoundsAlongDirection(const Rect& rect, const Rect& bounds, double directionX, double directionY) {
     constexpr double OUTSIDE_MARGIN = 32.0;
 
@@ -5159,11 +5170,7 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
             }
         }
 
-        if (g_pEventManager) {
-            g_pEventManager->postEvent(SHyprIPCEvent{"workspace", targetWorkspace->m_name});
-            g_pEventManager->postEvent(SHyprIPCEvent{"workspacev2", std::format("{},{}", targetWorkspace->m_id, targetWorkspace->m_name)});
-        }
-        Event::bus()->m_events.workspace.active.emit(targetWorkspace);
+        emitWorkspaceActiveEvents(targetWorkspace);
     }
 
     if (temporarilyDisabledAnimations)
@@ -7481,6 +7488,8 @@ void OverviewController::commitOverviewExitFocus(const PHLWINDOW& window) {
 
     recordWindowActivation(window, true);
     (void)syncScrollingWorkspaceSpotOnWindow(window);
+    if (activatedWorkspace)
+        emitWorkspaceActiveEvents(window->m_workspace);
 
     if (m_animationsEnabledOverridden && g_pAnimationManager) {
         // Live focus can switch the real workspace before close starts. Even when the
@@ -8939,6 +8948,8 @@ void OverviewController::deactivate() {
     }
     if (desiredFocus && Desktop::focusState()->window() != desiredFocus)
         focusWindowCompat(desiredFocus);
+    if (desiredFocus && desiredFocus->m_workspace)
+        emitWorkspaceActiveEvents(desiredFocus->m_workspace);
     if (!m_state.exitFullscreenReapplied && desiredFocus && desiredFocus == originalFullscreenWindow && originalFullscreenMode != FSMODE_NONE && desiredFocus->m_isMapped) {
         if (debugLogsEnabled()) {
             std::ostringstream out;
