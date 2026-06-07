@@ -600,7 +600,8 @@ class OverviewController {
     [[nodiscard]] SDispatchResult runHookedDispatcher(PostCloseDispatcher dispatcher, std::string args);
     void                       setFullscreenRenderOverride(bool suppress);
 
-    void beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope);
+    void beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope, PHLWINDOW preferredSelectedWindow = {},
+                   const std::vector<WorkspaceOverride>& workspaceOverrides = {});
     void beginClose(CloseMode mode = CloseMode::Normal, std::optional<double> fromVisualOverride = std::nullopt, bool deferFullscreenMutations = false);
     [[nodiscard]] bool retargetGestureScope(ScopeOverride requestedScope);
     void deactivate();

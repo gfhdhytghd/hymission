@@ -8453,20 +8453,34 @@ CRegion OverviewController::transformRegionForWindow(const PHLWINDOW& window, co
     return changed ? transformed : region.copy();
 }
 
-void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope) {
+void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope, PHLWINDOW preferredSelectedWindow,
+                                   const std::vector<WorkspaceOverride>& workspaceOverrides) {
     setAnimationsEnabledOverride(false);
     clearToggleSwitchSession();
 
     const auto buildStart = std::chrono::steady_clock::now();
+    const bool wasVisible = isVisible();
+    const auto previousFocusBeforeOpen = wasVisible ? m_state.focusBeforeOpen : PHLWINDOW{};
     const double fromVisual = isVisible() ? visualProgress() : 0.0;
     clearOverviewWorkspaceTransition();
     m_workspaceSwipeGesture = {};
     recordWindowActivation(Desktop::focusState()->window());
-    const auto preferredSelectedWindow = expandSelectedWindowEnabled() ? Desktop::focusState()->window() : PHLWINDOW{};
-    State next = buildState(monitor, requestedScope, {}, false, false, preferredSelectedWindow);
+    const auto layoutSelectedWindow =
+        preferredSelectedWindow && preferredSelectedWindow->m_isMapped ? preferredSelectedWindow :
+        (expandSelectedWindowEnabled() ? Desktop::focusState()->window() : PHLWINDOW{});
+    State next = buildState(monitor, requestedScope, workspaceOverrides, false, false, layoutSelectedWindow);
     if (next.windows.empty() && next.stripEntries.empty()) {
         notify(collectionSummary(monitor), CHyprColor(1.0, 0.7, 0.2, 1.0), 5000);
         return;
+    }
+
+    if (previousFocusBeforeOpen)
+        next.focusBeforeOpen = previousFocusBeforeOpen;
+    for (const auto& override : workspaceOverrides) {
+        if (override.monitorId == monitor->m_id && override.workspace) {
+            next.ownerWorkspace = override.workspace;
+            break;
+        }
     }
 
     if (!activateHooks())
@@ -8548,13 +8562,34 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
 }
 
 bool OverviewController::retargetGestureScope(ScopeOverride requestedScope) {
+    auto preferredWindow = preferredOverviewExitFocus();
+    if (!preferredWindow)
+        preferredWindow = selectedWindow();
     PHLMONITOR monitor = m_state.ownerMonitor;
+    std::vector<WorkspaceOverride> workspaceOverrides;
+
+    const auto targetPolicy = loadCollectionPolicy(requestedScope);
+    if (targetPolicy.onlyActiveWorkspace && preferredWindow && preferredWindow->m_isMapped && preferredWindow->m_workspace &&
+        !preferredWindow->m_workspace->m_isSpecialWorkspace) {
+        const auto workspace = preferredWindow->m_workspace;
+        if (const auto workspaceMonitor = workspace->m_monitor.lock()) {
+            monitor = workspaceMonitor;
+            workspaceOverrides.push_back({
+                .monitorId = workspaceMonitor->m_id,
+                .workspace = workspace,
+                .workspaceId = workspace->m_id,
+                .workspaceName = workspace->m_name,
+                .syntheticEmpty = false,
+            });
+        }
+    }
+
     if (!monitor)
         monitor = g_pCompositor->getMonitorFromCursor();
     if (!monitor)
         return false;
 
-    beginOpen(monitor, requestedScope);
+    beginOpen(monitor, requestedScope, preferredWindow, workspaceOverrides);
     return isVisible() && m_state.collectionPolicy.requestedScope == requestedScope;
 }
 
@@ -10570,11 +10605,23 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
     const bool                   horizontal = anchor == "top";
     const double                 stripGap = std::clamp(workspaceStripGap() * 0.5, 8.0, 24.0);
     const double                 padding = 12.0;
+    const auto activeWorkspaceForStripMonitor = [&](const PHLMONITOR& monitor) -> PHLWORKSPACE {
+        if (!monitor)
+            return {};
+
+        if (state.collectionPolicy.onlyActiveWorkspace && state.ownerWorkspace && !state.ownerWorkspace->m_isSpecialWorkspace) {
+            if (const auto ownerMonitor = state.ownerWorkspace->m_monitor.lock(); ownerMonitor == monitor)
+                return state.ownerWorkspace;
+        }
+
+        return monitor->m_activeWorkspace;
+    };
 
     for (const auto& monitor : state.participatingMonitors) {
         if (!monitor)
             continue;
 
+        const auto stripActiveWorkspace = activeWorkspaceForStripMonitor(monitor);
         std::vector<PHLWORKSPACE> normalWorkspaces;
         const auto allWorkspaces = g_pCompositor->getWorkspacesCopy();
         normalWorkspaces.reserve(allWorkspaces.size());
@@ -10587,8 +10634,8 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
                 normalWorkspaces.push_back(workspace);
         }
 
-        if (monitor->m_activeWorkspace && !monitor->m_activeWorkspace->m_isSpecialWorkspace && !containsHandle(normalWorkspaces, monitor->m_activeWorkspace))
-            normalWorkspaces.push_back(monitor->m_activeWorkspace);
+        if (stripActiveWorkspace && !stripActiveWorkspace->m_isSpecialWorkspace && !containsHandle(normalWorkspaces, stripActiveWorkspace))
+            normalWorkspaces.push_back(stripActiveWorkspace);
 
         std::stable_sort(normalWorkspaces.begin(), normalWorkspaces.end(), [](const PHLWORKSPACE& lhs, const PHLWORKSPACE& rhs) {
             if (!lhs || !rhs)
@@ -10623,7 +10670,7 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
                     .workspaceName = it->second->m_name,
                     .syntheticEmpty = false,
                     .newWorkspaceSlot = false,
-                    .active = monitor->m_activeWorkspace == it->second,
+                    .active = stripActiveWorkspace == it->second,
                 });
             } else {
                 monitorEntries.push_back({
@@ -10738,7 +10785,7 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
                 continue;
 
             if (window->m_pinned) {
-                if (entry.monitor == targetMonitor && entry.workspace == entry.monitor->m_activeWorkspace) {
+                if (entry.monitor == targetMonitor && entry.workspace == activeWorkspaceForStripMonitor(entry.monitor)) {
                     entry.windows.push_back({
                         .window = window,
                         .naturalGlobal = naturalGlobal,
