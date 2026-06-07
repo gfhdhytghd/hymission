@@ -257,7 +257,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 #define FLOAT_CONF(name, value) addFloatConfig("plugin:hymission:" name, Config::FLOAT{value})
 #define STRING_CONF(name, value) addStringConfig("plugin:hymission:" name, Config::STRING{value})
     INT_CONF("outer_padding", 32);
-    INT_CONF("outer_padding_top", 92);
+    INT_CONF("outer_padding_top", 32);
     INT_CONF("outer_padding_right", 32);
     INT_CONF("outer_padding_bottom", 32);
     INT_CONF("outer_padding_left", 32);
