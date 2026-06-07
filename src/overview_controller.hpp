@@ -513,6 +513,13 @@ class OverviewController {
     [[nodiscard]] bool         shouldUseGoalGeometryForStateSnapshot(const PHLWINDOW& window) const;
     void                       refreshWorkspaceLayoutSnapshot(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] std::optional<Vector2D> predictedScrollingExitTranslation(const PHLWINDOW& window) const;
+    [[nodiscard]] PHLWORKSPACE activeWorkspaceForAnimationEndpoint(const ManagedWindow& window, const PHLWORKSPACE& activeWorkspaceOverride = {}) const;
+    [[nodiscard]] bool         shouldUseOffscreenAnimationEndpoint(const ManagedWindow& window, const State& state,
+                                                                   const PHLWORKSPACE& activeWorkspaceOverride = {}) const;
+    [[nodiscard]] Rect         offscreenAnimationEndpointFor(const ManagedWindow& window, const Rect& baseRect,
+                                                            const PHLWORKSPACE& activeWorkspaceOverride = {}) const;
+    void                       applyOffscreenOpenAnimationEndpoints(State& state) const;
+    void                       applyOffscreenExitAnimationEndpoints(State& state, const PHLWORKSPACE& activeWorkspaceOverride = {}) const;
     void                       prepareGestureCloseExitGeometry();
     [[nodiscard]] bool         workspaceSwipeUsesVerticalAxis(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] double       workspaceSwipeViewportDistance(const PHLMONITOR& monitor, WorkspaceTransitionAxis axis) const;

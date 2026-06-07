@@ -638,6 +638,47 @@ bool rectsOverlap(const Rect& lhs, const Rect& rhs) {
     return lhs.x < rhs.x + rhs.width && lhs.x + lhs.width > rhs.x && lhs.y < rhs.y + rhs.height && lhs.y + lhs.height > rhs.y;
 }
 
+Rect moveRectOutsideBoundsAlongDirection(const Rect& rect, const Rect& bounds, double directionX, double directionY) {
+    constexpr double OUTSIDE_MARGIN = 32.0;
+
+    double directionLength = std::hypot(directionX, directionY);
+    if (directionLength <= 0.001) {
+        directionX = rect.centerX() >= bounds.centerX() ? 1.0 : -1.0;
+        directionY = 0.0;
+        directionLength = 1.0;
+    }
+
+    directionX /= directionLength;
+    directionY /= directionLength;
+
+    std::vector<double> distances;
+    distances.reserve(4);
+    const auto appendDistance = [&](double distance) {
+        if (std::isfinite(distance) && distance >= 0.0)
+            distances.push_back(distance);
+    };
+
+    if (directionX > 0.001)
+        appendDistance((bounds.x + bounds.width + OUTSIDE_MARGIN - rect.x) / directionX);
+    else if (directionX < -0.001)
+        appendDistance((bounds.x - OUTSIDE_MARGIN - (rect.x + rect.width)) / directionX);
+
+    if (directionY > 0.001)
+        appendDistance((bounds.y + bounds.height + OUTSIDE_MARGIN - rect.y) / directionY);
+    else if (directionY < -0.001)
+        appendDistance((bounds.y - OUTSIDE_MARGIN - (rect.y + rect.height)) / directionY);
+
+    std::ranges::sort(distances);
+    for (const double distance : distances) {
+        const Rect candidate = translateRect(rect, directionX * distance, directionY * distance);
+        if (!rectsOverlap(candidate, bounds))
+            return candidate;
+    }
+
+    const double fallbackDistance = std::max({bounds.width, bounds.height, rect.width, rect.height}) + OUTSIDE_MARGIN;
+    return translateRect(rect, directionX * fallbackDistance, directionY * fallbackDistance);
+}
+
 std::optional<double> overlapExitDistanceAlongDirection(const Rect& moving, const Rect& obstacle, double dirX, double dirY) {
     if (!rectsOverlap(moving, obstacle))
         return 0.0;
@@ -6374,6 +6415,93 @@ std::optional<Vector2D> OverviewController::predictedScrollingExitTranslation(co
     return vertical ? Vector2D{0.0, deltaPrimary} : Vector2D{deltaPrimary, 0.0};
 }
 
+PHLWORKSPACE OverviewController::activeWorkspaceForAnimationEndpoint(const ManagedWindow& window, const PHLWORKSPACE& activeWorkspaceOverride) const {
+    if (activeWorkspaceOverride && !activeWorkspaceOverride->m_isSpecialWorkspace && window.targetMonitor) {
+        const auto overrideMonitor = activeWorkspaceOverride->m_monitor.lock();
+        if (overrideMonitor && overrideMonitor == window.targetMonitor)
+            return activeWorkspaceOverride;
+    }
+
+    if (window.targetMonitor && window.targetMonitor->m_activeWorkspace)
+        return window.targetMonitor->m_activeWorkspace;
+
+    if (window.window && window.window->m_workspace) {
+        if (const auto workspaceMonitor = window.window->m_workspace->m_monitor.lock(); workspaceMonitor)
+            return workspaceMonitor->m_activeWorkspace;
+    }
+
+    return {};
+}
+
+bool OverviewController::shouldUseOffscreenAnimationEndpoint(const ManagedWindow& window, const State& state,
+                                                            const PHLWORKSPACE& activeWorkspaceOverride) const {
+    if (state.collectionPolicy.onlyActiveWorkspace || state.managedWorkspaces.size() <= 1)
+        return false;
+
+    if (!window.window || window.isPinned || !window.targetMonitor || !window.window->m_workspace)
+        return false;
+
+    const auto workspace = window.window->m_workspace;
+    if (!workspace || workspace->m_isSpecialWorkspace)
+        return false;
+
+    const auto activeWorkspace = activeWorkspaceForAnimationEndpoint(window, activeWorkspaceOverride);
+    if (!activeWorkspace || activeWorkspace->m_isSpecialWorkspace)
+        return false;
+
+    return workspace != activeWorkspace;
+}
+
+Rect OverviewController::offscreenAnimationEndpointFor(const ManagedWindow& window, const Rect& baseRect, const PHLWORKSPACE& activeWorkspaceOverride) const {
+    if (!window.targetMonitor)
+        return baseRect;
+
+    const Rect bounds = makeRect(window.targetMonitor->m_position.x, window.targetMonitor->m_position.y, window.targetMonitor->m_size.x, window.targetMonitor->m_size.y);
+    if (bounds.width <= 1.0 || bounds.height <= 1.0)
+        return baseRect;
+
+    Vector2D direction;
+    const auto workspace = window.window ? window.window->m_workspace : PHLWORKSPACE{};
+    const auto activeWorkspace = activeWorkspaceForAnimationEndpoint(window, activeWorkspaceOverride);
+    if (workspace && activeWorkspace && !workspace->m_isSpecialWorkspace && !activeWorkspace->m_isSpecialWorkspace && workspace->m_id >= 0 && activeWorkspace->m_id >= 0) {
+        const bool incomingFromHighSide = shouldWrapWorkspaceIds(workspace->m_id, activeWorkspace->m_id) ^ (workspace->m_id > activeWorkspace->m_id);
+        direction = predictedWorkspaceAnimationOffset(m_handle, window.targetMonitor, workspace, incomingFromHighSide, true);
+        if (std::hypot(direction.x, direction.y) <= 1.0)
+            direction = Vector2D{incomingFromHighSide ? 1.0 : -1.0, 0.0};
+    }
+
+    if (std::hypot(direction.x, direction.y) <= 0.001) {
+        const double dx = window.targetGlobal.centerX() - bounds.centerX();
+        const double dy = window.targetGlobal.centerY() - bounds.centerY();
+        if (std::abs(dy) > std::abs(dx))
+            direction = Vector2D{0.0, dy >= 0.0 ? 1.0 : -1.0};
+        else
+            direction = Vector2D{dx >= 0.0 ? 1.0 : -1.0, 0.0};
+    }
+
+    return moveRectOutsideBoundsAlongDirection(baseRect, bounds, direction.x, direction.y);
+}
+
+void OverviewController::applyOffscreenOpenAnimationEndpoints(State& state) const {
+    for (auto& window : state.windows) {
+        if (!shouldUseOffscreenAnimationEndpoint(window, state))
+            continue;
+
+        const Rect endpoint = offscreenAnimationEndpointFor(window, window.naturalGlobal);
+        window.naturalGlobal = endpoint;
+        window.exitGlobal = endpoint;
+    }
+}
+
+void OverviewController::applyOffscreenExitAnimationEndpoints(State& state, const PHLWORKSPACE& activeWorkspaceOverride) const {
+    for (auto& window : state.windows) {
+        if (!shouldUseOffscreenAnimationEndpoint(window, state, activeWorkspaceOverride))
+            continue;
+
+        window.exitGlobal = offscreenAnimationEndpointFor(window, window.exitGlobal, activeWorkspaceOverride);
+    }
+}
+
 void OverviewController::prepareGestureCloseExitGeometry() {
     const auto predictedExitFocus = resolveExitFocus(CloseMode::Normal);
     const auto predictedExitWorkspace = predictedExitFocus ? predictedExitFocus->m_workspace : PHLWORKSPACE{};
@@ -6446,6 +6574,8 @@ void OverviewController::prepareGestureCloseExitGeometry() {
 
         managed.exitGlobal = translateRect(managed.exitGlobal, scrollingTranslation->x, scrollingTranslation->y);
     }
+
+    applyOffscreenExitAnimationEndpoints(m_state, predictedExitWorkspace);
 }
 
 std::optional<OverviewController::WindowTransform> OverviewController::windowTransformFor(const PHLWINDOW& window, const PHLMONITOR& monitor) const {
@@ -8620,6 +8750,7 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
         m_state.animationStart = {};
         for (auto& managed : m_state.windows)
             managed.exitGlobal = liveGlobalRectForWindow(managed.window);
+        applyOffscreenExitAnimationEndpoints(m_state, m_state.pendingExitFocus ? m_state.pendingExitFocus->m_workspace : PHLWORKSPACE{});
         if (debugLogsEnabled() && m_state.pendingExitFocus) {
             if (const auto* pendingManaged = managedWindowFor(m_state.pendingExitFocus)) {
                 std::ostringstream out;
@@ -8956,6 +9087,7 @@ void OverviewController::updateAnimation() {
         }
 
         if (m_state.settleStableFrames >= CLOSE_SETTLE_STABLE_FRAMES || settleElapsedMs >= CLOSE_SETTLE_TIMEOUT_MS) {
+            applyOffscreenExitAnimationEndpoints(m_state, m_state.pendingExitFocus ? m_state.pendingExitFocus->m_workspace : PHLWORKSPACE{});
             m_state.phase = Phase::Closing;
             m_state.animationProgress = 0.0;
             m_state.animationFromVisual = clampUnit(m_state.animationFromVisual);
@@ -11334,6 +11466,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
     state.participatingMonitors = std::move(activeParticipatingMonitors);
     buildWorkspaceStripEntries(state);
+    applyOffscreenOpenAnimationEndpoints(state);
 
     const auto selectionTarget = preferredSelectedWindow ? preferredSelectedWindow : focusedWindow;
     for (std::size_t index = 0; index < state.windows.size(); ++index) {
