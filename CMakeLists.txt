@@ -36,6 +36,13 @@ add_library(hymission SHARED
 )
 
 target_include_directories(hymission PRIVATE ${HYPR_DEPS_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS})
+
+foreach(inc ${HYPR_DEPS_INCLUDE_DIRS})
+  if(EXISTS "${inc}/hyprland/src")
+    target_include_directories(hymission PRIVATE "${inc}/hyprland/src")
+  endif()
+endforeach()
+
 target_link_directories(hymission PRIVATE ${HYPR_DEPS_LIBRARY_DIRS} ${LUA_LIBRARY_DIRS})
 target_link_libraries(hymission PRIVATE ${HYPR_DEPS_LIBRARIES} ${LUA_LIBRARIES})
 

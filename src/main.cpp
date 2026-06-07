@@ -296,6 +296,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     FLOAT_CONF("hide_bar_animation_alpha_end", 0.0F);
     INT_CONF("bar_single_mission_control", 0);
     INT_CONF("show_focus_indicator", 0);
+    INT_CONF("close_button_enabled", 1);
+    INT_CONF("close_button_size", 18);
+    INT_CONF("close_button_inset", 0);
     INT_CONF("debug_logs", 0);
     INT_CONF("debug_surface_logs", 0);
     STRING_CONF("layout_engine", "grid");
