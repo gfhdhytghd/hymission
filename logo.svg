@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="100%" height="100%">
+    <defs>
+        <!-- Hyprland 蓝调渐变 (青蓝色到深蓝色) -->
+        <linearGradient id="hyprGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#00f2fe" />
+            <stop offset="100%" stop-color="#0055ff" />
+        </linearGradient>
+
+        <!-- 悬浮窗口的阴影 (营造 Mission Control 的立体感) -->
+        <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="8" stdDeviation="6" flood-color="#000000" flood-opacity="0.6"/>
+        </filter>
+
+        <!-- 活动边框的霓虹辉光滤镜 -->
+        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="5" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
+    </defs>
+
+    <!-- ==================== 悬浮窗口 (Mission Control 风格排布) ==================== -->
+
+    <!-- 窗口 1：左上角 (背景层，浅青色) -->
+    <g filter="url(#dropShadow)">
+        <rect x="24" y="36" width="108" height="80" rx="8" fill="#181825" stroke="#33ccff" stroke-width="2" />
+    </g>
+
+    <!-- 窗口 2：左下角 (中层，深蓝色) -->
+    <g filter="url(#dropShadow)">
+        <rect x="32" y="136" width="100" height="84" rx="8" fill="#181825" stroke="#0077ff" stroke-width="2" />
+    </g>
+
+    <!-- 窗口 3：右侧主窗口 (顶层，且轻微叠加于左侧，Hyprland 蓝调渐变) -->
+    <!-- 辉光层 -->
+    <rect x="124" y="52" width="104" height="156" rx="8" fill="none" stroke="url(#hyprGrad)" stroke-width="4" filter="url(#glow)" opacity="0.8"/>
+    <!-- 实体窗口层带阴影 -->
+    <g filter="url(#dropShadow)">
+        <rect x="124" y="52" width="104" height="156" rx="8" fill="#11111b" stroke="url(#hyprGrad)" stroke-width="3" />
+    </g>
+
+</svg>
