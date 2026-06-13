@@ -202,13 +202,19 @@ LayoutEngine parseEngine(const std::string& value) {
         return LayoutEngine::Grid;
     if (value == "natural" || value == "apple" || value == "mission-control" || value == "expose")
         return LayoutEngine::Natural;
+    if (value == "thumbnail" || value == "thumbnails")
+        return LayoutEngine::Thumbnail;
 
     std::cerr << "Unknown engine: " << value << '\n';
     std::exit(EXIT_FAILURE);
 }
 
 std::string engineName(LayoutEngine engine) {
-    return engine == LayoutEngine::Natural ? "natural" : "grid";
+    if (engine == LayoutEngine::Natural)
+        return "natural";
+    if (engine == LayoutEngine::Thumbnail)
+        return "thumbnail";
+    return "grid";
 }
 
 std::vector<Scene> scenes() {
@@ -434,19 +440,19 @@ void printUsage(const char* argv0) {
     std::cout << "Usage: " << argv0 << " [options]\n"
               << "\n"
               << "Options:\n"
-              << "  --engine grid|natural       Layout solver to run. Default: natural\n"
-              << "  --scene NAME                Built-in scene. Default: forceall\n"
-              << "  --output PATH.svg           Render an SVG visual diff\n"
-              << "  --width PX --height PX      Override scene monitor size\n"
-              << "  --min-preview-short-edge PX Minimum preview short edge. Default: 32\n"
-              << "  --natural-scale-flex N      Override natural free-scale range\n"
-              << "  --stress COUNT              Run random pathological cases and report the worst one\n"
-              << "  --seed N                    Seed for --stress. Default: 12648430\n"
-              << "  --force-row-groups          Enable row-group fallback behavior\n"
-              << "  --preserve-input-order      Preserve input order in row materialization\n"
-              << "  --rank-scale-by-input-order Make earlier input windows larger in natural layout\n"
-              << "  --list-scenes               Print built-in scene names\n"
-              << "  --help                      Show this help\n";
+              << "  --engine grid|natural|thumbnail   Layout solver to run. Default: natural\n"
+              << "  --scene NAME                      Built-in scene. Default: forceall\n"
+              << "  --output PATH.svg                 Render an SVG visual diff\n"
+              << "  --width PX --height PX            Override scene monitor size\n"
+              << "  --min-preview-short-edge PX       Minimum preview short edge. Default: 32\n"
+              << "  --natural-scale-flex N            Override natural free-scale range\n"
+              << "  --stress COUNT                    Run random pathological cases and report the worst one\n"
+              << "  --seed N                          Seed for --stress. Default: 12648430\n"
+              << "  --force-row-groups                Enable row-group fallback behavior\n"
+              << "  --preserve-input-order            Preserve input order in row materialization\n"
+              << "  --rank-scale-by-input-order       Make earlier input windows larger in natural layout\n"
+              << "  --list-scenes                     Print built-in scene names\n"
+              << "  --help                            Show this help\n";
 }
 
 Options parseOptions(int argc, char** argv, Scene& scene) {

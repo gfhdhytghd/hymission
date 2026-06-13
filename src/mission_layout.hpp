@@ -34,11 +34,13 @@ struct WindowSlot {
     Rect        natural;
     Rect        target;
     double      scale = 1.0;
+    std::size_t rowGroup = 0;
 };
 
 enum class LayoutEngine {
     Grid,
     Natural,
+    Thumbnail,
 };
 
 struct LayoutConfig {

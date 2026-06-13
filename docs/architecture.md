@@ -23,7 +23,7 @@
 
 - 输入 `WindowInput::natural`
 - 输出 `WindowSlot::target` 和 `WindowSlot::scale`
-- 支持默认 row-based 布局和 `one_workspace_per_row`
+- 支持默认 row-based 布局、natural 求解器和 thumbnail 缩略图布局
 - 不依赖 renderer hook、输入事件或 Hyprland 状态机
 
 稳定接口：
