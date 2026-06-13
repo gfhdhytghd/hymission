@@ -1605,6 +1605,148 @@ std::optional<std::vector<WindowSlot>> computeNaturalRowGroupLayout(const std::v
     return slots;
 }
 
+std::optional<std::vector<WindowSlot>> computeThumbnailLayout(const std::vector<PreparedWindow>& prepared, const Rect& area, const LayoutConfig& config) {
+    if (prepared.empty())
+        return std::vector<WindowSlot>{};
+
+    std::vector<PreparedWindow> sorted = prepared;
+    std::stable_sort(sorted.begin(), sorted.end(), [](const PreparedWindow& a, const PreparedWindow& b) {
+        return a.input.rowGroup < b.input.rowGroup;
+    });
+
+    std::vector<std::vector<PreparedWindow>> groups;
+    for (const auto& window : sorted) {
+        if (groups.empty() || groups.back().front().input.rowGroup != window.input.rowGroup)
+            groups.emplace_back();
+        groups.back().push_back(window);
+    }
+
+    if (groups.empty())
+        return std::vector<WindowSlot>{};
+
+    const std::size_t numCards = groups.size();
+    const double spacing = std::max(0.0, config.rowSpacing);
+
+    struct CardCell {
+        std::size_t col;
+        std::size_t row;
+        std::size_t colSpan = 1;
+        std::size_t rowSpan = 1;
+    };
+
+    std::size_t gridCols = 1;
+    std::size_t gridRows = 1;
+    std::vector<CardCell> cells(numCards);
+
+    if (numCards == 1) {
+        gridCols = 1; gridRows = 1;
+        cells[0] = {0, 0, 1, 1};
+    } else if (numCards == 2) {
+        gridCols = 2; gridRows = 1;
+        cells[0] = {0, 0, 1, 1};
+        cells[1] = {1, 0, 1, 1};
+    } else if (numCards == 3) {
+        gridCols = 2; gridRows = 2;
+        cells[0] = {0, 0, 2, 1};
+        cells[1] = {0, 1, 1, 1};
+        cells[2] = {1, 1, 1, 1};
+    } else if (numCards == 4) {
+        gridCols = 2; gridRows = 2;
+        cells[0] = {0, 0, 1, 1};
+        cells[1] = {1, 0, 1, 1};
+        cells[2] = {0, 1, 1, 1};
+        cells[3] = {1, 1, 1, 1};
+    } else if (numCards == 5) {
+        gridCols = 3; gridRows = 3;
+        cells[0] = {0, 0, 1, 1};
+        cells[1] = {2, 0, 1, 1};
+        cells[2] = {0, 2, 1, 1};
+        cells[3] = {2, 2, 1, 1};
+        cells[4] = {1, 1, 1, 1};
+    } else {
+        gridCols = static_cast<std::size_t>(std::ceil(std::sqrt(static_cast<double>(numCards))));
+        gridRows = (numCards + gridCols - 1) / gridCols;
+        for (std::size_t i = 0; i < numCards; ++i)
+            cells[i] = {i % gridCols, i / gridCols, 1, 1};
+    }
+
+    const double cellUnitWidth = (area.width - spacing * static_cast<double>(gridCols - 1)) / static_cast<double>(gridCols);
+    const double cellUnitHeight = (area.height - spacing * static_cast<double>(gridRows - 1)) / static_cast<double>(gridRows);
+    const double areaAspect = area.width / area.height;
+
+    constexpr double cardPadding = 16.0;
+
+    std::vector<WindowSlot> slots;
+
+    for (std::size_t gi = 0; gi < groups.size(); ++gi) {
+        const auto& group = groups[gi];
+        const auto& cell = cells[gi];
+        const std::size_t groupRowGroup = group.front().input.rowGroup;
+
+        // Available area for this card (accounting for spans)
+        const double availWidth = static_cast<double>(cell.colSpan) * cellUnitWidth + static_cast<double>(cell.colSpan - 1) * spacing;
+        const double availHeight = static_cast<double>(cell.rowSpan) * cellUnitHeight + static_cast<double>(cell.rowSpan - 1) * spacing;
+        const double availX = area.x + static_cast<double>(cell.col) * (cellUnitWidth + spacing);
+        const double availY = area.y + static_cast<double>(cell.row) * (cellUnitHeight + spacing);
+
+        // Card maintains monitor aspect ratio, centered in available area
+        double cardWidth, cardHeight;
+        if (availWidth / availHeight > areaAspect) {
+            cardHeight = availHeight;
+            cardWidth = cardHeight * areaAspect;
+        } else {
+            cardWidth = availWidth;
+            cardHeight = cardWidth / areaAspect;
+        }
+        const double cardX = availX + (availWidth - cardWidth) / 2.0;
+        const double cardY = availY + (availHeight - cardHeight) / 2.0;
+
+        // Compute bounding box of all windows in this workspace group
+        double minX = std::numeric_limits<double>::infinity();
+        double minY = std::numeric_limits<double>::infinity();
+        double maxX = -std::numeric_limits<double>::infinity();
+        double maxY = -std::numeric_limits<double>::infinity();
+
+        for (const auto& window : group) {
+            minX = std::min(minX, window.input.natural.x);
+            minY = std::min(minY, window.input.natural.y);
+            maxX = std::max(maxX, window.input.natural.x + window.input.natural.width);
+            maxY = std::max(maxY, window.input.natural.y + window.input.natural.height);
+        }
+
+        const double bboxWidth = std::max(1.0, maxX - minX);
+        const double bboxHeight = std::max(1.0, maxY - minY);
+
+        const double contentScaleX = (cardWidth - 2.0 * cardPadding) / bboxWidth;
+        const double contentScaleY = (cardHeight - 2.0 * cardPadding) / bboxHeight;
+        const double contentScale = std::min(contentScaleX, contentScaleY);
+
+        for (const auto& window : group) {
+            WindowSlot slot;
+            slot.index = window.input.index;
+            slot.natural = window.input.natural;
+            slot.target = {
+                cardX + cardPadding + (window.input.natural.x - minX) * contentScale,
+                cardY + cardPadding + (window.input.natural.y - minY) * contentScale,
+                std::max(1.0, window.input.natural.width * contentScale),
+                std::max(1.0, window.input.natural.height * contentScale),
+            };
+            slot.scale = contentScale;
+            slot.rowGroup = groupRowGroup;
+            slots.push_back(slot);
+        }
+    }
+
+    if (slots.size() != prepared.size())
+        return std::nullopt;
+
+    std::sort(slots.begin(), slots.end(), [](const WindowSlot& a, const WindowSlot& b) {
+        return a.index < b.index;
+    });
+
+    return slots;
+}
+
 } // namespace
 
 std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowInput>& windows, const Rect& area, const LayoutConfig& config) const {
@@ -1625,6 +1767,12 @@ std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowIn
                 return *natural;
         }
         return computeGridLayout(prepared, naturalInner, config);
+    }
+
+    if (config.engine == LayoutEngine::Thumbnail) {
+        if (auto thumbnail = computeThumbnailLayout(prepared, inner, config))
+            return *thumbnail;
+        return computeGridLayout(prepared, inner, config);
     }
 
     return computeGridLayout(prepared, inner, config);

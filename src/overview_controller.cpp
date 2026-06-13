@@ -320,6 +320,9 @@ LayoutEngine parseLayoutEngine(std::string value) {
     if (value == "natural" || value == "apple" || value == "apple-like" || value == "expose" || value == "mission-control")
         return LayoutEngine::Natural;
 
+    if (value == "thumbnail" || value == "thumbnails")
+        return LayoutEngine::Thumbnail;
+
     return LayoutEngine::Grid;
 }
 
@@ -2379,11 +2382,10 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
         m_primaryButtonPressed = false;
 
     const auto cachedHoveredStripIndex = m_state.hoveredStripIndex;
-    const auto cachedHoveredIndex = m_state.hoveredIndex;
     const Vector2D pointerBeforeUpdate = g_pInputManager->getMouseCoordsInternal();
     updateHoveredFromPointer(false, false, false, false, "mouse-button-refresh");
     const auto effectiveHoveredStripIndex = m_state.hoveredStripIndex ? m_state.hoveredStripIndex : cachedHoveredStripIndex;
-    const auto effectiveHoveredIndex = m_state.hoveredIndex ? m_state.hoveredIndex : cachedHoveredIndex;
+    const auto effectiveHoveredIndex = m_state.hoveredIndex;
 
     // Close-button click takes priority over tile selection. Fire on the
     // press edge so quick clicks feel snappy, then swallow the matching
@@ -2405,7 +2407,6 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
             << " cachedStrip=" << (cachedHoveredStripIndex ? std::to_string(*cachedHoveredStripIndex) : "<null>")
             << " liveStrip=" << (m_state.hoveredStripIndex ? std::to_string(*m_state.hoveredStripIndex) : "<null>")
             << " effectiveStrip=" << (effectiveHoveredStripIndex ? std::to_string(*effectiveHoveredStripIndex) : "<null>")
-            << " cachedWindow=" << (cachedHoveredIndex ? std::to_string(*cachedHoveredIndex) : "<null>")
             << " liveWindow=" << (m_state.hoveredIndex ? std::to_string(*m_state.hoveredIndex) : "<null>")
             << " pressedStrip=" << (m_pressedStripIndex ? std::to_string(*m_pressedStripIndex) : "<null>");
         debugLog(out.str());
@@ -3358,6 +3359,8 @@ std::optional<OverviewController::ScopeOverride> OverviewController::parseScopeO
 }
 
 bool OverviewController::expandSelectedWindowEnabled() const {
+    if (m_state.engine == LayoutEngine::Thumbnail)
+        return false;
     return getConfigInt(m_handle, "plugin:hymission:expand_selected_window", 1) != 0;
 }
 
@@ -6981,6 +6984,45 @@ void OverviewController::restoreSurfaceRenderData(CSurfacePassElement::SRenderDa
 }
 
 std::optional<std::size_t> OverviewController::hitTestTarget(double x, double y) const {
+    if (m_state.engine == LayoutEngine::Thumbnail) {
+        std::unordered_map<std::size_t, Rect> groupRects;
+        for (const auto& w : m_state.windows) {
+            const Rect r = currentPreviewRect(w);
+            auto it = groupRects.find(w.slot.rowGroup);
+            if (it == groupRects.end()) {
+                groupRects[w.slot.rowGroup] = r;
+            } else {
+                Rect& g = it->second;
+                const double oldRight = g.x + g.width;
+                const double oldBottom = g.y + g.height;
+                g.x = std::min(g.x, r.x);
+                g.y = std::min(g.y, r.y);
+                g.width = std::max(oldRight, r.x + r.width) - g.x;
+                g.height = std::max(oldBottom, r.y + r.height) - g.y;
+            }
+        }
+        std::optional<std::size_t> bestIndex;
+        double                     bestDistance = std::numeric_limits<double>::infinity();
+        std::unordered_set<std::size_t> visitedGroups;
+        for (std::size_t i = 0; i < m_state.windows.size(); ++i) {
+            const auto rg = m_state.windows[i].slot.rowGroup;
+            if (visitedGroups.count(rg))
+                continue;
+            visitedGroups.insert(rg);
+            auto it = groupRects.find(rg);
+            if (it == groupRects.end())
+                continue;
+            if (!rectContainsPoint(it->second, x, y))
+                continue;
+            const double distance = rectCenterDistanceSquared(it->second, x, y);
+            if (!bestIndex || distance < bestDistance) {
+                bestIndex = i;
+                bestDistance = distance;
+            }
+        }
+        return bestIndex;
+    }
+
     const auto hitLayer = [&](bool floatingOverlay) -> std::optional<std::size_t> {
         std::optional<std::size_t> bestIndex;
         double                     bestDistance = std::numeric_limits<double>::infinity();
@@ -7090,17 +7132,44 @@ Rect OverviewController::currentPreviewRect(const ManagedWindow& window) const {
     return window.targetGlobal;
 }
 
+Rect OverviewController::thumbnailGroupRect(const PHLMONITOR& renderMonitor, std::size_t rowGroup) const {
+    Rect g{};
+    bool first = true;
+    for (const auto& w : m_state.windows) {
+        if (w.targetMonitor != renderMonitor || w.slot.rowGroup != rowGroup)
+            continue;
+        const Rect r = currentPreviewRect(w);
+        if (first) {
+            g = r;
+            first = false;
+        } else {
+            const double oldRight = g.x + g.width;
+            const double oldBottom = g.y + g.height;
+            g.x = std::min(g.x, r.x);
+            g.y = std::min(g.y, r.y);
+            g.width = std::max(oldRight, r.x + r.width) - g.x;
+            g.height = std::max(oldBottom, r.y + r.height) - g.y;
+        }
+    }
+    return g;
+}
+
 Rect OverviewController::closeButtonRectFor(const ManagedWindow& window) const {
-    const Rect   tile  = currentPreviewRect(window);
-    const double size  = closeButtonSize();
-    // Hide the button on tiles that are too small to host it without
-    // dominating the preview.
+    const double size = closeButtonSize();
+    Rect tile;
+    
+    if (m_state.engine == LayoutEngine::Thumbnail) {
+        const auto renderMonitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
+        if (!renderMonitor)
+            return {};
+        tile = thumbnailGroupRect(renderMonitor, window.slot.rowGroup);
+    } else {
+        tile = currentPreviewRect(window);
+    }
+    
     if (tile.width < size * 4.0 || tile.height < size * 4.0)
         return {};
-    // macOS-style: the button is centered on the tile's top-left corner so
-    // it sits half on, half off the tile, badge-style. closeButtonInset()
-    // is interpreted as an extra outward shift past the corner (negative
-    // = pull toward tile center, positive = push further out).
+    
     const double offset = size * 0.5 + closeButtonInset();
     return makeRect(tile.x - offset, tile.y - offset, size, size);
 }
@@ -7109,7 +7178,14 @@ std::optional<std::size_t> OverviewController::hitTestCloseButton(double x, doub
     if (!closeButtonsEnabled() || !isVisible() || m_state.phase != Phase::Active)
         return std::nullopt;
 
+    std::unordered_set<std::size_t> checkedGroups;
     for (std::size_t index = 0; index < m_state.windows.size(); ++index) {
+        if (m_state.engine == LayoutEngine::Thumbnail) {
+            const std::size_t group = m_state.windows[index].slot.rowGroup;
+            if (checkedGroups.count(group))
+                continue;
+            checkedGroups.insert(group);
+        }
         const Rect rect = closeButtonRectFor(m_state.windows[index]);
         if (rect.width <= 0.0 || rect.height <= 0.0)
             continue;
@@ -7122,10 +7198,21 @@ std::optional<std::size_t> OverviewController::hitTestCloseButton(double x, doub
 void OverviewController::requestCloseHoveredWindow() {
     if (!m_state.hoveredCloseIndex || *m_state.hoveredCloseIndex >= m_state.windows.size())
         return;
-    auto window = m_state.windows[*m_state.hoveredCloseIndex].window;
-    if (!window || !g_pCompositor)
-        return;
-    window->sendClose();
+    
+    if (m_state.engine == LayoutEngine::Thumbnail) {
+        const std::size_t targetGroup = m_state.windows[*m_state.hoveredCloseIndex].slot.rowGroup;
+        for (const auto& managed : m_state.windows) {
+            if (managed.slot.rowGroup != targetGroup)
+                continue;
+            if (managed.window && g_pCompositor)
+                managed.window->sendClose();
+        }
+    } else {
+        auto window = m_state.windows[*m_state.hoveredCloseIndex].window;
+        if (!window || !g_pCompositor)
+            return;
+        window->sendClose();
+    }
 }
 
 double OverviewController::visualProgress() const {
@@ -9866,27 +9953,61 @@ void OverviewController::renderSelectionChrome() const {
         return;
 
     const bool showFocusIndicator = showFocusIndicatorEnabled();
+    const bool isThumbnail = m_state.engine == LayoutEngine::Thumbnail;
+
+    const auto thumbnailGroupRect = [&](std::size_t rowGroup) -> Rect {
+        Rect g{};
+        bool first = true;
+        for (const auto& w : m_state.windows) {
+            if (w.targetMonitor != renderMonitor || w.slot.rowGroup != rowGroup)
+                continue;
+            const Rect r = currentPreviewRect(w);
+            if (first) {
+                g = r;
+                first = false;
+            } else {
+                const double oldRight = g.x + g.width;
+                const double oldBottom = g.y + g.height;
+                g.x = std::min(g.x, r.x);
+                g.y = std::min(g.y, r.y);
+                g.width = std::max(oldRight, r.x + r.width) - g.x;
+                g.height = std::max(oldBottom, r.y + r.height) - g.y;
+            }
+        }
+        return g;
+    };
 
     if (showFocusIndicator && m_state.hoveredIndex && *m_state.hoveredIndex < m_state.windows.size() &&
         m_state.windows[*m_state.hoveredIndex].targetMonitor == renderMonitor) {
-        renderOutline(currentPreviewRect(m_state.windows[*m_state.hoveredIndex]), CHyprColor(0.95, 0.97, 1.0, 0.55 * progress), HOVER_THICKNESS);
+        if (isThumbnail) {
+            const Rect groupRect = thumbnailGroupRect(m_state.windows[*m_state.hoveredIndex].slot.rowGroup);
+            if (groupRect.width > 0 && groupRect.height > 0)
+                renderOutline(groupRect, CHyprColor(0.95, 0.97, 1.0, 0.55 * progress), HOVER_THICKNESS);
+        } else {
+            renderOutline(currentPreviewRect(m_state.windows[*m_state.hoveredIndex]), CHyprColor(0.95, 0.97, 1.0, 0.55 * progress), HOVER_THICKNESS);
+        }
     }
 
     if (showFocusIndicator && m_state.selectedIndex && *m_state.selectedIndex < m_state.windows.size() &&
         m_state.windows[*m_state.selectedIndex].targetMonitor == renderMonitor) {
-        const auto& window = m_state.windows[*m_state.selectedIndex];
-        const Rect  rectGlobal = currentPreviewRect(window);
-        const Rect  rect = rectToMonitorRenderLocal(rectGlobal, renderMonitor);
-        renderOutline(rectGlobal, CHyprColor(0.24, 0.78, 1.0, 0.95 * progress), OUTLINE_THICKNESS);
-
-        auto texture =
-            g_pHyprRenderer->renderText(window.title, CHyprColor(1.0, 1.0, 1.0, std::min(1.0, progress)), scaleFontSizeForRender(renderMonitor, 16), false, "",
-                                        static_cast<int>(rect.width));
-        if (texture) {
-            const Rect titleRect =
-                makeRect(rect.x, std::max(scaleLengthForRender(renderMonitor, 8.0), rect.y - texture->m_size.y - scaleLengthForRender(renderMonitor, TITLE_PADDING)),
-                         texture->m_size.x, texture->m_size.y);
-            g_pHyprOpenGL->renderTexture(texture, toBox(titleRect), {});
+        if (isThumbnail) {
+            const Rect groupRect = thumbnailGroupRect(m_state.windows[*m_state.selectedIndex].slot.rowGroup);
+            if (groupRect.width > 0 && groupRect.height > 0)
+                renderOutline(groupRect, CHyprColor(0.24, 0.78, 1.0, 0.95 * progress), OUTLINE_THICKNESS);
+        } else {
+            const auto& window = m_state.windows[*m_state.selectedIndex];
+            const Rect  rectGlobal = currentPreviewRect(window);
+            const Rect  rect = rectToMonitorRenderLocal(rectGlobal, renderMonitor);
+            renderOutline(rectGlobal, CHyprColor(0.24, 0.78, 1.0, 0.95 * progress), OUTLINE_THICKNESS);
+            auto texture =
+                g_pHyprRenderer->renderText(window.title, CHyprColor(1.0, 1.0, 1.0, std::min(1.0, progress)), scaleFontSizeForRender(renderMonitor, 16), false, "",
+                                            static_cast<int>(rect.width));
+            if (texture) {
+                const Rect titleRect =
+                    makeRect(rect.x, std::max(scaleLengthForRender(renderMonitor, 8.0), rect.y - texture->m_size.y - scaleLengthForRender(renderMonitor, TITLE_PADDING)),
+                             texture->m_size.x, texture->m_size.y);
+                g_pHyprOpenGL->renderTexture(texture, toBox(titleRect), {});
+            }
         }
     }
 
@@ -9921,10 +10042,18 @@ void OverviewController::renderCloseButtons() const {
     const CHyprColor hoverFill{0.95, 0.30, 0.28, 0.95 * progress};
     const CHyprColor glyphCol {1.00, 1.00, 1.00, 0.98 * progress};
 
+    std::unordered_set<std::size_t> renderedGroups;
     for (std::size_t index = 0; index < m_state.windows.size(); ++index) {
         const auto& managed = m_state.windows[index];
         if (managed.targetMonitor != renderMonitor)
             continue;
+
+        if (m_state.engine == LayoutEngine::Thumbnail) {
+            const std::size_t group = managed.slot.rowGroup;
+            if (renderedGroups.count(group))
+                continue;
+            renderedGroups.insert(group);
+        }
 
         const Rect rectGlobal = closeButtonRectFor(managed);
         if (rectGlobal.width <= 0.0 || rectGlobal.height <= 0.0)
@@ -10859,8 +10988,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
     std::unordered_map<MONITORID, std::vector<WindowInput>> inputsByMonitor;
     std::unordered_map<MONITORID, std::size_t> directNiriOverviewWindowsByMonitor;
-    const bool useWorkspaceRows = workspaceRowsEnabled(m_handle);
     LayoutConfig config = layoutConfigForState(state);
+    state.engine = config.engine;
+    const bool useWorkspaceRows = workspaceRowsEnabled(m_handle) || config.engine == LayoutEngine::Thumbnail;
     config.preserveInputOrder = preserveExistingOrder || orderByRecentUse;
     config.forceRowGroups = useWorkspaceRows;
     config.rankScaleByInputOrder = orderByRecentUse;
