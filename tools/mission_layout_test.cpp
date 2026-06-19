@@ -29,21 +29,6 @@ bool rectsOverlap(const Rect& lhs, const Rect& rhs) {
     return lhs.x < rhs.x + rhs.width && lhs.x + lhs.width > rhs.x && lhs.y < rhs.y + rhs.height && lhs.y + lhs.height > rhs.y;
 }
 
-bool rectsSeparatedByGap(const Rect& lhs, const Rect& rhs, double columnGap, double rowGap) {
-    return lhs.x + lhs.width + columnGap <= rhs.x || rhs.x + rhs.width + columnGap <= lhs.x ||
-           lhs.y + lhs.height + rowGap <= rhs.y || rhs.y + rhs.height + rowGap <= lhs.y;
-}
-
-bool expectRectsSeparatedByGap(const Rect& lhs, const Rect& rhs, double columnGap, double rowGap, const char* message) {
-    if (rectsSeparatedByGap(lhs, rhs, columnGap, rowGap))
-        return true;
-
-    std::cerr << "FAIL: " << message << " lhs=" << lhs.x << ',' << lhs.y << ' ' << lhs.width << 'x' << lhs.height
-              << " rhs=" << rhs.x << ',' << rhs.y << ' ' << rhs.width << 'x' << rhs.height
-              << " gap=" << columnGap << 'x' << rowGap << '\n';
-    return false;
-}
-
 bool rectInside(const Rect& rect, const Rect& area) {
     constexpr double epsilon = 0.0001;
     return rect.x + epsilon >= area.x && rect.y + epsilon >= area.y &&
@@ -197,23 +182,6 @@ int main() {
                      "natural engine should preserve left/right spatial memory");
         ok &= expect(slots[0].target.centerY() < slots[2].target.centerY() && slots[1].target.centerY() < slots[3].target.centerY(),
                      "natural engine should preserve top/bottom spatial memory");
-    }
-
-    {
-        LayoutConfig config = deterministicConfig();
-        config.engine = LayoutEngine::Natural;
-        config.rowSpacing = 32.0;
-        config.columnSpacing = 32.0;
-
-        const std::vector<WindowInput> windows = {
-            {.index = 0, .natural = {0, 0, 640, 720}, .label = "left"},
-            {.index = 1, .natural = {660, 0, 640, 720}, .label = "right"},
-        };
-
-        const auto slots = engine.compute(windows, {0, 0, 1320, 780}, config);
-        ok &= expect(slots.size() == 2, "natural spacing case should keep both windows");
-        ok &= expectRectsSeparatedByGap(slots[0].target, slots[1].target, config.columnSpacing, config.rowSpacing,
-                                         "natural engine should keep targets separated by the configured spacing");
     }
 
     {

@@ -6780,17 +6780,11 @@ Rect OverviewController::overviewBorderOuterRectForWindow(const PHLWINDOW& windo
     return outset > 0.0 ? inflateRect(contentRect, outset, outset) : contentRect;
 }
 
-Rect OverviewController::overviewContentRectForBorderOuter(const PHLWINDOW& window, const Rect& outerRect) const {
-    const double outset = overviewBorderOutsetForWindow(window);
-    return outset > 0.0 ? deflateRectFromCenter(outerRect, outset, outset) : outerRect;
-}
-
-Rect OverviewController::overviewContentTargetForSlot(const PHLWINDOW& window, const PHLMONITOR& monitor, const WindowSlot& slot) const {
+Rect OverviewController::overviewContentTargetForSlot(const PHLWINDOW&, const PHLMONITOR& monitor, const WindowSlot& slot) const {
     if (!monitor)
         return slot.target;
 
-    const Rect outerGlobal = makeRect(monitor->m_position.x + slot.target.x, monitor->m_position.y + slot.target.y, slot.target.width, slot.target.height);
-    return overviewContentRectForBorderOuter(window, outerGlobal);
+    return makeRect(monitor->m_position.x + slot.target.x, monitor->m_position.y + slot.target.y, slot.target.width, slot.target.height);
 }
 
 std::optional<OverviewController::WindowTransform> OverviewController::windowTransformFor(const PHLWINDOW& window, const PHLMONITOR& monitor) const {
@@ -8070,41 +8064,24 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
 
     const Rect selectedBase = baseTargets[currentManagedIndex];
     const LayoutConfig layoutConfig = loadLayoutConfig();
-    const auto visualGap = [](double spacing) {
-        // Render boxes are rounded later, so reserve a small budget to keep the
-        // visible gap from dipping below the configured spacing.
-        return spacing > 0.0 ? spacing + 2.0 : 0.0;
-    };
-    const double minGapX = visualGap(layoutConfig.columnSpacing);
-    const double minGapY = visualGap(layoutConfig.rowSpacing);
+    double maxBorderOutset = 0.0;
+    for (const auto& managed : m_state.windows) {
+        if (managed.targetMonitor == currentManaged->targetMonitor)
+            maxBorderOutset = std::max(maxBorderOutset, overviewBorderOutsetForWindow(managed.window));
+    }
+
+    const double borderGapCompensation = maxBorderOutset * 2.0;
+    const Rect   contentBoundsGlobal = maxBorderOutset > 0.0 ? deflateRectFromCenter(boundsGlobal, maxBorderOutset, maxBorderOutset) : boundsGlobal;
+    const double minGapX = std::max(0.0, layoutConfig.columnSpacing + borderGapCompensation);
+    const double minGapY = std::max(0.0, layoutConfig.rowSpacing + borderGapCompensation);
     const double maxGrowthXPerSide = std::max(0.0, layoutConfig.columnSpacing * 2.0);
     const double maxGrowthYPerSide = std::max(0.0, layoutConfig.rowSpacing * 2.0);
-    const auto outerTargetForIndex = [&](std::size_t index, const Rect& contentTarget) {
-        if (index >= m_state.windows.size())
-            return contentTarget;
-
-        return overviewBorderOuterRectForWindow(m_state.windows[index].window, contentTarget);
-    };
-    const auto contentBoundsForIndex = [&](std::size_t index) {
-        if (index >= m_state.windows.size())
-            return boundsGlobal;
-
-        return overviewContentRectForBorderOuter(m_state.windows[index].window, boundsGlobal);
-    };
-    const auto clampContentTargetInsideBounds = [&](std::size_t index, const Rect& contentTarget) {
-        const Rect outerTarget = outerTargetForIndex(index, contentTarget);
-        const Rect clampedOuter = clampRectInside(outerTarget, boundsGlobal);
-        if (index >= m_state.windows.size())
-            return clampedOuter;
-
-        return overviewContentRectForBorderOuter(m_state.windows[index].window, clampedOuter);
-    };
     const double scaleCapByGrowth = maxCenteredScaleForPerSideGrowth(selectedBase, maxGrowthXPerSide, maxGrowthYPerSide);
-    const double scaleCapByBounds = maxCenteredScaleForBounds(selectedBase, contentBoundsForIndex(currentManagedIndex));
+    const double scaleCapByBounds = maxCenteredScaleForBounds(selectedBase, contentBoundsGlobal);
     const double preferredScale = m_state.windows.size() <= 1 ? 1.0 : SELECTED_WINDOW_LAYOUT_EMPHASIS;
     const double scaleCap = std::max(1.0, std::min({preferredScale, scaleCapByGrowth, scaleCapByBounds}));
     const double rippleRadius =
-        std::max(std::hypot(selectedBase.width, selectedBase.height) * 2.5, std::hypot(boundsGlobal.width, boundsGlobal.height) * 0.55);
+        std::max(std::hypot(selectedBase.width, selectedBase.height) * 2.5, std::hypot(contentBoundsGlobal.width, contentBoundsGlobal.height) * 0.55);
     const double pressureCenterX = selectedBase.centerX();
     const double pressureCenterY = selectedBase.centerY();
 
@@ -8132,7 +8109,7 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
         outMaxShift = 0.0;
 
         const Rect selectedTarget = scaleRectAroundCenter(selectedBase, scale);
-        if (!rectFitsInsideBounds(outerTargetForIndex(currentManagedIndex, selectedTarget), boundsGlobal))
+        if (!rectFitsInsideBounds(selectedTarget, contentBoundsGlobal))
             return false;
         outTargets[currentManagedIndex] = selectedTarget;
 
@@ -8144,20 +8121,18 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
         placed.reserve(peers.size() + 1);
         placed.push_back(currentManagedIndex);
 
-        const auto overlapsPlaced = [&](std::size_t movingIndex, const Rect& target) {
-            const Rect outerTarget = outerTargetForIndex(movingIndex, target);
+        const auto overlapsPlaced = [&](const Rect& target) {
             return std::ranges::any_of(placed, [&](std::size_t obstacleIndex) {
-                return rectsOverlap(outerTarget, inflateRect(outerTargetForIndex(obstacleIndex, outTargets[obstacleIndex]), minGapX, minGapY));
+                return rectsOverlap(target, inflateRect(outTargets[obstacleIndex], minGapX, minGapY));
             });
         };
 
-        const auto resolveAlongBearing = [&](std::size_t movingIndex, Rect target, double dirX, double dirY) -> std::optional<Rect> {
+        const auto resolveAlongBearing = [&](Rect target, double dirX, double dirY) -> std::optional<Rect> {
             for (std::size_t pass = 0; pass < 6; ++pass) {
                 bool changed = false;
                 for (const auto obstacleIndex : placed) {
-                    const Rect outerTarget = outerTargetForIndex(movingIndex, target);
-                    const Rect obstacle = inflateRect(outerTargetForIndex(obstacleIndex, outTargets[obstacleIndex]), minGapX, minGapY);
-                    if (!rectsOverlap(outerTarget, obstacle))
+                    const Rect obstacle = inflateRect(outTargets[obstacleIndex], minGapX, minGapY);
+                    if (!rectsOverlap(target, obstacle))
                         continue;
 
                     if (std::abs(dirX) < 0.001 && std::abs(dirY) < 0.001) {
@@ -8170,12 +8145,12 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
                         dirY /= length;
                     }
 
-                    const auto exitDistance = overlapExitDistanceAlongDirection(outerTarget, obstacle, dirX, dirY);
+                    const auto exitDistance = overlapExitDistanceAlongDirection(target, obstacle, dirX, dirY);
                     if (!exitDistance)
                         continue;
 
                     target = translateRect(target, dirX * *exitDistance, dirY * *exitDistance);
-                    target = clampContentTargetInsideBounds(movingIndex, target);
+                    target = clampRectInside(target, contentBoundsGlobal);
                     changed = true;
                 }
 
@@ -8183,7 +8158,7 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
                     break;
             }
 
-            if (!rectFitsInsideBounds(outerTargetForIndex(movingIndex, target), boundsGlobal) || overlapsPlaced(movingIndex, target))
+            if (!rectFitsInsideBounds(target, contentBoundsGlobal) || overlapsPlaced(target))
                 return std::nullopt;
 
             return target;
@@ -8206,7 +8181,7 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
                     directions.push_back({dx, dy});
             };
 
-            const EdgeMotionAffinity affinity = edgeMotionAffinityForRect(base, boundsGlobal);
+            const EdgeMotionAffinity affinity = edgeMotionAffinityForRect(base, contentBoundsGlobal);
             const double             awayX = std::abs(radialX) > 0.001 ? radialX : (base.centerX() >= pressureCenterX ? 1.0 : -1.0);
             const double             awayY = std::abs(radialY) > 0.001 ? radialY : (base.centerY() >= pressureCenterY ? 1.0 : -1.0);
 
@@ -8253,18 +8228,18 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
             const double influence = clampUnit(1.0 - peer.distance / std::max(1.0, rippleRadius));
             const double easedInfluence = influence * influence;
             Rect target = translateRect(peer.base, directionX * radialPressure * easedInfluence, directionY * radialPressure * easedInfluence);
-            target = clampContentTargetInsideBounds(peer.index, target);
+            target = clampRectInside(target, contentBoundsGlobal);
 
             std::optional<Rect> resolved;
             double              resolvedScore = std::numeric_limits<double>::max();
             for (const auto& [candidateDirX, candidateDirY] : motionDirectionsForPeer(peer.base, directionX, directionY)) {
-                auto candidate = resolveAlongBearing(peer.index, target, candidateDirX, candidateDirY);
+                auto candidate = resolveAlongBearing(target, candidateDirX, candidateDirY);
                 if (!candidate)
-                    candidate = resolveAlongBearing(peer.index, clampContentTargetInsideBounds(peer.index, peer.base), candidateDirX, candidateDirY);
+                    candidate = resolveAlongBearing(clampRectInside(peer.base, contentBoundsGlobal), candidateDirX, candidateDirY);
                 if (!candidate)
                     continue;
 
-                const double score = edgeAwareMotionDistance2(peer.base, *candidate, boundsGlobal);
+                const double score = edgeAwareMotionDistance2(peer.base, *candidate, contentBoundsGlobal);
                 if (!resolved || score < resolvedScore) {
                     resolved = candidate;
                     resolvedScore = score;
@@ -11289,20 +11264,41 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
     std::unordered_map<MONITORID, std::vector<WindowInput>> inputsByMonitor;
     std::unordered_map<MONITORID, std::size_t> directNiriOverviewWindowsByMonitor;
+    std::unordered_map<MONITORID, double>      maxBorderOutsetByMonitor;
     const bool useWorkspaceRows = workspaceRowsEnabled(m_handle);
     LayoutConfig config = layoutConfigForState(state);
     config.preserveInputOrder = preserveExistingOrder || orderByRecentUse;
     config.forceRowGroups = useWorkspaceRows;
     config.rankScaleByInputOrder = orderByRecentUse;
     const bool allowDirectNiriOverviewLayout = state.collectionPolicy.onlyActiveWorkspace;
-    const auto slotWithBorderOuterTarget = [&](const PHLWINDOW& window, const PHLMONITOR& monitor, WindowSlot slot) {
+    const auto recordBorderOutset = [&](const PHLWINDOW& window, const PHLMONITOR& monitor) {
         if (!monitor)
-            return slot;
+            return;
 
-        const Rect contentGlobal = makeRect(monitor->m_position.x + slot.target.x, monitor->m_position.y + slot.target.y, slot.target.width, slot.target.height);
-        const Rect outerGlobal = overviewBorderOuterRectForWindow(window, contentGlobal);
-        slot.target = rectToMonitorLocal(outerGlobal, monitor);
-        return slot;
+        auto& maxOutset = maxBorderOutsetByMonitor[monitor->m_id];
+        maxOutset = std::max(maxOutset, overviewBorderOutsetForWindow(window));
+    };
+    const auto layoutConfigForMonitor = [&](const PHLMONITOR& monitor) {
+        LayoutConfig monitorConfig = config;
+        if (!monitor)
+            return monitorConfig;
+
+        const auto it = maxBorderOutsetByMonitor.find(monitor->m_id);
+        const double borderOutset = it == maxBorderOutsetByMonitor.end() ? 0.0 : it->second;
+        if (borderOutset > 0.0) {
+            monitorConfig.columnSpacing += borderOutset * 2.0;
+            monitorConfig.rowSpacing += borderOutset * 2.0;
+        }
+        return monitorConfig;
+    };
+    const auto layoutAreaForMonitor = [&](const PHLMONITOR& monitor) {
+        Rect area = overviewContentRectForMonitor(monitor, state);
+        if (!monitor)
+            return area;
+
+        const auto it = maxBorderOutsetByMonitor.find(monitor->m_id);
+        const double borderOutset = it == maxBorderOutsetByMonitor.end() ? 0.0 : it->second;
+        return borderOutset > 0.0 ? deflateRectFromCenter(area, borderOutset, borderOutset) : area;
     };
     const auto rowGroupForWindow = [&](const PHLWINDOW& window) -> std::size_t {
         if (!useWorkspaceRows)
@@ -11416,6 +11412,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         const auto targetMonitor = preferredMonitorForWindow(window, state);
         if (!targetMonitor)
             continue;
+        recordBorderOutset(window, targetMonitor);
 
         const bool useGoalGeometry = shouldUseGoalGeometryForStateSnapshot(window);
         const Rect naturalGlobal = stateSnapshotGlobalRectForWindow(window, useGoalGeometry);
@@ -11452,7 +11449,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
         if (directNiriSlot) {
             auto& managed = state.windows.back();
-            managed.slot = slotWithBorderOuterTarget(window, targetMonitor, *directNiriSlot);
+            managed.slot = *directNiriSlot;
             managed.targetGlobal = overviewContentTargetForSlot(window, targetMonitor, managed.slot);
             managed.relayoutFromGlobal = managed.targetGlobal;
             state.slots.push_back(managed.slot);
@@ -11470,15 +11467,14 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             continue;
         }
 
-        const Rect layoutOuterGlobal = overviewBorderOuterRectForWindow(window, layoutGlobal);
         inputsByMonitor[targetMonitor->m_id].push_back({
             .index = windowIndex,
             .natural =
                 {
-                    layoutOuterGlobal.x - targetMonitor->m_position.x,
-                    layoutOuterGlobal.y - targetMonitor->m_position.y,
-                    layoutOuterGlobal.width,
-                    layoutOuterGlobal.height,
+                    layoutGlobal.x - targetMonitor->m_position.x,
+                    layoutGlobal.y - targetMonitor->m_position.y,
+                    layoutGlobal.width,
+                    layoutGlobal.height,
                 },
             .label = window->m_title,
             .rowGroup = rowGroupForWindow(window),
@@ -11504,11 +11500,12 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         if (inputsIt == inputsByMonitor.end() || inputsIt->second.empty())
             continue;
 
-        const Rect previewArea = overviewContentRectForMonitor(candidateMonitor, state);
+        const LayoutConfig monitorConfig = layoutConfigForMonitor(candidateMonitor);
+        const Rect previewArea = layoutAreaForMonitor(candidateMonitor);
         const auto slots =
             engine.compute(inputsIt->second,
                            previewArea,
-                           config);
+                           monitorConfig);
         for (const auto& slot : slots) {
             if (slot.index >= state.windows.size())
                 continue;
@@ -11525,8 +11522,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     }
 
     const auto settleNiriFloatingOverlayOverlaps = [&]() {
-        const double configuredGap = std::min(config.columnSpacing, config.rowSpacing);
-        const double gap = configuredGap > 0.0 ? configuredGap + 2.0 : 0.0;
+        const double gap = std::max(2.0, std::min(12.0, std::min(config.columnSpacing, config.rowSpacing) * 0.25));
         for (const auto& candidateMonitor : activeParticipatingMonitors) {
             if (!candidateMonitor)
                 continue;
@@ -11742,8 +11738,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                     auto& managed = state.windows[index];
                     managed.targetGlobal = target;
                     managed.relayoutFromGlobal = target;
-                    managed.slot.target =
-                        rectToMonitorLocal(overviewBorderOuterRectForWindow(managed.window, managed.targetGlobal), candidateMonitor);
+                    managed.slot.target = rectToMonitorLocal(managed.targetGlobal, candidateMonitor);
                     managed.slot.scale *= resolved.scale;
                     for (auto& slot : state.slots) {
                         if (slot.index == index) {
