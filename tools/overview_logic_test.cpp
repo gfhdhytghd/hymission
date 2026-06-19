@@ -154,6 +154,14 @@ int main() {
                  "up scrolling move amount should invert gesture sign");
     ok &= expect(closeEnough(scrollingLayoutMoveAmount(ScrollingLayoutDirection::Right, 5.0, -3.0), 0.0),
                  "negative niri scroll sensitivity should clamp to zero");
+    ok &= expect(closeEnough(niriScrollingPreviewCellLength(320.0, 200.0), 320.0),
+                 "niri scrolling preview cell should use the larger primary length");
+    ok &= expect(closeEnough(niriScrollingPreviewCellLength(120.0, 200.0), 200.0),
+                 "niri scrolling preview cell should preserve full fallback width");
+    ok &= expect(closeEnough(niriScrollingPreviewAdvance(320.0, 200.0, 24.0), 344.0),
+                 "niri scrolling preview advance should add configured gap");
+    ok &= expect(closeEnough(niriScrollingPreviewAdvance(320.0, 200.0, -24.0), 320.0),
+                 "negative niri scrolling preview gap should clamp to zero");
     ok &= expect(closeEnough(niriOverviewPreviewScale({0, 0, 900, 500}, {0, 0, 3000, 500}, 0.95, 0.10, GestureAxis::Horizontal), 0.95),
                  "horizontal niri overview should ignore scrolling-tape width when fitting scale");
     ok &= expect(closeEnough(niriOverviewPreviewScale({0, 0, 900, 500}, {0, 0, 3000, 500}, 0.95, 0.10), 0.30),

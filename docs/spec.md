@@ -319,6 +319,7 @@ workspace 切换补充语义：
 - `niri_mode`
 - `niri_scroll_pixels_per_delta`
 - `niri_workspace_scale`
+- `niri_scrolling_preview_gap`
 - `gesture_invert_vertical`
 - `only_active_workspace`
 - `only_active_monitor`
@@ -341,6 +342,7 @@ workspace 切换补充语义：
 - `niri_mode` 默认关闭；打开后只改变边缘 workspace strip 的排布：active-centered、monitor aspect ratio、允许缩略图列表溢出屏幕
 - `niri_scroll_pixels_per_delta` 影响 `hymission:scroll,layout` 在 overview 外连续发送 `layoutMsg move` 的幅度；默认 `1.0` 表示约把一次 `gestures:workspace_swipe_distance` 的手指位移映射为一个 viewport 的 scrolling-layout 位移；官方 `scrollMove` 不读取该配置
 - `niri_workspace_scale` 控制 niri mode 下 strip 内 workspace preview 相对 strip cross-axis 的缩放，默认 `1.0`，范围 `0.05..1.0`
+- `niri_scrolling_preview_gap` 控制 niri direct scrolling overview 中相邻 preview cell 在 scrolling 主轴上的额外间隔；默认 `0` 保持既有布局，负值按 `0` 处理
 - `gesture_invert_vertical` 只影响被插件接管的 vertical overview gesture；它不改变普通 dispatcher、键盘输入或 Hyprland 其他 gesture 的方向
 - 如果退出 overview 时提交的真实目标窗口仍不在屏内，允许临时保持该窗口为真实 focus，直到下一次真实鼠标事件；只有当目标窗口在当前 monitor 上存在可见区域时，才允许顺带移动光标去对齐真实 focus
 - `only_active_workspace`、`only_active_monitor`、`show_special` 只影响默认 scope；`onlycurrentworkspace` 和 `forceall` dispatcher 参数优先级更高

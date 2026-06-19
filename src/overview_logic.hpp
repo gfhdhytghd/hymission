@@ -81,6 +81,8 @@ struct WorkspaceStripReservation {
 [[nodiscard]] GestureAxis              axisForScrollingLayoutDirection(ScrollingLayoutDirection direction);
 [[nodiscard]] bool                     scrollingLayoutGestureAxisMatches(ScrollingLayoutDirection direction, GestureAxis axis);
 [[nodiscard]] double                   scrollingLayoutMoveAmount(ScrollingLayoutDirection direction, double primaryDelta, double sensitivity);
+[[nodiscard]] double                   niriScrollingPreviewCellLength(double layoutPrimaryLength, double fallbackPrimaryLength);
+[[nodiscard]] double                   niriScrollingPreviewAdvance(double layoutPrimaryLength, double fallbackPrimaryLength, double gap);
 [[nodiscard]] double                   niriOverviewPreviewScale(const Rect& previewArea, const Rect& baseArea, double maxPreviewScale, double minSlotScale,
                                                                 std::optional<GestureAxis> overflowAxis = std::nullopt);
 [[nodiscard]] bool                 isWorkspaceStripHorizontal(WorkspaceStripAnchor anchor);

@@ -428,6 +428,7 @@ class OverviewController {
     [[nodiscard]] bool         niriModeEnabled() const;
     [[nodiscard]] double       niriScrollPixelsPerDelta() const;
     [[nodiscard]] double       niriWorkspaceScale() const;
+    [[nodiscard]] double       niriScrollingPreviewGap() const;
     [[nodiscard]] bool         debugLogsEnabled() const;
     [[nodiscard]] bool         debugSurfaceLogsEnabled() const;
     [[nodiscard]] PHLWORKSPACE activeLayoutWorkspace() const;

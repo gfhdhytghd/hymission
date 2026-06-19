@@ -1349,7 +1349,7 @@ struct ScrollingOverviewGeometry {
     GestureAxis primaryAxis = GestureAxis::Horizontal;
 };
 
-std::optional<ScrollingOverviewGeometry> scrollingOverviewTapeRowGeometryForWindow(const PHLWINDOW& window, const Rect& fallbackGlobal) {
+std::optional<ScrollingOverviewGeometry> scrollingOverviewTapeRowGeometryForWindow(const PHLWINDOW& window, const Rect& fallbackGlobal, double previewGap) {
     if (!window || !window->m_workspace || !window->m_workspace->m_space)
         return std::nullopt;
 
@@ -1414,10 +1414,11 @@ std::optional<ScrollingOverviewGeometry> scrollingOverviewTapeRowGeometryForWind
             const CBox& layoutBox = candidate->layoutBox;
             const double columnPrimaryLength = std::max(1.0, horizontal ? layoutBox.width : layoutBox.height);
             const double fallbackPrimaryLength = std::max(1.0, horizontal ? fallbackGlobal.width : fallbackGlobal.height);
-            const double stepPrimary = std::max(columnPrimaryLength, fallbackPrimaryLength);
+            const double stepPrimary = niriScrollingPreviewCellLength(columnPrimaryLength, fallbackPrimaryLength);
+            const double advancePrimary = niriScrollingPreviewAdvance(columnPrimaryLength, fallbackPrimaryLength, previewGap);
 
             if (candidate != targetData) {
-                cursorPrimary += stepPrimary;
+                cursorPrimary += advancePrimary;
                 continue;
             }
 
@@ -1431,7 +1432,7 @@ std::optional<ScrollingOverviewGeometry> scrollingOverviewTapeRowGeometryForWind
             }
 
             targetSource = source;
-            cursorPrimary += stepPrimary;
+            cursorPrimary += advancePrimary;
         }
     }
 
@@ -3676,6 +3677,10 @@ double OverviewController::niriScrollPixelsPerDelta() const {
 
 double OverviewController::niriWorkspaceScale() const {
     return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_workspace_scale", 1.0), 0.05, 1.0);
+}
+
+double OverviewController::niriScrollingPreviewGap() const {
+    return std::max(0.0, static_cast<double>(getConfigInt(m_handle, "plugin:hymission:niri_scrolling_preview_gap", 0)));
 }
 
 bool OverviewController::debugLogsEnabled() const {
@@ -11364,7 +11369,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         Rect sourceForOverview = sourceGlobal;
         Rect baseGlobal;
         std::optional<GestureAxis> overflowAxis;
-        if (const auto rowGeometry = scrollingOverviewTapeRowGeometryForWindow(window, sourceGlobal)) {
+        if (const auto rowGeometry = scrollingOverviewTapeRowGeometryForWindow(window, sourceGlobal, niriScrollingPreviewGap())) {
             sourceForOverview = rowGeometry->sourceGlobal;
             baseGlobal = rowGeometry->baseGlobal;
             overflowAxis = rowGeometry->primaryAxis;

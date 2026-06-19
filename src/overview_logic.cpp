@@ -280,6 +280,14 @@ double scrollingLayoutMoveAmount(ScrollingLayoutDirection direction, double prim
     return primaryDelta * sign * std::max(0.0, sensitivity);
 }
 
+double niriScrollingPreviewCellLength(double layoutPrimaryLength, double fallbackPrimaryLength) {
+    return std::max({1.0, layoutPrimaryLength, fallbackPrimaryLength});
+}
+
+double niriScrollingPreviewAdvance(double layoutPrimaryLength, double fallbackPrimaryLength, double gap) {
+    return niriScrollingPreviewCellLength(layoutPrimaryLength, fallbackPrimaryLength) + std::max(0.0, gap);
+}
+
 double niriOverviewPreviewScale(const Rect& previewArea, const Rect& baseArea, double maxPreviewScale, double minSlotScale, std::optional<GestureAxis> overflowAxis) {
     if (previewArea.width <= 1.0 || previewArea.height <= 1.0 || baseArea.width <= 1.0 || baseArea.height <= 1.0)
         return 0.0;
