@@ -77,6 +77,7 @@ class OverviewOverlayPassElement final : public IPassElement {
             return {};
 
         m_controller->renderHiddenStripLayerProxies();
+        m_controller->renderWindowBorders();
         m_controller->renderSelectionChrome();
         m_controller->renderCloseButtons();
         m_controller->renderWorkspaceStrip();
@@ -10051,6 +10052,68 @@ void OverviewController::renderBackdrop() const {
             monitor->m_transformedSize.y),
         CHyprColor(0.05, 0.06, 0.08, alpha),
         {});
+}
+
+void OverviewController::renderWindowBorders() const {
+    const auto renderMonitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    if (!renderMonitor || !g_pHyprOpenGL)
+        return;
+
+    for (const auto& managed : m_state.windows) {
+        const auto& window = managed.window;
+        if (!window || managed.targetMonitor != renderMonitor)
+            continue;
+
+        const int borderSize = window->getRealBorderSize();
+        if (borderSize <= 0 || window->m_X11DoesntWantBorders || window->isEffectiveInternalFSMode(FSMODE_FULLSCREEN))
+            continue;
+        if (window->m_ruleApplicator && !window->m_ruleApplicator->decorate().valueOrDefault())
+            continue;
+
+        const auto transform = windowTransformFor(window, renderMonitor);
+        if (!transform)
+            continue;
+
+        const Rect previewRect = transform->targetGlobal;
+        if (previewRect.width < 1.0 || previewRect.height < 1.0)
+            continue;
+
+        CBox borderBox = toBox(rectToMonitorRenderLocal(previewRect, renderMonitor)).round();
+        if (borderBox.width < 1 || borderBox.height < 1)
+            continue;
+
+        const double previewScale = std::clamp(std::min(std::abs(transform->scaleX), std::abs(transform->scaleY)), 0.0, 1.0);
+        const double renderScale = renderScaleForMonitor(renderMonitor);
+        const int    scaledBorderSize = std::max(1, static_cast<int>(std::lround(static_cast<double>(borderSize) * previewScale)));
+        const int    scaledRounding = std::max(0, static_cast<int>(std::lround(static_cast<double>(window->rounding()) * previewScale * renderScale)));
+        const double roundingPower = window->roundingPower();
+        const double correctionOffset = borderSize * (M_SQRT2 - 1.0) * std::max(2.0 - roundingPower, 0.0);
+        const int    outerRound = std::max(0, static_cast<int>(std::lround(((window->rounding() + borderSize) - correctionOffset) * previewScale * renderScale)));
+
+        auto       grad = window->m_realBorderColor;
+        auto       previousGrad = window->m_realBorderColorPrevious;
+        const bool animated = window->m_borderFadeAnimationProgress && window->m_borderFadeAnimationProgress->isBeingAnimated();
+        if (window->m_borderAngleAnimationProgress && window->m_borderAngleAnimationProgress->enabled()) {
+            grad.m_angle += window->m_borderAngleAnimationProgress->value() * M_PI * 2.0;
+            grad.m_angle = normalizeAngleRad(grad.m_angle);
+            if (animated)
+                previousGrad.m_angle = grad.m_angle;
+        }
+
+        Render::GL::CHyprOpenGLImpl::SBorderRenderData data{
+            .round = scaledRounding,
+            .roundingPower = static_cast<float>(roundingPower),
+            .borderSize = scaledBorderSize,
+            .a = managedPreviewAlphaFor(window, 1.0F),
+            .outerRound = outerRound,
+        };
+
+        if (animated) {
+            g_pHyprOpenGL->renderBorder(borderBox, previousGrad, grad, window->m_borderFadeAnimationProgress->value(), data);
+        } else {
+            g_pHyprOpenGL->renderBorder(borderBox, grad, data);
+        }
+    }
 }
 
 void OverviewController::renderSelectionChrome() const {

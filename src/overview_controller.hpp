@@ -648,6 +648,7 @@ class OverviewController {
     void renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry);
     [[nodiscard]] bool shouldHideLayerSurface(const PHLLS& layer, const PHLMONITOR& monitor) const;
     void renderBackdrop() const;
+    void renderWindowBorders() const;
     void renderSelectionChrome() const;
     void renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const;
     void activateStripTarget(std::size_t index);
