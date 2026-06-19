@@ -540,6 +540,9 @@ class OverviewController {
     void                       restoreOverviewRenderState();
     [[nodiscard]] SDispatchResult startOverviewWorkspaceTransitionForDispatcher(const std::string& args, bool currentMonitorOnly);
     [[nodiscard]] std::optional<WindowTransform> windowTransformFor(const PHLWINDOW& window, const PHLMONITOR& monitor) const;
+    [[nodiscard]] double                        previewDecorationRoundingScale(const PHLMONITOR& monitor) const;
+    void                                        renderOverviewBorderForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, float alpha) const;
+    void                                        renderOverviewShadowForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, float alpha) const;
     [[nodiscard]] bool                          transformSurfaceRenderDataForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor,
                                                                                    CSurfacePassElement::SRenderData& renderData) const;
     bool                                        adjustTransformedSurfaceBoxSize(const CSurfacePassElement::SRenderData& renderData, const PHLMONITOR& monitor,
@@ -648,7 +651,6 @@ class OverviewController {
     void renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry);
     [[nodiscard]] bool shouldHideLayerSurface(const PHLLS& layer, const PHLMONITOR& monitor) const;
     void renderBackdrop() const;
-    void renderWindowBorders() const;
     void renderSelectionChrome() const;
     void renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const;
     void activateStripTarget(std::size_t index);
