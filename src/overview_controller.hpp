@@ -424,6 +424,7 @@ class OverviewController {
     [[nodiscard]] double       hideBarAnimationAlphaEnd() const;
     [[nodiscard]] bool         barSingleMissionControlEnabled() const;
     [[nodiscard]] bool         showFocusIndicatorEnabled() const;
+    [[nodiscard]] bool         windowDecorationsEnabled() const;
     [[nodiscard]] bool         niriModeEnabled() const;
     [[nodiscard]] double       niriScrollPixelsPerDelta() const;
     [[nodiscard]] double       niriWorkspaceScale() const;
@@ -521,6 +522,10 @@ class OverviewController {
     void                       applyOffscreenOpenAnimationEndpoints(State& state) const;
     void                       applyOffscreenExitAnimationEndpoints(State& state, const PHLWORKSPACE& activeWorkspaceOverride = {}) const;
     void                       prepareGestureCloseExitGeometry();
+    [[nodiscard]] double       overviewBorderOutsetForWindow(const PHLWINDOW& window) const;
+    [[nodiscard]] Rect         overviewBorderOuterRectForWindow(const PHLWINDOW& window, const Rect& contentRect) const;
+    [[nodiscard]] Rect         overviewContentRectForBorderOuter(const PHLWINDOW& window, const Rect& outerRect) const;
+    [[nodiscard]] Rect         overviewContentTargetForSlot(const PHLWINDOW& window, const PHLMONITOR& monitor, const WindowSlot& slot) const;
     [[nodiscard]] bool         workspaceSwipeUsesVerticalAxis(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] double       workspaceSwipeViewportDistance(const PHLMONITOR& monitor, WorkspaceTransitionAxis axis) const;
     [[nodiscard]] std::optional<Rect> workspaceTransitionRectForWindow(const PHLWINDOW& window) const;

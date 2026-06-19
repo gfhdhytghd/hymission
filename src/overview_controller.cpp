@@ -675,6 +675,12 @@ Rect inflateRect(const Rect& rect, double amountX, double amountY) {
     return makeRect(rect.x - amountX, rect.y - amountY, rect.width + amountX * 2.0, rect.height + amountY * 2.0);
 }
 
+Rect deflateRectFromCenter(const Rect& rect, double amountX, double amountY) {
+    const double width = std::max(1.0, rect.width - amountX * 2.0);
+    const double height = std::max(1.0, rect.height - amountY * 2.0);
+    return makeRect(rect.centerX() - width * 0.5, rect.centerY() - height * 0.5, width, height);
+}
+
 bool rectsOverlap(const Rect& lhs, const Rect& rhs) {
     return lhs.x < rhs.x + rhs.width && lhs.x + lhs.width > rhs.x && lhs.y < rhs.y + rhs.height && lhs.y + lhs.height > rhs.y;
 }
@@ -2915,10 +2921,8 @@ void OverviewController::renderOverviewBorderForWindow(const PHLWINDOW& window, 
     if (!window || !monitor || !g_pHyprRenderer)
         return;
 
-    const int borderSize = window->getRealBorderSize();
-    if (borderSize <= 0 || window->m_X11DoesntWantBorders || window->isEffectiveInternalFSMode(FSMODE_FULLSCREEN))
-        return;
-    if (window->m_ruleApplicator && !window->m_ruleApplicator->decorate().valueOrDefault())
+    const int borderSize = static_cast<int>(overviewBorderOutsetForWindow(window));
+    if (borderSize <= 0)
         return;
 
     const auto transform = windowTransformFor(window, monitor);
@@ -2972,6 +2976,9 @@ void OverviewController::renderOverviewBorderForWindow(const PHLWINDOW& window, 
 
 void OverviewController::renderOverviewShadowForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, float alpha) const {
     if (!window || !monitor || !g_pHyprRenderer)
+        return;
+
+    if (!windowDecorationsEnabled())
         return;
 
     static auto PSHADOWS = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
@@ -3641,6 +3648,10 @@ bool OverviewController::barSingleMissionControlEnabled() const {
 
 bool OverviewController::showFocusIndicatorEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:show_focus_indicator", 0) != 0;
+}
+
+bool OverviewController::windowDecorationsEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:window_decoration_enabled", 1) != 0;
 }
 
 bool OverviewController::closeButtonsEnabled() const {
@@ -6751,6 +6762,37 @@ void OverviewController::prepareGestureCloseExitGeometry() {
     applyOffscreenExitAnimationEndpoints(m_state, predictedExitWorkspace);
 }
 
+double OverviewController::overviewBorderOutsetForWindow(const PHLWINDOW& window) const {
+    if (!windowDecorationsEnabled() || !window)
+        return 0.0;
+
+    const int borderSize = window->getRealBorderSize();
+    if (borderSize <= 0 || window->m_X11DoesntWantBorders || window->isEffectiveInternalFSMode(FSMODE_FULLSCREEN))
+        return 0.0;
+    if (window->m_ruleApplicator && !window->m_ruleApplicator->decorate().valueOrDefault())
+        return 0.0;
+
+    return static_cast<double>(borderSize);
+}
+
+Rect OverviewController::overviewBorderOuterRectForWindow(const PHLWINDOW& window, const Rect& contentRect) const {
+    const double outset = overviewBorderOutsetForWindow(window);
+    return outset > 0.0 ? inflateRect(contentRect, outset, outset) : contentRect;
+}
+
+Rect OverviewController::overviewContentRectForBorderOuter(const PHLWINDOW& window, const Rect& outerRect) const {
+    const double outset = overviewBorderOutsetForWindow(window);
+    return outset > 0.0 ? deflateRectFromCenter(outerRect, outset, outset) : outerRect;
+}
+
+Rect OverviewController::overviewContentTargetForSlot(const PHLWINDOW& window, const PHLMONITOR& monitor, const WindowSlot& slot) const {
+    if (!monitor)
+        return slot.target;
+
+    const Rect outerGlobal = makeRect(monitor->m_position.x + slot.target.x, monitor->m_position.y + slot.target.y, slot.target.width, slot.target.height);
+    return overviewContentRectForBorderOuter(window, outerGlobal);
+}
+
 std::optional<OverviewController::WindowTransform> OverviewController::windowTransformFor(const PHLWINDOW& window, const PHLMONITOR& monitor) const {
     if (!window || !monitor || !isVisible() || !ownsMonitor(monitor))
         return std::nullopt;
@@ -8000,9 +8042,7 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
     for (auto& managed : m_state.windows) {
         managed.relayoutFromGlobal = currentPreviewRect(managed);
         if (managed.targetMonitor) {
-            managed.targetGlobal =
-                makeRect(managed.targetMonitor->m_position.x + managed.slot.target.x, managed.targetMonitor->m_position.y + managed.slot.target.y,
-                         managed.slot.target.width, managed.slot.target.height);
+            managed.targetGlobal = overviewContentTargetForSlot(managed.window, managed.targetMonitor, managed.slot);
         } else {
             managed.targetGlobal = managed.relayoutFromGlobal;
         }
@@ -11228,6 +11268,15 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     config.forceRowGroups = useWorkspaceRows;
     config.rankScaleByInputOrder = orderByRecentUse;
     const bool allowDirectNiriOverviewLayout = state.collectionPolicy.onlyActiveWorkspace;
+    const auto slotWithBorderOuterTarget = [&](const PHLWINDOW& window, const PHLMONITOR& monitor, WindowSlot slot) {
+        if (!monitor)
+            return slot;
+
+        const Rect contentGlobal = makeRect(monitor->m_position.x + slot.target.x, monitor->m_position.y + slot.target.y, slot.target.width, slot.target.height);
+        const Rect outerGlobal = overviewBorderOuterRectForWindow(window, contentGlobal);
+        slot.target = rectToMonitorLocal(outerGlobal, monitor);
+        return slot;
+    };
     const auto rowGroupForWindow = [&](const PHLWINDOW& window) -> std::size_t {
         if (!useWorkspaceRows)
             return 0;
@@ -11376,12 +11425,10 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
         if (directNiriSlot) {
             auto& managed = state.windows.back();
-            managed.slot = *directNiriSlot;
-            managed.targetGlobal = makeRect(targetMonitor->m_position.x + directNiriSlot->target.x,
-                                            targetMonitor->m_position.y + directNiriSlot->target.y, directNiriSlot->target.width,
-                                            directNiriSlot->target.height);
+            managed.slot = slotWithBorderOuterTarget(window, targetMonitor, *directNiriSlot);
+            managed.targetGlobal = overviewContentTargetForSlot(window, targetMonitor, managed.slot);
             managed.relayoutFromGlobal = managed.targetGlobal;
-            state.slots.push_back(*directNiriSlot);
+            state.slots.push_back(managed.slot);
             ++directNiriOverviewWindowsByMonitor[targetMonitor->m_id];
             if (debugLogsEnabled() && directNiriOverviewWindowsByMonitor[targetMonitor->m_id] <= 8) {
                 std::ostringstream out;
@@ -11396,14 +11443,15 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             continue;
         }
 
+        const Rect layoutOuterGlobal = overviewBorderOuterRectForWindow(window, layoutGlobal);
         inputsByMonitor[targetMonitor->m_id].push_back({
             .index = windowIndex,
             .natural =
                 {
-                    layoutGlobal.x - targetMonitor->m_position.x,
-                    layoutGlobal.y - targetMonitor->m_position.y,
-                    layoutGlobal.width,
-                    layoutGlobal.height,
+                    layoutOuterGlobal.x - targetMonitor->m_position.x,
+                    layoutOuterGlobal.y - targetMonitor->m_position.y,
+                    layoutOuterGlobal.width,
+                    layoutOuterGlobal.height,
                 },
             .label = window->m_title,
             .rowGroup = rowGroupForWindow(window),
@@ -11443,8 +11491,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 continue;
 
             managed.slot = slot;
-            managed.targetGlobal =
-                makeRect(candidateMonitor->m_position.x + slot.target.x, candidateMonitor->m_position.y + slot.target.y, slot.target.width, slot.target.height);
+            managed.targetGlobal = overviewContentTargetForSlot(managed.window, candidateMonitor, slot);
             managed.relayoutFromGlobal = managed.targetGlobal;
             state.slots.push_back(slot);
         }
@@ -11667,7 +11714,8 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                     auto& managed = state.windows[index];
                     managed.targetGlobal = target;
                     managed.relayoutFromGlobal = target;
-                    managed.slot.target = makeRect(target.x - candidateMonitor->m_position.x, target.y - candidateMonitor->m_position.y, target.width, target.height);
+                    managed.slot.target =
+                        rectToMonitorLocal(overviewBorderOuterRectForWindow(managed.window, managed.targetGlobal), candidateMonitor);
                     managed.slot.scale *= resolved.scale;
                     for (auto& slot : state.slots) {
                         if (slot.index == index) {
@@ -11689,7 +11737,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                     }
                 }
 
-                placedFloatingRects.push_back(inflateRect(state.windows[index].targetGlobal, gap, gap));
+                placedFloatingRects.push_back(inflateRect(overviewBorderOuterRectForWindow(state.windows[index].window, state.windows[index].targetGlobal), gap, gap));
             }
         }
     };
