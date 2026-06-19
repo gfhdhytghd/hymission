@@ -80,6 +80,20 @@ double clampPositive(double value) {
     return std::max(0.0, value);
 }
 
+double visualGap(double spacing) {
+    // Natural targets are pixel-aligned after solving; keep a small budget so
+    // the final visible gap does not round below the configured spacing.
+    return spacing > 0.0 ? spacing + 2.0 : 0.0;
+}
+
+double columnGap(const LayoutConfig& config) {
+    return visualGap(config.columnSpacing);
+}
+
+double rowGap(const LayoutConfig& config) {
+    return visualGap(config.rowSpacing);
+}
+
 double pointToRectDistance(double x, double y, const Rect& rect) {
     const double dx = std::max({rect.x - x, 0.0, x - (rect.x + rect.width)});
     const double dy = std::max({rect.y - y, 0.0, y - (rect.y + rect.height)});
@@ -625,8 +639,8 @@ std::vector<NaturalBandAnchor> buildNaturalBandAnchors(const std::vector<Prepare
 }
 
 double maxOverlap(const std::vector<NaturalItem>& items, const LayoutConfig& config) {
-    const double gapX = std::max(0.0, config.columnSpacing * 0.25);
-    const double gapY = std::max(0.0, config.rowSpacing * 0.25);
+    const double gapX = columnGap(config);
+    const double gapY = rowGap(config);
     double       worst = 0.0;
 
     for (std::size_t i = 0; i < items.size(); ++i) {
@@ -734,8 +748,8 @@ bool solveNaturalItems(std::vector<NaturalItem>& items, const Rect& area, const 
     if (items.empty())
         return true;
 
-    const double gapX = std::max(0.0, config.columnSpacing * 0.25);
-    const double gapY = std::max(0.0, config.rowSpacing * 0.25);
+    const double gapX = columnGap(config);
+    const double gapY = rowGap(config);
 
     for (int iteration = 0; iteration < 160; ++iteration) {
         double maxMove = 0.0;
@@ -1096,8 +1110,8 @@ bool canPlaceSlotTarget(const std::vector<WindowSlot>& slots, std::size_t moving
         target.y + target.height > area.y + area.height + 0.5)
         return false;
 
-    const double gapX = std::max(0.0, config.columnSpacing * 0.25);
-    const double gapY = std::max(0.0, config.rowSpacing * 0.25);
+    const double gapX = columnGap(config);
+    const double gapY = rowGap(config);
     for (std::size_t i = 0; i < slots.size(); ++i) {
         if (i == movingIndex)
             continue;

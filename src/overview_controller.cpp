@@ -8070,12 +8070,37 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
 
     const Rect selectedBase = baseTargets[currentManagedIndex];
     const LayoutConfig layoutConfig = loadLayoutConfig();
-    const double minGapX = std::max(0.0, layoutConfig.columnSpacing * 0.25);
-    const double minGapY = std::max(0.0, layoutConfig.rowSpacing * 0.25);
+    const auto visualGap = [](double spacing) {
+        // Render boxes are rounded later, so reserve a small budget to keep the
+        // visible gap from dipping below the configured spacing.
+        return spacing > 0.0 ? spacing + 2.0 : 0.0;
+    };
+    const double minGapX = visualGap(layoutConfig.columnSpacing);
+    const double minGapY = visualGap(layoutConfig.rowSpacing);
     const double maxGrowthXPerSide = std::max(0.0, layoutConfig.columnSpacing * 2.0);
     const double maxGrowthYPerSide = std::max(0.0, layoutConfig.rowSpacing * 2.0);
+    const auto outerTargetForIndex = [&](std::size_t index, const Rect& contentTarget) {
+        if (index >= m_state.windows.size())
+            return contentTarget;
+
+        return overviewBorderOuterRectForWindow(m_state.windows[index].window, contentTarget);
+    };
+    const auto contentBoundsForIndex = [&](std::size_t index) {
+        if (index >= m_state.windows.size())
+            return boundsGlobal;
+
+        return overviewContentRectForBorderOuter(m_state.windows[index].window, boundsGlobal);
+    };
+    const auto clampContentTargetInsideBounds = [&](std::size_t index, const Rect& contentTarget) {
+        const Rect outerTarget = outerTargetForIndex(index, contentTarget);
+        const Rect clampedOuter = clampRectInside(outerTarget, boundsGlobal);
+        if (index >= m_state.windows.size())
+            return clampedOuter;
+
+        return overviewContentRectForBorderOuter(m_state.windows[index].window, clampedOuter);
+    };
     const double scaleCapByGrowth = maxCenteredScaleForPerSideGrowth(selectedBase, maxGrowthXPerSide, maxGrowthYPerSide);
-    const double scaleCapByBounds = maxCenteredScaleForBounds(selectedBase, boundsGlobal);
+    const double scaleCapByBounds = maxCenteredScaleForBounds(selectedBase, contentBoundsForIndex(currentManagedIndex));
     const double preferredScale = m_state.windows.size() <= 1 ? 1.0 : SELECTED_WINDOW_LAYOUT_EMPHASIS;
     const double scaleCap = std::max(1.0, std::min({preferredScale, scaleCapByGrowth, scaleCapByBounds}));
     const double rippleRadius =
@@ -8107,7 +8132,7 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
         outMaxShift = 0.0;
 
         const Rect selectedTarget = scaleRectAroundCenter(selectedBase, scale);
-        if (!rectFitsInsideBounds(selectedTarget, boundsGlobal))
+        if (!rectFitsInsideBounds(outerTargetForIndex(currentManagedIndex, selectedTarget), boundsGlobal))
             return false;
         outTargets[currentManagedIndex] = selectedTarget;
 
@@ -8119,18 +8144,20 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
         placed.reserve(peers.size() + 1);
         placed.push_back(currentManagedIndex);
 
-        const auto overlapsPlaced = [&](const Rect& target) {
+        const auto overlapsPlaced = [&](std::size_t movingIndex, const Rect& target) {
+            const Rect outerTarget = outerTargetForIndex(movingIndex, target);
             return std::ranges::any_of(placed, [&](std::size_t obstacleIndex) {
-                return rectsOverlap(target, inflateRect(outTargets[obstacleIndex], minGapX, minGapY));
+                return rectsOverlap(outerTarget, inflateRect(outerTargetForIndex(obstacleIndex, outTargets[obstacleIndex]), minGapX, minGapY));
             });
         };
 
-        const auto resolveAlongBearing = [&](Rect target, double dirX, double dirY) -> std::optional<Rect> {
+        const auto resolveAlongBearing = [&](std::size_t movingIndex, Rect target, double dirX, double dirY) -> std::optional<Rect> {
             for (std::size_t pass = 0; pass < 6; ++pass) {
                 bool changed = false;
                 for (const auto obstacleIndex : placed) {
-                    const Rect obstacle = inflateRect(outTargets[obstacleIndex], minGapX, minGapY);
-                    if (!rectsOverlap(target, obstacle))
+                    const Rect outerTarget = outerTargetForIndex(movingIndex, target);
+                    const Rect obstacle = inflateRect(outerTargetForIndex(obstacleIndex, outTargets[obstacleIndex]), minGapX, minGapY);
+                    if (!rectsOverlap(outerTarget, obstacle))
                         continue;
 
                     if (std::abs(dirX) < 0.001 && std::abs(dirY) < 0.001) {
@@ -8143,12 +8170,12 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
                         dirY /= length;
                     }
 
-                    const auto exitDistance = overlapExitDistanceAlongDirection(target, obstacle, dirX, dirY);
+                    const auto exitDistance = overlapExitDistanceAlongDirection(outerTarget, obstacle, dirX, dirY);
                     if (!exitDistance)
                         continue;
 
                     target = translateRect(target, dirX * *exitDistance, dirY * *exitDistance);
-                    target = clampRectInside(target, boundsGlobal);
+                    target = clampContentTargetInsideBounds(movingIndex, target);
                     changed = true;
                 }
 
@@ -8156,7 +8183,7 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
                     break;
             }
 
-            if (!rectFitsInsideBounds(target, boundsGlobal) || overlapsPlaced(target))
+            if (!rectFitsInsideBounds(outerTargetForIndex(movingIndex, target), boundsGlobal) || overlapsPlaced(movingIndex, target))
                 return std::nullopt;
 
             return target;
@@ -8226,14 +8253,14 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
             const double influence = clampUnit(1.0 - peer.distance / std::max(1.0, rippleRadius));
             const double easedInfluence = influence * influence;
             Rect target = translateRect(peer.base, directionX * radialPressure * easedInfluence, directionY * radialPressure * easedInfluence);
-            target = clampRectInside(target, boundsGlobal);
+            target = clampContentTargetInsideBounds(peer.index, target);
 
             std::optional<Rect> resolved;
             double              resolvedScore = std::numeric_limits<double>::max();
             for (const auto& [candidateDirX, candidateDirY] : motionDirectionsForPeer(peer.base, directionX, directionY)) {
-                auto candidate = resolveAlongBearing(target, candidateDirX, candidateDirY);
+                auto candidate = resolveAlongBearing(peer.index, target, candidateDirX, candidateDirY);
                 if (!candidate)
-                    candidate = resolveAlongBearing(clampRectInside(peer.base, boundsGlobal), candidateDirX, candidateDirY);
+                    candidate = resolveAlongBearing(peer.index, clampContentTargetInsideBounds(peer.index, peer.base), candidateDirX, candidateDirY);
                 if (!candidate)
                     continue;
 
@@ -11498,7 +11525,8 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     }
 
     const auto settleNiriFloatingOverlayOverlaps = [&]() {
-        const double gap = std::max(2.0, std::min(12.0, std::min(config.columnSpacing, config.rowSpacing) * 0.25));
+        const double configuredGap = std::min(config.columnSpacing, config.rowSpacing);
+        const double gap = configuredGap > 0.0 ? configuredGap + 2.0 : 0.0;
         for (const auto& candidateMonitor : activeParticipatingMonitors) {
             if (!candidateMonitor)
                 continue;
