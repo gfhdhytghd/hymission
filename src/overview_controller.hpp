@@ -168,7 +168,9 @@ class OverviewController {
         float        previewAlpha = 1.0F;
         bool         isFloating = false;
         bool         isPinned = false;
+        bool         isNiriDirectOverview = false;
         bool         isNiriFloatingOverlay = false;
+        GestureAxis  niriDirectAxis = GestureAxis::Horizontal;
     };
 
     struct WorkspaceStripEntry {

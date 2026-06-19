@@ -3879,7 +3879,9 @@ void OverviewController::refreshNiriScrollingOverviewAfterLayoutScroll(const cha
         managed.slot = it->slot;
         managed.targetGlobal = it->targetGlobal;
         managed.relayoutFromGlobal = managed.targetGlobal;
+        managed.isNiriDirectOverview = it->isNiriDirectOverview;
         managed.isNiriFloatingOverlay = it->isNiriFloatingOverlay;
+        managed.niriDirectAxis = it->niriDirectAxis;
         m_state.slots.push_back(managed.slot);
         ++updated;
     }
@@ -9795,7 +9797,9 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
             .previewAlpha = source.previewAlpha,
             .isFloating = source.isFloating,
             .isPinned = source.isPinned,
+            .isNiriDirectOverview = source.isNiriDirectOverview,
             .isNiriFloatingOverlay = source.isNiriFloatingOverlay,
+            .niriDirectAxis = source.niriDirectAxis,
         });
     };
 
@@ -10479,6 +10483,8 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
                     .previewAlpha = preview.alpha,
                     .isFloating = preview.window->m_isFloating,
                     .isPinned = preview.window->m_pinned,
+                    .isNiriDirectOverview = false,
+                    .niriDirectAxis = GestureAxis::Horizontal,
                 });
             }
         }
@@ -11300,6 +11306,13 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         const double borderOutset = it == maxBorderOutsetByMonitor.end() ? 0.0 : it->second;
         return borderOutset > 0.0 ? deflateRectFromCenter(area, borderOutset, borderOutset) : area;
     };
+    const auto borderOutsetForMonitor = [&](const PHLMONITOR& monitor) {
+        if (!monitor)
+            return 0.0;
+
+        const auto it = maxBorderOutsetByMonitor.find(monitor->m_id);
+        return it == maxBorderOutsetByMonitor.end() ? 0.0 : it->second;
+    };
     const auto rowGroupForWindow = [&](const PHLWINDOW& window) -> std::size_t {
         if (!useWorkspaceRows)
             return 0;
@@ -11337,7 +11350,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         if (!scrolling || !scrolling->m_scrollingData)
             return std::nullopt;
 
-        const Rect previewArea = overviewContentRectForMonitor(targetMonitor, state);
+        const Rect previewArea = layoutAreaForMonitor(targetMonitor);
         if (previewArea.width <= 1.0 || previewArea.height <= 1.0)
             return std::nullopt;
 
@@ -11379,7 +11392,8 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         return niriOverviewSlotForSource(window, targetMonitor, sourceGlobal, niriFloatingOverviewBaseGlobalRect(targetMonitor), windowIndex, true, std::nullopt);
     };
     const auto niriScrollingOverviewSlotForWindow = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
-                                                        std::size_t windowIndex, Rect& resolvedSourceGlobal) -> std::optional<WindowSlot> {
+                                                        std::size_t windowIndex, Rect& resolvedSourceGlobal,
+                                                        GestureAxis& resolvedAxis) -> std::optional<WindowSlot> {
         const auto target = window ? window->layoutTarget() : nullptr;
         if (!target || target->floating())
             return std::nullopt;
@@ -11397,10 +11411,22 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         }
 
         auto slot = niriOverviewSlotForSource(window, targetMonitor, sourceForOverview, baseGlobal, windowIndex, false, overflowAxis);
-        if (slot)
+        if (slot) {
             resolvedSourceGlobal = sourceForOverview;
+            if (overflowAxis)
+                resolvedAxis = *overflowAxis;
+        }
         return slot;
     };
+
+    for (const auto& window : candidates) {
+        if (!shouldManageWindow(window, state))
+            continue;
+
+        const auto targetMonitor = preferredMonitorForWindow(window, state);
+        if (targetMonitor)
+            recordBorderOutset(window, targetMonitor);
+    }
 
     for (const auto& workspace : state.managedWorkspaces)
         refreshWorkspaceLayoutSnapshot(workspace);
@@ -11412,7 +11438,6 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         const auto targetMonitor = preferredMonitorForWindow(window, state);
         if (!targetMonitor)
             continue;
-        recordBorderOutset(window, targetMonitor);
 
         const bool useGoalGeometry = shouldUseGoalGeometryForStateSnapshot(window);
         const Rect naturalGlobal = stateSnapshotGlobalRectForWindow(window, useGoalGeometry);
@@ -11421,6 +11446,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         Rect directNiriSourceGlobal = naturalGlobal;
         std::optional<WindowSlot> directNiriSlot;
         bool directNiriFloatingOverlay = false;
+        GestureAxis directNiriAxis = GestureAxis::Horizontal;
 
         const Rect floatingSourceGlobal = floatingOverviewSourceGlobalRectForWindow(window, renderGlobalRectForWindow(window, useGoalGeometry));
         directNiriSlot = niriFloatingOverviewSlotForWindow(window, targetMonitor, floatingSourceGlobal, windowIndex);
@@ -11430,7 +11456,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         } else {
             const Rect scrollingSourceGlobal = scrollingOverviewSourceGlobalRectForWindow(window, naturalGlobal);
             Rect       resolvedScrollingSourceGlobal = scrollingSourceGlobal;
-            directNiriSlot = niriScrollingOverviewSlotForWindow(window, targetMonitor, scrollingSourceGlobal, windowIndex, resolvedScrollingSourceGlobal);
+            directNiriSlot = niriScrollingOverviewSlotForWindow(window, targetMonitor, scrollingSourceGlobal, windowIndex, resolvedScrollingSourceGlobal, directNiriAxis);
             if (directNiriSlot)
                 directNiriSourceGlobal = resolvedScrollingSourceGlobal;
         }
@@ -11444,7 +11470,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             .previewAlpha = std::clamp(window->alphaTotal(), 0.0F, 1.0F),
             .isFloating = window->m_isFloating,
             .isPinned = window->m_pinned,
+            .isNiriDirectOverview = directNiriSlot.has_value(),
             .isNiriFloatingOverlay = directNiriFloatingOverlay,
+            .niriDirectAxis = directNiriAxis,
         });
 
         if (directNiriSlot) {
@@ -11521,11 +11549,121 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         }
     }
 
-    const auto settleNiriFloatingOverlayOverlaps = [&]() {
-        const double gap = std::max(2.0, std::min(12.0, std::min(config.columnSpacing, config.rowSpacing) * 0.25));
+    const auto separateNiriDirectOverviewGaps = [&]() {
         for (const auto& candidateMonitor : activeParticipatingMonitors) {
             if (!candidateMonitor)
                 continue;
+
+            const LayoutConfig monitorConfig = layoutConfigForMonitor(candidateMonitor);
+            const Rect boundsLocal = layoutAreaForMonitor(candidateMonitor);
+            const Rect boundsGlobal = makeRect(candidateMonitor->m_position.x + boundsLocal.x, candidateMonitor->m_position.y + boundsLocal.y,
+                                               boundsLocal.width, boundsLocal.height);
+            if (boundsGlobal.width <= 1.0 || boundsGlobal.height <= 1.0)
+                continue;
+
+            const auto separateAxis = [&](GestureAxis axis) {
+                std::vector<std::size_t> indexes;
+                for (std::size_t index = 0; index < state.windows.size(); ++index) {
+                    const auto& managed = state.windows[index];
+                    if (managed.targetMonitor == candidateMonitor && managed.isNiriDirectOverview && !managed.isNiriFloatingOverlay &&
+                        managed.niriDirectAxis == axis)
+                        indexes.push_back(index);
+                }
+
+                if (indexes.size() < 2)
+                    return;
+
+                const bool horizontal = axis == GestureAxis::Horizontal;
+                const double minGap = horizontal ? monitorConfig.columnSpacing : monitorConfig.rowSpacing;
+                if (minGap <= 0.0)
+                    return;
+
+                const auto primaryStart = [&](const Rect& rect) { return horizontal ? rect.x : rect.y; };
+                const auto primarySize = [&](const Rect& rect) { return horizontal ? rect.width : rect.height; };
+                const auto primaryEnd = [&](const Rect& rect) { return primaryStart(rect) + primarySize(rect); };
+                const auto primaryCenter = [&](const Rect& rect) { return horizontal ? rect.centerX() : rect.centerY(); };
+                const auto crossStart = [&](const Rect& rect) { return horizontal ? rect.y : rect.x; };
+                const auto crossEnd = [&](const Rect& rect) { return horizontal ? rect.y + rect.height : rect.x + rect.width; };
+                const auto translatePrimary = [&](const Rect& rect, double delta) {
+                    return horizontal ? translateRect(rect, delta, 0.0) : translateRect(rect, 0.0, delta);
+                };
+                const auto withPrimaryStart = [&](const Rect& rect, double start) {
+                    return horizontal ? makeRect(start, rect.y, rect.width, rect.height) : makeRect(rect.x, start, rect.width, rect.height);
+                };
+
+                std::stable_sort(indexes.begin(), indexes.end(), [&](std::size_t lhs, std::size_t rhs) {
+                    const Rect& left = state.windows[lhs].targetGlobal;
+                    const Rect& right = state.windows[rhs].targetGlobal;
+                    if (std::abs(primaryCenter(left) - primaryCenter(right)) > 0.5)
+                        return primaryCenter(left) < primaryCenter(right);
+                    return lhs < rhs;
+                });
+
+                bool changed = false;
+                for (std::size_t order = 1; order < indexes.size(); ++order) {
+                    auto& previous = state.windows[indexes[order - 1]];
+                    auto& current = state.windows[indexes[order]];
+                    const bool crossOverlaps = crossStart(current.targetGlobal) < crossEnd(previous.targetGlobal) &&
+                                               crossEnd(current.targetGlobal) > crossStart(previous.targetGlobal);
+                    if (!crossOverlaps)
+                        continue;
+
+                    const double requiredStart = primaryEnd(previous.targetGlobal) + minGap;
+                    if (primaryStart(current.targetGlobal) >= requiredStart - 0.5)
+                        continue;
+
+                    current.targetGlobal = withPrimaryStart(current.targetGlobal, requiredStart);
+                    current.relayoutFromGlobal = current.targetGlobal;
+                    changed = true;
+                }
+
+                if (!changed)
+                    return;
+
+                const double boundsStart = horizontal ? boundsGlobal.x : boundsGlobal.y;
+                const double boundsEnd = horizontal ? boundsGlobal.x + boundsGlobal.width : boundsGlobal.y + boundsGlobal.height;
+                double minStart = std::numeric_limits<double>::max();
+                double maxEnd = -std::numeric_limits<double>::max();
+                for (const auto index : indexes) {
+                    minStart = std::min(minStart, primaryStart(state.windows[index].targetGlobal));
+                    maxEnd = std::max(maxEnd, primaryEnd(state.windows[index].targetGlobal));
+                }
+
+                double shift = 0.0;
+                if (maxEnd > boundsEnd)
+                    shift = boundsEnd - maxEnd;
+                if (minStart + shift < boundsStart)
+                    shift = boundsStart - minStart;
+
+                for (const auto index : indexes) {
+                    auto& managed = state.windows[index];
+                    if (std::abs(shift) > 0.001)
+                        managed.targetGlobal = translatePrimary(managed.targetGlobal, shift);
+                    managed.targetGlobal = clampRectInside(managed.targetGlobal, boundsGlobal);
+                    managed.relayoutFromGlobal = managed.targetGlobal;
+                    managed.slot.target = rectToMonitorLocal(managed.targetGlobal, candidateMonitor);
+                    for (auto& slot : state.slots) {
+                        if (slot.index == index) {
+                            slot = managed.slot;
+                            break;
+                        }
+                    }
+                }
+            };
+
+            separateAxis(GestureAxis::Horizontal);
+            separateAxis(GestureAxis::Vertical);
+        }
+    };
+    separateNiriDirectOverviewGaps();
+
+    const auto settleNiriFloatingOverlayOverlaps = [&]() {
+        for (const auto& candidateMonitor : activeParticipatingMonitors) {
+            if (!candidateMonitor)
+                continue;
+
+            const double gap =
+                std::max(2.0, std::min(12.0, std::min(config.columnSpacing, config.rowSpacing) * 0.25)) + borderOutsetForMonitor(candidateMonitor) * 2.0;
 
             std::vector<std::size_t> floatingIndexes;
             for (std::size_t index = 0; index < state.windows.size(); ++index) {
