@@ -168,9 +168,7 @@ class OverviewController {
         float        previewAlpha = 1.0F;
         bool         isFloating = false;
         bool         isPinned = false;
-        bool         isNiriDirectOverview = false;
         bool         isNiriFloatingOverlay = false;
-        GestureAxis  niriDirectAxis = GestureAxis::Horizontal;
     };
 
     struct WorkspaceStripEntry {
@@ -526,6 +524,7 @@ class OverviewController {
     void                       prepareGestureCloseExitGeometry();
     [[nodiscard]] double       overviewBorderOutsetForWindow(const PHLWINDOW& window) const;
     [[nodiscard]] Rect         overviewBorderOuterRectForWindow(const PHLWINDOW& window, const Rect& contentRect) const;
+    [[nodiscard]] Rect         overviewContentRectForBorderOuter(const PHLWINDOW& window, const Rect& outerRect) const;
     [[nodiscard]] Rect         overviewContentTargetForSlot(const PHLWINDOW& window, const PHLMONITOR& monitor, const WindowSlot& slot) const;
     [[nodiscard]] bool         workspaceSwipeUsesVerticalAxis(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] double       workspaceSwipeViewportDistance(const PHLMONITOR& monitor, WorkspaceTransitionAxis axis) const;
