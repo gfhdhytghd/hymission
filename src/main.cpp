@@ -3,6 +3,7 @@
 #include <string>
 
 #include <hyprland/src/config/ConfigManager.hpp>
+#include <hyprland/src/config/values/types/ColorValue.hpp>
 #include <hyprland/src/config/values/types/FloatValue.hpp>
 #include <hyprland/src/config/values/types/IntValue.hpp>
 #include <hyprland/src/config/values/types/StringValue.hpp>
@@ -39,6 +40,10 @@ bool addIntConfig(const char* name, Config::INTEGER fallback) {
 
 bool addFloatConfig(const char* name, Config::FLOAT fallback) {
     return addConfigValue(makeShared<Config::Values::CFloatValue>(name, "", fallback));
+}
+
+bool addColorConfig(const char* name, Config::INTEGER fallback) {
+    return addConfigValue(makeShared<Config::Values::CColorValue>(name, "", fallback));
 }
 
 bool addStringConfig(const char* name, Config::STRING fallback) {
@@ -255,6 +260,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
 #define INT_CONF(name, value) addIntConfig("plugin:hymission:" name, Config::INTEGER{value})
 #define FLOAT_CONF(name, value) addFloatConfig("plugin:hymission:" name, Config::FLOAT{value})
+#define COLOR_CONF(name, value) addColorConfig("plugin:hymission:" name, Config::INTEGER{value})
 #define STRING_CONF(name, value) addStringConfig("plugin:hymission:" name, Config::STRING{value})
     INT_CONF("outer_padding", 32);
     INT_CONF("outer_padding_top", 32);
@@ -280,6 +286,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     FLOAT_CONF("niri_workspace_scale", 1.0F);
     INT_CONF("niri_scrolling_preview_gap", 0);
     INT_CONF("gesture_invert_vertical", 0);
+    INT_CONF("group_by_workspace", 0);
     INT_CONF("one_workspace_per_row", 0);
     INT_CONF("only_active_workspace", 0);
     INT_CONF("only_active_monitor", 0);
@@ -301,6 +308,27 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("close_button_enabled", 0);
     INT_CONF("close_button_size", 18);
     INT_CONF("close_button_inset", 0);
+    FLOAT_CONF("focus_hover_thickness", 2.0F);
+    FLOAT_CONF("focus_selected_thickness", 4.0F);
+    FLOAT_CONF("drag_outline_thickness", 2.0F);
+    COLOR_CONF("backdrop_color", 0x6b0d0f14LL);
+    COLOR_CONF("workspace_strip_background_color", 0x3d081224LL);
+    COLOR_CONF("workspace_strip_inactive_color", 0x2e0d1726LL);
+    COLOR_CONF("workspace_strip_active_color", 0x3d1a2e52LL);
+    COLOR_CONF("workspace_strip_empty_color", 0x2e0f1a29LL);
+    COLOR_CONF("workspace_strip_new_color", 0x421c293bLL);
+    COLOR_CONF("workspace_strip_hover_tint_color", 0x0fffffffLL);
+    COLOR_CONF("workspace_strip_active_tint_color", 0x1a5794f2LL);
+    COLOR_CONF("workspace_strip_inactive_tint_color", 0x00000000LL);
+    COLOR_CONF("workspace_strip_plus_color", 0xe0f7fbffLL);
+    COLOR_CONF("focus_hover_color", 0x8cf2f7ffLL);
+    COLOR_CONF("focus_selected_color", 0xf23dc7ffLL);
+    COLOR_CONF("focus_title_color", 0xffffffffLL);
+    COLOR_CONF("drag_preview_color", 0x4729333dLL);
+    COLOR_CONF("drag_outline_color", 0xd1f2f7ffLL);
+    COLOR_CONF("close_button_color", 0xeb29292eLL);
+    COLOR_CONF("close_button_hover_color", 0xf2f24d47LL);
+    COLOR_CONF("close_button_glyph_color", 0xfaffffffLL);
     INT_CONF("debug_logs", 0);
     INT_CONF("debug_surface_logs", 0);
     STRING_CONF("layout_engine", "grid");
@@ -308,6 +336,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     STRING_CONF("workspace_strip_empty_mode", "existing");
     STRING_CONF("switch_release_key", "Super_L");
 #undef STRING_CONF
+#undef COLOR_CONF
 #undef FLOAT_CONF
 #undef INT_CONF
 

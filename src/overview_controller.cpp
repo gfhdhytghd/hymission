@@ -247,6 +247,14 @@ double getConfigFloat(HANDLE handle, const char* name, double fallback) {
     return fallback;
 }
 
+CHyprColor getConfigColor(HANDLE handle, const char* name, uint64_t fallback) {
+    return CHyprColor(static_cast<uint64_t>(getConfigInt(handle, name, static_cast<long>(fallback))));
+}
+
+CHyprColor colorWithAlphaMultiplier(const CHyprColor& color, double multiplier) {
+    return color.modifyA(static_cast<float>(std::clamp(color.a * multiplier, 0.0, 1.0)));
+}
+
 std::string getConfigString(HANDLE handle, const char* name, std::string fallback) {
     (void)handle;
 
@@ -3651,6 +3659,90 @@ bool OverviewController::showFocusIndicatorEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:show_focus_indicator", 0) != 0;
 }
 
+double OverviewController::focusHoverThickness() const {
+    return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:focus_hover_thickness", HOVER_THICKNESS));
+}
+
+double OverviewController::focusSelectedThickness() const {
+    return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:focus_selected_thickness", OUTLINE_THICKNESS));
+}
+
+double OverviewController::dragOutlineThickness() const {
+    return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:drag_outline_thickness", 2.0));
+}
+
+CHyprColor OverviewController::backdropColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:backdrop_color", 0x6b0d0f14);
+}
+
+CHyprColor OverviewController::workspaceStripBackgroundColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:workspace_strip_background_color", 0x3d081224);
+}
+
+CHyprColor OverviewController::workspaceStripInactiveColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:workspace_strip_inactive_color", 0x2e0d1726);
+}
+
+CHyprColor OverviewController::workspaceStripActiveColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:workspace_strip_active_color", 0x3d1a2e52);
+}
+
+CHyprColor OverviewController::workspaceStripEmptyColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:workspace_strip_empty_color", 0x2e0f1a29);
+}
+
+CHyprColor OverviewController::workspaceStripNewColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:workspace_strip_new_color", 0x421c293b);
+}
+
+CHyprColor OverviewController::workspaceStripHoverTintColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:workspace_strip_hover_tint_color", 0x0fffffff);
+}
+
+CHyprColor OverviewController::workspaceStripActiveTintColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:workspace_strip_active_tint_color", 0x1a5794f2);
+}
+
+CHyprColor OverviewController::workspaceStripInactiveTintColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:workspace_strip_inactive_tint_color", 0x00000000);
+}
+
+CHyprColor OverviewController::workspaceStripPlusColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:workspace_strip_plus_color", 0xe0f7fbff);
+}
+
+CHyprColor OverviewController::focusHoverColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:focus_hover_color", 0x8cf2f7ff);
+}
+
+CHyprColor OverviewController::focusSelectedColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:focus_selected_color", 0xf23dc7ff);
+}
+
+CHyprColor OverviewController::focusTitleColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:focus_title_color", 0xffffffff);
+}
+
+CHyprColor OverviewController::dragPreviewColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:drag_preview_color", 0x4729333d);
+}
+
+CHyprColor OverviewController::dragOutlineColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:drag_outline_color", 0xd1f2f7ff);
+}
+
+CHyprColor OverviewController::closeButtonColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:close_button_color", 0xeb29292e);
+}
+
+CHyprColor OverviewController::closeButtonHoverColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:close_button_hover_color", 0xf2f24d47);
+}
+
+CHyprColor OverviewController::closeButtonGlyphColor() const {
+    return getConfigColor(m_handle, "plugin:hymission:close_button_glyph_color", 0xfaffffff);
+}
+
 bool OverviewController::windowDecorationsEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:window_decoration_enabled", 1) != 0;
 }
@@ -3705,7 +3797,8 @@ PHLWORKSPACE OverviewController::activeLayoutWorkspace() const {
 }
 
 bool workspaceRowsEnabled(HANDLE handle) {
-    return getConfigInt(handle, "plugin:hymission:one_workspace_per_row", 0) != 0;
+    return getConfigInt(handle, "plugin:hymission:group_by_workspace", 0) != 0 ||
+        getConfigInt(handle, "plugin:hymission:one_workspace_per_row", 0) != 0;
 }
 
 bool OverviewController::isScrollingWorkspace(const PHLWORKSPACE& workspace) const {
@@ -10234,8 +10327,8 @@ void OverviewController::carryOverWorkspaceStripSnapshots(State& next, const Sta
 }
 
 void OverviewController::renderBackdrop() const {
-    const double alpha = BACKDROP_ALPHA * visualProgress();
-    if (alpha <= 0.0)
+    const CHyprColor color = colorWithAlphaMultiplier(backdropColor(), visualProgress());
+    if (color.a <= 0.0)
         return;
 
     const auto monitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
@@ -10248,7 +10341,7 @@ void OverviewController::renderBackdrop() const {
             0.0,
             monitor->m_transformedSize.x,
             monitor->m_transformedSize.y),
-        CHyprColor(0.05, 0.06, 0.08, alpha),
+        color,
         {});
 }
 
@@ -10265,7 +10358,7 @@ void OverviewController::renderSelectionChrome() const {
 
     if (showFocusIndicator && m_state.hoveredIndex && *m_state.hoveredIndex < m_state.windows.size() &&
         m_state.windows[*m_state.hoveredIndex].targetMonitor == renderMonitor) {
-        renderOutline(currentPreviewRect(m_state.windows[*m_state.hoveredIndex]), CHyprColor(0.95, 0.97, 1.0, 0.55 * progress), HOVER_THICKNESS);
+        renderOutline(currentPreviewRect(m_state.windows[*m_state.hoveredIndex]), colorWithAlphaMultiplier(focusHoverColor(), progress), focusHoverThickness());
     }
 
     if (showFocusIndicator && m_state.selectedIndex && *m_state.selectedIndex < m_state.windows.size() &&
@@ -10273,10 +10366,10 @@ void OverviewController::renderSelectionChrome() const {
         const auto& window = m_state.windows[*m_state.selectedIndex];
         const Rect  rectGlobal = currentPreviewRect(window);
         const Rect  rect = rectToMonitorRenderLocal(rectGlobal, renderMonitor);
-        renderOutline(rectGlobal, CHyprColor(0.24, 0.78, 1.0, 0.95 * progress), OUTLINE_THICKNESS);
+        renderOutline(rectGlobal, colorWithAlphaMultiplier(focusSelectedColor(), progress), focusSelectedThickness());
 
         auto texture =
-            g_pHyprRenderer->renderText(window.title, CHyprColor(1.0, 1.0, 1.0, std::min(1.0, progress)), scaleFontSizeForRender(renderMonitor, 16), false, "",
+            g_pHyprRenderer->renderText(window.title, colorWithAlphaMultiplier(focusTitleColor(), progress), scaleFontSizeForRender(renderMonitor, 16), false, "",
                                         static_cast<int>(rect.width));
         if (texture) {
             const Rect titleRect =
@@ -10292,8 +10385,8 @@ void OverviewController::renderSelectionChrome() const {
         const auto  pointer = g_pInputManager->getMouseCoordsInternal();
         const Rect  ghostGlobal = makeRect(pointer.x - m_draggedWindowPointerOffset.x, pointer.y - m_draggedWindowPointerOffset.y, preview.width, preview.height);
         const Rect  ghost = rectToMonitorRenderLocal(ghostGlobal, renderMonitor);
-        g_pHyprOpenGL->renderRect(toBox(ghost), CHyprColor(0.16, 0.20, 0.24, 0.28 * progress), {});
-        renderOutline(ghostGlobal, CHyprColor(0.95, 0.97, 1.0, 0.82 * progress), 2.0);
+        g_pHyprOpenGL->renderRect(toBox(ghost), colorWithAlphaMultiplier(dragPreviewColor(), progress), {});
+        renderOutline(ghostGlobal, colorWithAlphaMultiplier(dragOutlineColor(), progress), dragOutlineThickness());
     }
 }
 
@@ -10313,9 +10406,9 @@ void OverviewController::renderCloseButtons() const {
     // with a white "x" drawn as two diagonal stroke rectangles. Drawing the
     // X as primitives instead of as a glyph keeps it perfectly centered
     // inside the disk regardless of font metrics.
-    const CHyprColor idleFill {0.16, 0.16, 0.18, 0.92 * progress};
-    const CHyprColor hoverFill{0.95, 0.30, 0.28, 0.95 * progress};
-    const CHyprColor glyphCol {1.00, 1.00, 1.00, 0.98 * progress};
+    const CHyprColor idleFill = colorWithAlphaMultiplier(closeButtonColor(), progress);
+    const CHyprColor hoverFill = colorWithAlphaMultiplier(closeButtonHoverColor(), progress);
+    const CHyprColor glyphCol = colorWithAlphaMultiplier(closeButtonGlyphColor(), progress);
 
     for (std::size_t index = 0; index < m_state.windows.size(); ++index) {
         const auto& managed = m_state.windows[index];
@@ -10775,7 +10868,7 @@ void OverviewController::renderWorkspaceStrip() const {
     const Rect bandGlobal = workspaceStripBandRectForMonitor(renderMonitor, m_state);
     if (bandGlobal.width > 0.0 && bandGlobal.height > 0.0) {
         const Rect band = rectToMonitorRenderLocal(animatedWorkspaceStripRect(bandGlobal, renderMonitor), renderMonitor);
-        g_pHyprOpenGL->renderRect(toBox(band), CHyprColor(0.03, 0.07, 0.14, 0.24 * progress), {.blur = true, .blurA = 1.0F});
+        g_pHyprOpenGL->renderRect(toBox(band), colorWithAlphaMultiplier(workspaceStripBackgroundColor(), progress), {.blur = true, .blurA = 1.0F});
     }
 
     for (std::size_t index = 0; index < m_state.stripEntries.size(); ++index) {
@@ -10792,12 +10885,17 @@ void OverviewController::renderWorkspaceStrip() const {
         const Rect thumb = rectToMonitorLocal(outerGlobal, renderMonitor);
         const Rect thumbRender = scaleRectForRender(thumb, renderMonitor);
 
-        const CHyprColor cardColor = entry.newWorkspaceSlot ? CHyprColor(0.11, 0.16, 0.23, 0.26 * progress) :
-                                      entry.syntheticEmpty ? CHyprColor(0.06, 0.10, 0.16, 0.18 * progress) :
-                                      entry.active ? CHyprColor(0.10, 0.18, 0.32, 0.24 * progress) :
-                                                     CHyprColor(0.05, 0.09, 0.15, 0.18 * progress);
-        const CHyprColor stateOverlayColor =
-            hovered ? CHyprColor(1.0, 1.0, 1.0, 0.06 * progress) : entry.active ? CHyprColor(0.34, 0.58, 0.95, 0.10 * progress) : CHyprColor(0.0, 0.0, 0.0, 0.0);
+        const CHyprColor cardColor = colorWithAlphaMultiplier(entry.newWorkspaceSlot ? workspaceStripNewColor() :
+                                                              entry.syntheticEmpty ? workspaceStripEmptyColor() :
+                                                              entry.active ? workspaceStripActiveColor() :
+                                                                             workspaceStripInactiveColor(),
+                                                              progress);
+        const CHyprColor stateOverlayColor = colorWithAlphaMultiplier(
+            hovered ? workspaceStripHoverTintColor() :
+            entry.active ? workspaceStripActiveTintColor() :
+            entry.newWorkspaceSlot ? CHyprColor(0.0, 0.0, 0.0, 0.0) :
+                                     workspaceStripInactiveTintColor(),
+            progress);
 
         g_pHyprOpenGL->renderRect(toBox(thumbRender), cardColor, {.blur = true, .blurA = 1.0F});
 
@@ -10816,8 +10914,9 @@ void OverviewController::renderWorkspaceStrip() const {
                 makeRect(thumb.centerX() - plusArmLength * 0.5, thumb.centerY() - plusThickness * 0.5, plusArmLength, plusThickness);
             const Rect plusVertical =
                 makeRect(thumb.centerX() - plusThickness * 0.5, thumb.centerY() - plusArmLength * 0.5, plusThickness, plusArmLength);
-            g_pHyprOpenGL->renderRect(toBox(scaleRectForRender(plusHorizontal, renderMonitor)), CHyprColor(0.97, 0.985, 1.0, 0.88 * progress), {});
-            g_pHyprOpenGL->renderRect(toBox(scaleRectForRender(plusVertical, renderMonitor)), CHyprColor(0.97, 0.985, 1.0, 0.88 * progress), {});
+            const CHyprColor plusColor = colorWithAlphaMultiplier(workspaceStripPlusColor(), progress);
+            g_pHyprOpenGL->renderRect(toBox(scaleRectForRender(plusHorizontal, renderMonitor)), plusColor, {});
+            g_pHyprOpenGL->renderRect(toBox(scaleRectForRender(plusVertical, renderMonitor)), plusColor, {});
         }
     }
 }

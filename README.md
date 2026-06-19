@@ -270,6 +270,7 @@ plugin {
         switch_toggle_auto_next = 1
         switch_release_key = Super_L
         gesture_invert_vertical = 0
+        group_by_workspace = 0
         one_workspace_per_row = 0
         only_active_workspace = 0
         only_active_monitor = 0
@@ -288,6 +289,11 @@ plugin {
         hide_bar_animation_alpha_end = 0
         bar_single_mission_control = 0
         show_focus_indicator = 0
+        focus_hover_color = rgba(f2f7ff8c)
+        focus_selected_color = rgba(3dc7fff2)
+        focus_hover_thickness = 2
+        focus_selected_thickness = 4
+        workspace_strip_inactive_tint_color = rgba(00000000)
 
         debug_logs = 0
         debug_surface_logs = 0
@@ -332,6 +338,7 @@ hl.config({
 | `layout_engine` | string | `grid` | Geometry solver. `grid` keeps the existing row-search layout; `natural`, `apple`, `expose`, and `mission-control` enable the Apple-like natural solver that tries to preserve original window positions while removing overlap. The natural engine attempts every window count and only uses row-search as an emergency fallback if solving fails. |
 | `layout_scale_weight` | float | `1.0` | Weight of preview scale in the layout scoring pass. |
 | `layout_space_weight` | float | `0.10` | Weight of space utilization in the layout scoring pass. |
+| `group_by_workspace` | bool | `0` | Group multi-workspace overview windows by workspace, one workspace per row. This is a clearer alias for `one_workspace_per_row`. |
 | `one_workspace_per_row` | bool | `0` | Keep each workspace on its own row instead of searching for the best row count. |
 
 ### Behavior options
@@ -361,6 +368,25 @@ Behavior notes:
 - In active-workspace overview, workspace changes still use the dedicated overview-to-overview transition path.
 - Toggle switch mode keeps current hover semantics: if `overview_focus_follows_mouse = 1`, moving the pointer can still retarget the final committed selection during the switch session.
 
+### Appearance options
+
+Color options use Hyprland color syntax such as `rgba(rrggbbaa)`.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `backdrop_color` | color | `rgba(0d0f146b)` | Full-monitor overview backdrop. |
+| `focus_hover_color` | color | `rgba(f2f7ff8c)` | Hover focus outline color. |
+| `focus_selected_color` | color | `rgba(3dc7fff2)` | Selected focus outline color. |
+| `focus_title_color` | color | `rgba(ffffffff)` | Selected window title text color. |
+| `focus_hover_thickness` | float | `2` | Hover focus outline thickness. |
+| `focus_selected_thickness` | float | `4` | Selected focus outline thickness. |
+| `drag_preview_color` | color | `rgba(29333d47)` | Drag ghost fill color. |
+| `drag_outline_color` | color | `rgba(f2f7ffd1)` | Drag ghost outline color. |
+| `drag_outline_thickness` | float | `2` | Drag ghost outline thickness. |
+| `close_button_color` | color | `rgba(29292eeb)` | Close button idle fill color. |
+| `close_button_hover_color` | color | `rgba(f24d47f2)` | Close button hover fill color. |
+| `close_button_glyph_color` | color | `rgba(fffffffa)` | Close button glyph color. |
+
 ### Workspace strip options
 
 | Option | Type | Default | Description |
@@ -369,6 +395,15 @@ Behavior notes:
 | `workspace_strip_empty_mode` | string | `existing` | Empty-workspace strip policy. `existing` only shows real workspaces; `continuous` inserts the next missing numbered workspace in each positive-id gap without expanding named-workspace spans. |
 | `workspace_strip_thickness` | int | `160` | Strip thickness. |
 | `workspace_strip_gap` | int | `24` | Gap between the strip and the main overview content. |
+| `workspace_strip_background_color` | color | `rgba(0812243d)` | Strip band background color. |
+| `workspace_strip_inactive_color` | color | `rgba(0d17262e)` | Inactive workspace card fill. |
+| `workspace_strip_active_color` | color | `rgba(1a2e523d)` | Active workspace card fill. |
+| `workspace_strip_empty_color` | color | `rgba(0f1a292e)` | Synthetic empty workspace card fill. |
+| `workspace_strip_new_color` | color | `rgba(1c293b42)` | New-workspace card fill. |
+| `workspace_strip_hover_tint_color` | color | `rgba(ffffff0f)` | Tint drawn over the hovered workspace thumbnail. |
+| `workspace_strip_active_tint_color` | color | `rgba(5794f21a)` | Tint drawn over the active workspace thumbnail. |
+| `workspace_strip_inactive_tint_color` | color | `rgba(00000000)` | Tint drawn over inactive workspace thumbnails. Defaults to transparent. |
+| `workspace_strip_plus_color` | color | `rgba(f7fbffe0)` | Plus glyph color for the new-workspace card. |
 | `hide_bar_when_strip` | bool | `1` | Replace matching exclusive bars with a short self-blur / slide / scale proxy handoff while the strip is shown. |
 | `hide_bar_animation` | bool | `1` | Enable the bar handoff animation. When disabled, matching bars hide/show instantly with the strip. |
 | `hide_bar_animation_blur` | bool | `1` | Enable blur during the bar handoff. When disabled, the handoff keeps alpha / move / scale only. |

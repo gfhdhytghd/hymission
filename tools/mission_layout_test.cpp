@@ -122,6 +122,29 @@ int main() {
     }
 
     {
+        LayoutConfig config = deterministicConfig();
+        config.forceRowGroups = true;
+        config.rowSpacing = 48.0;
+        config.columnSpacing = 24.0;
+        config.preserveInputOrder = false;
+
+        const std::vector<WindowInput> windows = {
+            {.index = 0, .natural = {300, 300, 240, 160}, .label = "workspace-2-a", .rowGroup = 1},
+            {.index = 1, .natural = {0, 0, 240, 160}, .label = "workspace-1", .rowGroup = 0},
+            {.index = 2, .natural = {620, 300, 240, 160}, .label = "workspace-2-b", .rowGroup = 1},
+        };
+
+        const auto slots = engine.compute(windows, {0, 0, 900, 520}, config);
+        ok &= expect(slots.size() == 3, "workspace row grouping should keep all windows");
+        ok &= expect(slots[1].target.centerY() < slots[0].target.centerY() && slots[1].target.centerY() < slots[2].target.centerY(),
+                     "lower workspace ids should occupy earlier rows");
+        ok &= expect(std::abs(slots[0].target.centerY() - slots[2].target.centerY()) < 1.0,
+                     "windows from the same workspace group should share a row");
+        ok &= expect(slots[0].target.centerX() < slots[2].target.centerX(),
+                     "windows within a workspace group should still sort by natural x position");
+    }
+
+    {
         const std::vector<WindowInput> windows = {
             {.index = 0, .natural = {260, 0, 50, 500}, .label = "thin-middle"},
             {.index = 1, .natural = {0, 0, 180, 180}, .label = "left"},
