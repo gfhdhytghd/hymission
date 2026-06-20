@@ -393,7 +393,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     g_rawWindowRenderCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
         .name = "hymission-raw-window-render",
-        .exact = true,
+        .exact = false,
         .fn = hyprctlRawWindowRender,
     });
     if (!g_rawWindowRenderCommand)
@@ -402,7 +402,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     g_captureInputCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
         .name = "hymission-capture-input",
-        .exact = true,
+        .exact = false,
         .fn = hyprctlCaptureInput,
     });
     if (!g_captureInputCommand)
