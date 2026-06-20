@@ -27,6 +27,7 @@
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
+#include <hyprland/src/desktop/view/Group.hpp>
 #include <hyprland/src/desktop/history/WorkspaceHistoryTracker.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
 #include <hyprland/src/event/EventBus.hpp>
@@ -215,6 +216,55 @@ class ScopedFlag {
     bool& m_flag;
     bool  m_previous;
 };
+
+void moveWindowToWorkspaceForThumbnailDrop(const PHLWINDOW& window, const PHLWORKSPACE& workspace) {
+    if (!window || !workspace || !window->m_workspace || !workspace->m_space || !window->layoutTarget())
+        return;
+
+    if (window->m_pinned && workspace->m_isSpecialWorkspace)
+        return;
+
+    if (window->m_workspace == workspace)
+        return;
+
+    const bool fullscreen = window->isFullscreen();
+    const auto fullscreenMode = window->m_fullscreenState.internal;
+    const bool wasVisible = window->m_workspace->isVisible();
+    const auto targetMonitor = workspace->m_monitor.lock();
+    const auto positionOnMonitor = window->m_realPosition->goal() - (window->m_monitor ? window->m_monitor->m_position : Vector2D{});
+
+    if (fullscreen)
+        g_pCompositor->setWindowFullscreenInternal(window, FSMODE_NONE);
+
+    window->moveToWorkspace(workspace);
+    window->m_monitor = workspace->m_monitor;
+
+    if (window->m_isFloating && targetMonitor)
+        window->layoutTarget()->setPositionGlobal(CBox{positionOnMonitor + targetMonitor->m_position, window->layoutTarget()->position().size()});
+
+    window->updateToplevel();
+    if (window->m_ruleApplicator)
+        window->m_ruleApplicator->propertiesChanged(Desktop::Rule::RULE_PROP_ON_WORKSPACE);
+    window->uncacheWindowDecos();
+
+    if (window->m_group)
+        window->m_group->updateWorkspace(workspace);
+
+    g_layoutManager->newTarget(window->layoutTarget(), workspace->m_space);
+
+    if (fullscreen)
+        g_pCompositor->setWindowFullscreenInternal(window, fullscreenMode);
+
+    workspace->updateWindows();
+    if (window->m_workspace)
+        window->m_workspace->updateWindows();
+    g_pCompositor->updateSuspendedStates();
+
+    if (!wasVisible && window->m_workspace && window->m_workspace->isVisible()) {
+        window->alpha(Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE)->setValueAndWarp(0.F);
+        *window->alpha(Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE) = 1.F;
+    }
+}
 
 long getConfigInt(HANDLE handle, const char* name, long fallback) {
     (void)handle;
@@ -2545,12 +2595,12 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
 
             if (targetWorkspace && window && window->m_workspace != targetWorkspace) {
                 const auto sourceWorkspace = window->m_workspace;
-                g_pCompositor->moveWindowToWorkspaceSafe(window, targetWorkspace);
+                moveWindowToWorkspaceForThumbnailDrop(window, targetWorkspace);
                 refreshWorkspaceLayoutSnapshot(sourceWorkspace, true);
                 refreshWorkspaceLayoutSnapshot(targetWorkspace, true);
                 if (g_pAnimationManager)
                     g_pAnimationManager->frameTick();
-                rebuildVisibleState();
+                rebuildVisibleState(window, true);
             }
 
             damageOwnedMonitors();
@@ -10062,9 +10112,10 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
         });
     const bool sameLayoutShape = sameWindowSet && sameMonitorSet && sameRowGroups;
     const bool selectionRelayoutForced = forceRelayout && expandSelectedWindowEnabled();
+    const bool freezeExistingLayout = sameLayoutShape && !forceRelayout;
 
     bool shouldAnimateRelayout = false;
-    if (sameLayoutShape && !selectionRelayoutForced) {
+    if (freezeExistingLayout) {
         for (auto& window : next.windows) {
             const auto* previousManaged = previousManagedForWindow(window.window);
             if (!previousManaged)
@@ -10122,7 +10173,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
     for (const auto& window : m_state.transientClosingWindows)
         appendTransientClosingWindow(window);
 
-    if (sameLayoutShape && !selectionRelayoutForced) {
+    if (freezeExistingLayout) {
         next.relayoutActive = false;
         next.relayoutProgress = 1.0;
         next.relayoutStart = {};
@@ -10159,7 +10210,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
                 break;
         }
         out << " relayout=" << (shouldAnimateRelayout ? 1 : 0);
-        out << " frozenLayout=" << (sameLayoutShape ? 1 : 0);
+        out << " frozenLayout=" << (freezeExistingLayout ? 1 : 0);
         out << " sameRowGroups=" << (sameRowGroups ? 1 : 0);
         out << " forcedSelectionRelayout=" << (selectionRelayoutForced ? 1 : 0);
         debugLog(out.str());
