@@ -3797,8 +3797,7 @@ PHLWORKSPACE OverviewController::activeLayoutWorkspace() const {
 }
 
 bool workspaceRowsEnabled(HANDLE handle) {
-    return getConfigInt(handle, "plugin:hymission:group_by_workspace", 0) != 0 ||
-        getConfigInt(handle, "plugin:hymission:one_workspace_per_row", 0) != 0;
+    return getConfigInt(handle, "plugin:hymission:one_workspace_per_row", 0) != 0;
 }
 
 bool OverviewController::isScrollingWorkspace(const PHLWORKSPACE& workspace) const {

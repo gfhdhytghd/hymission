@@ -270,7 +270,6 @@ plugin {
         switch_toggle_auto_next = 1
         switch_release_key = Super_L
         gesture_invert_vertical = 0
-        group_by_workspace = 0
         one_workspace_per_row = 0
         only_active_workspace = 0
         only_active_monitor = 0
@@ -338,7 +337,6 @@ hl.config({
 | `layout_engine` | string | `grid` | Geometry solver. `grid` keeps the existing row-search layout; `natural`, `apple`, `expose`, and `mission-control` enable the Apple-like natural solver that tries to preserve original window positions while removing overlap. The natural engine attempts every window count and only uses row-search as an emergency fallback if solving fails. |
 | `layout_scale_weight` | float | `1.0` | Weight of preview scale in the layout scoring pass. |
 | `layout_space_weight` | float | `0.10` | Weight of space utilization in the layout scoring pass. |
-| `group_by_workspace` | bool | `0` | Group multi-workspace overview windows by workspace, one workspace per row. This is a clearer alias for `one_workspace_per_row`. |
 | `one_workspace_per_row` | bool | `0` | Keep each workspace on its own row instead of searching for the best row count. |
 
 ### Behavior options

@@ -286,7 +286,6 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     FLOAT_CONF("niri_workspace_scale", 1.0F);
     INT_CONF("niri_scrolling_preview_gap", 0);
     INT_CONF("gesture_invert_vertical", 0);
-    INT_CONF("group_by_workspace", 0);
     INT_CONF("one_workspace_per_row", 0);
     INT_CONF("only_active_workspace", 0);
     INT_CONF("only_active_monitor", 0);
