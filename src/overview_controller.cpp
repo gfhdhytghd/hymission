@@ -1578,6 +1578,15 @@ bool validRawWindowRenderToken(const std::string& token) {
     });
 }
 
+std::string stripHyprctlCommandPrefix(std::string args, std::string_view command) {
+    args = trimCopy(std::move(args));
+    if (args == command)
+        return {};
+    if (args.starts_with(command) && args.size() > command.size() && std::isspace(static_cast<unsigned char>(args[command.size()])) != 0)
+        return trimCopy(args.substr(command.size() + 1));
+    return args;
+}
+
 std::vector<std::string> splitCommaTokens(const std::string& value) {
     std::vector<std::string> tokens;
     std::string              current;
@@ -2463,7 +2472,7 @@ std::string OverviewController::overviewStateJson() const {
 }
 
 std::string OverviewController::handleRawWindowRenderCommand(const std::string& args) {
-    std::istringstream stream(args);
+    std::istringstream stream(stripHyprctlCommandPrefix(args, "hymission-raw-window-render"));
     std::string        action;
     std::string        token;
     stream >> action >> token;
@@ -2498,7 +2507,7 @@ bool OverviewController::rawWindowRenderActive() const {
 }
 
 std::string OverviewController::handleCaptureInputCommand(const std::string& args) {
-    std::istringstream stream(args);
+    std::istringstream stream(stripHyprctlCommandPrefix(args, "hymission-capture-input"));
     std::string        action;
     std::string        token;
     stream >> action >> token;
