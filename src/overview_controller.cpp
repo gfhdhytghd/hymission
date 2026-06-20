@@ -2593,14 +2593,16 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
     }
 
     if (effectiveHoveredIndex) {
+        const auto pressedWindowIndex = m_state.engine == LayoutEngine::Thumbnail ? hitTestPreviewTarget(pointerBeforeUpdate.x, pointerBeforeUpdate.y).value_or(*effectiveHoveredIndex) :
+                                                                                     *effectiveHoveredIndex;
         const auto previousSelectedWindow = selectedWindow();
-        m_state.selectedIndex = effectiveHoveredIndex;
-        m_state.focusDuringOverview = m_state.windows[*effectiveHoveredIndex].window;
+        m_state.selectedIndex = pressedWindowIndex;
+        m_state.focusDuringOverview = m_state.windows[pressedWindowIndex].window;
         m_queuedOverviewSelectionTarget.reset();
         m_queuedOverviewSelectionSyncScrollingSpot = false;
         m_queuedOverviewLiveFocusTarget.reset();
         m_queuedOverviewLiveFocusSyncScrollingSpot = false;
-        m_pressedWindowIndex = effectiveHoveredIndex;
+        m_pressedWindowIndex = pressedWindowIndex;
         m_pressedWindowPointer = g_pInputManager->getMouseCoordsInternal();
         latchHoverSelectionAnchor(m_pressedWindowPointer);
         updateSelectedWindowLayout(previousSelectedWindow);
@@ -7513,6 +7515,36 @@ std::optional<std::size_t> OverviewController::hitTestTarget(double x, double y)
     return hitLayer(false);
 }
 
+std::optional<std::size_t> OverviewController::hitTestPreviewTarget(double x, double y) const {
+    const auto hitLayer = [&](bool floatingOverlay) -> std::optional<std::size_t> {
+        std::optional<std::size_t> bestIndex;
+        double                     bestDistance = std::numeric_limits<double>::infinity();
+
+        for (std::size_t index = 0; index < m_state.windows.size(); ++index) {
+            const auto& managed = m_state.windows[index];
+            if (managed.isNiriFloatingOverlay != floatingOverlay)
+                continue;
+
+            const Rect rect = currentPreviewRect(managed);
+            if (!rectContainsPoint(rect, x, y))
+                continue;
+
+            const double distance = rectCenterDistanceSquared(rect, x, y);
+            if (!bestIndex || distance < bestDistance) {
+                bestIndex = index;
+                bestDistance = distance;
+            }
+        }
+
+        return bestIndex;
+    };
+
+    if (const auto floating = hitLayer(true))
+        return floating;
+
+    return hitLayer(false);
+}
+
 std::optional<std::size_t> OverviewController::hitTestThumbnailDropTarget(double x, double y, std::size_t draggedIndex) const {
     if (m_state.engine != LayoutEngine::Thumbnail || draggedIndex >= m_state.windows.size())
         return std::nullopt;
@@ -10020,10 +10052,16 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
         std::ranges::all_of(next.windows, [&](const ManagedWindow& managed) { return managed.window && previousManagedForWindow(managed.window) != nullptr; });
     const bool sameMonitorSet = next.participatingMonitors.size() == m_state.participatingMonitors.size() &&
         std::ranges::all_of(next.participatingMonitors, [&](const PHLMONITOR& monitor) { return containsHandle(m_state.participatingMonitors, monitor); });
+    const bool sameRowGroups = sameWindowSet &&
+        std::ranges::all_of(next.windows, [&](const ManagedWindow& managed) {
+            const auto* previousManaged = previousManagedForWindow(managed.window);
+            return previousManaged && previousManaged->slot.rowGroup == managed.slot.rowGroup;
+        });
+    const bool sameLayoutShape = sameWindowSet && sameMonitorSet && sameRowGroups;
     const bool selectionRelayoutForced = forceRelayout && expandSelectedWindowEnabled();
 
     bool shouldAnimateRelayout = false;
-    if (sameWindowSet && sameMonitorSet && !selectionRelayoutForced) {
+    if (sameLayoutShape && !selectionRelayoutForced) {
         for (auto& window : next.windows) {
             const auto* previousManaged = previousManagedForWindow(window.window);
             if (!previousManaged)
@@ -10081,7 +10119,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
     for (const auto& window : m_state.transientClosingWindows)
         appendTransientClosingWindow(window);
 
-    if (sameWindowSet && sameMonitorSet && !selectionRelayoutForced) {
+    if (sameLayoutShape && !selectionRelayoutForced) {
         next.relayoutActive = false;
         next.relayoutProgress = 1.0;
         next.relayoutStart = {};
@@ -10118,7 +10156,8 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
                 break;
         }
         out << " relayout=" << (shouldAnimateRelayout ? 1 : 0);
-        out << " frozenLayout=" << ((sameWindowSet && sameMonitorSet) ? 1 : 0);
+        out << " frozenLayout=" << (sameLayoutShape ? 1 : 0);
+        out << " sameRowGroups=" << (sameRowGroups ? 1 : 0);
         out << " forcedSelectionRelayout=" << (selectionRelayoutForced ? 1 : 0);
         debugLog(out.str());
         if (forceRelayout || selectionRelayoutForced) {
