@@ -74,7 +74,7 @@ cmake --build build-cmake -j"$(nproc)"
 ctest --test-dir build-cmake --output-on-failure
 ```
 
-Safe reload sequence on this machine:
+Load:
 
 ```sh
 hyprctl plugin unload "$(pwd)/build/libhymission.so"
@@ -113,7 +113,8 @@ bind = SUPER, M, hymission:debug_current_layout
 | `hymission:close` | Close overview. |
 | `hymission:debug_current_layout` | Compute the current layout and show a notification summary without entering overview. |
 
-Scope arguments:
+! Notice that you may only start the sapture by dispatcher, if you start hyprcapture-ui manually, it may not work correctly.
+##Scope arguments:
 
 - no argument: use the default config-driven collection scope
 - `onlycurrentworkspace`: show only the current regular workspace on the anchor monitor
