@@ -2523,24 +2523,31 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
 
     if (effectiveState == WL_POINTER_BUTTON_STATE_RELEASED) {
         if (m_draggedWindowIndex && *m_draggedWindowIndex < m_state.windows.size()) {
-            const auto window = m_state.windows[*m_draggedWindowIndex].window;
-            const auto hoveredStripIndex = m_state.hoveredStripIndex;
+            const auto  draggedIndex = *m_draggedWindowIndex;
+            const auto  window = m_state.windows[draggedIndex].window;
+            const auto  hoveredStripIndex = m_state.hoveredStripIndex;
+            const auto  thumbnailDropIndex = hitTestThumbnailDropTarget(pointerBeforeUpdate.x, pointerBeforeUpdate.y, draggedIndex);
+            PHLWORKSPACE targetWorkspace;
             clearStripWindowDragState();
 
             if (window && hoveredStripIndex && *hoveredStripIndex < m_state.stripEntries.size()) {
                 const auto& entry = m_state.stripEntries[*hoveredStripIndex];
-                auto        targetWorkspace = entry.workspace ? entry.workspace : g_pCompositor->getWorkspaceByID(entry.workspaceId);
+                targetWorkspace = entry.workspace ? entry.workspace : g_pCompositor->getWorkspaceByID(entry.workspaceId);
                 if (!targetWorkspace && entry.monitor && entry.workspaceId != WORKSPACE_INVALID) {
                     const std::string targetName = entry.workspaceName.empty() ? std::to_string(entry.workspaceId) : entry.workspaceName;
                     targetWorkspace = g_pCompositor->createNewWorkspace(entry.workspaceId, entry.monitor->m_id, targetName);
                 }
+            } else if (window && thumbnailDropIndex && *thumbnailDropIndex < m_state.windows.size()) {
+                const auto targetGroup = m_state.windows[*thumbnailDropIndex].slot.rowGroup;
+                if (targetGroup < m_state.managedWorkspaces.size())
+                    targetWorkspace = m_state.managedWorkspaces[targetGroup];
+            }
 
-                if (targetWorkspace && window->m_workspace != targetWorkspace) {
-                    g_pCompositor->moveWindowToWorkspaceSafe(window, targetWorkspace);
-                    if (g_pAnimationManager)
-                        g_pAnimationManager->frameTick();
-                    rebuildVisibleState();
-                }
+            if (targetWorkspace && window && window->m_workspace != targetWorkspace) {
+                g_pCompositor->moveWindowToWorkspaceSafe(window, targetWorkspace);
+                if (g_pAnimationManager)
+                    g_pAnimationManager->frameTick();
+                rebuildVisibleState();
             }
 
             damageOwnedMonitors();
@@ -7506,6 +7513,64 @@ std::optional<std::size_t> OverviewController::hitTestTarget(double x, double y)
     return hitLayer(false);
 }
 
+std::optional<std::size_t> OverviewController::hitTestThumbnailDropTarget(double x, double y, std::size_t draggedIndex) const {
+    if (m_state.engine != LayoutEngine::Thumbnail || draggedIndex >= m_state.windows.size())
+        return std::nullopt;
+
+    const auto& dragged = m_state.windows[draggedIndex];
+    if (!dragged.window)
+        return std::nullopt;
+
+    const auto sourceWorkspace = dragged.window->m_workspace;
+    const auto sourceGroup = dragged.slot.rowGroup;
+    std::unordered_map<std::size_t, Rect> groupRects;
+    for (const auto& managed : m_state.windows) {
+        const auto targetGroup = managed.slot.rowGroup;
+        if (targetGroup == sourceGroup || targetGroup >= m_state.managedWorkspaces.size())
+            continue;
+
+        const auto targetWorkspace = m_state.managedWorkspaces[targetGroup];
+        if (!targetWorkspace || targetWorkspace == sourceWorkspace)
+            continue;
+
+        const Rect r = currentPreviewRect(managed);
+        auto       it = groupRects.find(targetGroup);
+        if (it == groupRects.end()) {
+            groupRects[targetGroup] = r;
+        } else {
+            Rect& g = it->second;
+            const double oldRight = g.x + g.width;
+            const double oldBottom = g.y + g.height;
+            g.x = std::min(g.x, r.x);
+            g.y = std::min(g.y, r.y);
+            g.width = std::max(oldRight, r.x + r.width) - g.x;
+            g.height = std::max(oldBottom, r.y + r.height) - g.y;
+        }
+    }
+
+    std::optional<std::size_t> bestIndex;
+    double                     bestDistance = std::numeric_limits<double>::infinity();
+    std::unordered_set<std::size_t> visitedGroups;
+    for (std::size_t index = 0; index < m_state.windows.size(); ++index) {
+        const auto targetGroup = m_state.windows[index].slot.rowGroup;
+        if (targetGroup == sourceGroup || visitedGroups.count(targetGroup))
+            continue;
+
+        visitedGroups.insert(targetGroup);
+        auto it = groupRects.find(targetGroup);
+        if (it == groupRects.end() || !rectContainsPoint(it->second, x, y))
+            continue;
+
+        const double distance = rectCenterDistanceSquared(it->second, x, y);
+        if (!bestIndex || distance < bestDistance) {
+            bestIndex = index;
+            bestDistance = distance;
+        }
+    }
+
+    return bestIndex;
+}
+
 std::optional<std::size_t> OverviewController::hitTestStripTarget(double x, double y) const {
     return hitTestWorkspaceStrip(stripRects(), x, y);
 }
@@ -9668,7 +9733,13 @@ void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncR
 
     m_state.hoveredStripIndex = hitTestStripTarget(pointer.x, pointer.y);
     m_state.hoveredCloseIndex = draggingWindow ? std::optional<std::size_t>{} : hitTestCloseButton(pointer.x, pointer.y);
-    m_state.hoveredIndex = (draggingWindow || m_state.hoveredStripIndex) ? std::optional<std::size_t>{} : hitTestTarget(pointer.x, pointer.y);
+    if (draggingWindow) {
+        m_state.hoveredIndex.reset();
+        if (!m_state.hoveredStripIndex && m_draggedWindowIndex)
+            m_state.hoveredIndex = hitTestThumbnailDropTarget(pointer.x, pointer.y, *m_draggedWindowIndex);
+    } else {
+        m_state.hoveredIndex = m_state.hoveredStripIndex ? std::optional<std::size_t>{} : hitTestTarget(pointer.x, pointer.y);
+    }
 
     // Cursor: switch to "pointer" while hovering a close button, restore
     // when leaving. Only call setCursorFromName on transition so we don't

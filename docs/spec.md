@@ -130,6 +130,7 @@ Thumbnail 引擎 (`layout_engine = thumbnail`)：
 - 卡片自上而下堆叠，高度按可用空间等比缩放
 - 适用于需要保留每个 workspace 内窗口精确空间关系的场景
 - 悬停和选中指示器高亮整张卡片的所有窗口
+- 在 thumbnail overview 内拖动窗口到另一个 workspace 的窗口堆上，会把该窗口移动到目标 workspace
 
 可选配置补充：
 

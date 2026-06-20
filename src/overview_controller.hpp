@@ -590,6 +590,7 @@ class OverviewController {
     void                                        restoreSurfaceRenderData(CSurfacePassElement::SRenderData* renderData, const SurfaceRenderDataSnapshot& snapshot) const;
     [[nodiscard]] std::optional<std::size_t> hitTestStripTarget(double x, double y) const;
     [[nodiscard]] std::optional<std::size_t> hitTestTarget(double x, double y) const;
+    [[nodiscard]] std::optional<std::size_t> hitTestThumbnailDropTarget(double x, double y, std::size_t draggedIndex) const;
     [[nodiscard]] Rect         currentPreviewRect(const ManagedWindow& window) const;
     [[nodiscard]] double       visualProgress() const;
     [[nodiscard]] double       relayoutVisualProgress() const;
