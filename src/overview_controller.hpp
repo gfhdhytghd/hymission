@@ -44,6 +44,7 @@ class OverviewController {
   public:
     enum class WindowSetChangeKind {
         General,
+        Open,
         MoveToWorkspace,
     };
 
@@ -592,6 +593,8 @@ class OverviewController {
     [[nodiscard]] std::optional<std::size_t> hitTestTarget(double x, double y) const;
     [[nodiscard]] std::optional<std::size_t> hitTestPreviewTarget(double x, double y) const;
     [[nodiscard]] std::optional<std::size_t> hitTestThumbnailDropTarget(double x, double y, std::size_t draggedIndex) const;
+    [[nodiscard]] PHLWORKSPACE               thumbnailWorkspaceAtPoint(double x, double y) const;
+    [[nodiscard]] bool                       placeNewWindowInHoveredThumbnailWorkspace(const PHLWINDOW& window);
     [[nodiscard]] Rect         currentPreviewRect(const ManagedWindow& window) const;
     [[nodiscard]] double       visualProgress() const;
     [[nodiscard]] double       relayoutVisualProgress() const;
@@ -798,6 +801,7 @@ class OverviewController {
     StripPreviewContext      m_stripPreviewContext;
     std::vector<HiddenStripLayerProxy> m_hiddenStripLayerProxies;
     bool                     m_applyingWorkspaceTransitionCommit = false;
+    bool                     m_applyingThumbnailNewWindowPlacement = false;
     bool                     m_rebuildVisibleStateAfterWorkspaceTransitionCommit = false;
     bool                     m_workspaceTransitionCommitScheduled = false;
     bool                     m_pendingWorkspaceTransitionCommitFollowGesture = false;

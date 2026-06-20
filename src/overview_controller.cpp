@@ -2101,7 +2101,7 @@ bool OverviewController::initialize() {
             info.cancelled = true;
     });
     m_keyboardListener = events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) { handleKeyboard(event, info); });
-    m_windowOpenListener = events.window.open.listen([this](PHLWINDOW window) { handleWindowSetChange(window, WindowSetChangeKind::General); });
+    m_windowOpenListener = events.window.open.listen([this](PHLWINDOW window) { handleWindowSetChange(window, WindowSetChangeKind::Open); });
     m_windowDestroyListener = events.window.destroy.listen([this](PHLWINDOW window) {
         pruneWindowActivationHistory(window);
         handleWindowSetChange(window, WindowSetChangeKind::General, true);
@@ -2741,6 +2741,12 @@ void OverviewController::handleWindowSetChange(PHLWINDOW window, WindowSetChange
 
     if (!isVisible())
         return;
+
+    if (m_applyingThumbnailNewWindowPlacement && kind == WindowSetChangeKind::MoveToWorkspace)
+        return;
+
+    if (kind == WindowSetChangeKind::Open)
+        (void)placeNewWindowInHoveredThumbnailWorkspace(window);
 
     if (kind == WindowSetChangeKind::MoveToWorkspace && window->m_pinned) {
         const auto* managed = managedWindowFor(m_state, window);
@@ -7618,6 +7624,83 @@ std::optional<std::size_t> OverviewController::hitTestThumbnailDropTarget(double
     }
 
     return bestIndex;
+}
+
+PHLWORKSPACE OverviewController::thumbnailWorkspaceAtPoint(double x, double y) const {
+    if (m_state.engine != LayoutEngine::Thumbnail)
+        return {};
+
+    std::unordered_map<std::size_t, Rect> groupRects;
+    for (const auto& managed : m_state.windows) {
+        const auto group = managed.slot.rowGroup;
+        if (group >= m_state.managedWorkspaces.size())
+            continue;
+
+        const Rect r = currentPreviewRect(managed);
+        auto       it = groupRects.find(group);
+        if (it == groupRects.end()) {
+            groupRects[group] = r;
+        } else {
+            Rect& g = it->second;
+            const double oldRight = g.x + g.width;
+            const double oldBottom = g.y + g.height;
+            g.x = std::min(g.x, r.x);
+            g.y = std::min(g.y, r.y);
+            g.width = std::max(oldRight, r.x + r.width) - g.x;
+            g.height = std::max(oldBottom, r.y + r.height) - g.y;
+        }
+    }
+
+    std::optional<std::size_t> bestGroup;
+    double                     bestDistance = std::numeric_limits<double>::infinity();
+    for (const auto& [group, rect] : groupRects) {
+        if (!rectContainsPoint(rect, x, y))
+            continue;
+
+        const double distance = rectCenterDistanceSquared(rect, x, y);
+        if (!bestGroup || distance < bestDistance) {
+            bestGroup = group;
+            bestDistance = distance;
+        }
+    }
+
+    if (!bestGroup || *bestGroup >= m_state.managedWorkspaces.size())
+        return {};
+
+    return m_state.managedWorkspaces[*bestGroup];
+}
+
+bool OverviewController::placeNewWindowInHoveredThumbnailWorkspace(const PHLWINDOW& window) {
+    if (!window || m_applyingThumbnailNewWindowPlacement || m_state.engine != LayoutEngine::Thumbnail || m_workspaceTransition.active || window->m_pinned ||
+        !window->m_workspace)
+        return false;
+
+    if (m_state.phase != Phase::Opening && m_state.phase != Phase::Active)
+        return false;
+
+    const Vector2D pointer = g_pInputManager->getMouseCoordsInternal();
+    const auto     targetWorkspace = thumbnailWorkspaceAtPoint(pointer.x, pointer.y);
+    if (!targetWorkspace || targetWorkspace == window->m_workspace || targetWorkspace->m_isSpecialWorkspace)
+        return false;
+
+    const auto sourceWorkspace = window->m_workspace;
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] place new thumbnail window target=" << debugWindowLabel(window)
+            << " pointer=" << vectorToString(pointer)
+            << " sourceWorkspace=" << debugWorkspaceLabel(sourceWorkspace)
+            << " targetWorkspace=" << debugWorkspaceLabel(targetWorkspace);
+        debugLog(out.str());
+    }
+
+    ScopedFlag placing(m_applyingThumbnailNewWindowPlacement);
+    moveWindowToWorkspaceForThumbnailDrop(window, targetWorkspace);
+    refreshWorkspaceLayoutSnapshot(sourceWorkspace, true);
+    refreshWorkspaceLayoutSnapshot(targetWorkspace, true);
+    if (g_pAnimationManager)
+        g_pAnimationManager->frameTick();
+
+    return window->m_workspace == targetWorkspace;
 }
 
 std::optional<std::size_t> OverviewController::hitTestStripTarget(double x, double y) const {
