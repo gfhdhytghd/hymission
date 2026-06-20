@@ -201,6 +201,7 @@ class OverviewController {
         PHLMONITOR                             ownerMonitor;
         PHLWORKSPACE                           ownerWorkspace;
         CollectionPolicy                       collectionPolicy;
+        LayoutEngine                           engine = LayoutEngine::Grid;
         bool                                   suppressWorkspaceStrip = false;
         std::vector<PHLMONITOR>                participatingMonitors;
         std::vector<PHLWORKSPACE>              managedWorkspaces;
@@ -666,6 +667,7 @@ class OverviewController {
     [[nodiscard]] double                     closeButtonSize() const;
     [[nodiscard]] double                     closeButtonInset() const;
     [[nodiscard]] Rect                       closeButtonRectFor(const ManagedWindow& window) const;
+    [[nodiscard]] Rect                       thumbnailGroupRect(const PHLMONITOR& renderMonitor, std::size_t rowGroup) const;
     [[nodiscard]] std::optional<std::size_t> hitTestCloseButton(double x, double y) const;
     void                                     renderCloseButtons() const;
     void                                     requestCloseHoveredWindow();
