@@ -3547,6 +3547,29 @@ LayoutConfig OverviewController::loadLayoutConfig() const {
 
 LayoutConfig OverviewController::layoutConfigForState(const State& state) const {
     LayoutConfig config = loadLayoutConfig();
+    const auto applyEngineOverride = [&](const char* primaryName, const char* fallbackName = nullptr) {
+        std::string value = trimCopy(getConfigString(m_handle, primaryName, ""));
+        if (value.empty() && fallbackName)
+            value = trimCopy(getConfigString(m_handle, fallbackName, ""));
+        if (!value.empty())
+            config.engine = parseLayoutEngine(std::move(value));
+    };
+
+    switch (state.collectionPolicy.requestedScope) {
+        case ScopeOverride::ForceAll:
+            applyEngineOverride("plugin:hymission:layout_engine_forceall", "plugin:hymission:layout_engine_all");
+            break;
+        case ScopeOverride::OnlyCurrentWorkspace:
+            applyEngineOverride("plugin:hymission:layout_engine_onlycurrentworkspace");
+            break;
+        case ScopeOverride::Default:
+            if (state.collectionPolicy.onlyActiveWorkspace)
+                applyEngineOverride("plugin:hymission:layout_engine_onlycurrentworkspace");
+            else
+                applyEngineOverride("plugin:hymission:layout_engine_all");
+            break;
+    }
+
     if (state.collectionPolicy.onlyActiveWorkspace)
         config.maxPreviewScale = getConfigFloat(m_handle, "plugin:hymission:workspace_overview_max_preview_scale", config.maxPreviewScale);
     return config;

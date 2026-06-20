@@ -331,6 +331,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("debug_logs", 0);
     INT_CONF("debug_surface_logs", 0);
     STRING_CONF("layout_engine", "grid");
+    STRING_CONF("layout_engine_forceall", "");
+    STRING_CONF("layout_engine_all", "");
+    STRING_CONF("layout_engine_onlycurrentworkspace", "");
     STRING_CONF("workspace_strip_anchor", "left");
     STRING_CONF("workspace_strip_empty_mode", "existing");
     STRING_CONF("switch_release_key", "Super_L");
