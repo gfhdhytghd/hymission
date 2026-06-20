@@ -7500,44 +7500,8 @@ void OverviewController::restoreSurfaceRenderData(CSurfacePassElement::SRenderDa
 }
 
 std::optional<std::size_t> OverviewController::hitTestTarget(double x, double y) const {
-    if (m_state.engine == LayoutEngine::Thumbnail) {
-        std::unordered_map<std::size_t, Rect> groupRects;
-        for (const auto& w : m_state.windows) {
-            const Rect r = currentPreviewRect(w);
-            auto it = groupRects.find(w.slot.rowGroup);
-            if (it == groupRects.end()) {
-                groupRects[w.slot.rowGroup] = r;
-            } else {
-                Rect& g = it->second;
-                const double oldRight = g.x + g.width;
-                const double oldBottom = g.y + g.height;
-                g.x = std::min(g.x, r.x);
-                g.y = std::min(g.y, r.y);
-                g.width = std::max(oldRight, r.x + r.width) - g.x;
-                g.height = std::max(oldBottom, r.y + r.height) - g.y;
-            }
-        }
-        std::optional<std::size_t> bestIndex;
-        double                     bestDistance = std::numeric_limits<double>::infinity();
-        std::unordered_set<std::size_t> visitedGroups;
-        for (std::size_t i = 0; i < m_state.windows.size(); ++i) {
-            const auto rg = m_state.windows[i].slot.rowGroup;
-            if (visitedGroups.count(rg))
-                continue;
-            visitedGroups.insert(rg);
-            auto it = groupRects.find(rg);
-            if (it == groupRects.end())
-                continue;
-            if (!rectContainsPoint(it->second, x, y))
-                continue;
-            const double distance = rectCenterDistanceSquared(it->second, x, y);
-            if (!bestIndex || distance < bestDistance) {
-                bestIndex = i;
-                bestDistance = distance;
-            }
-        }
-        return bestIndex;
-    }
+    if (m_state.engine == LayoutEngine::Thumbnail)
+        return hitTestPreviewTarget(x, y);
 
     const auto hitLayer = [&](bool floatingOverlay) -> std::optional<std::size_t> {
         std::optional<std::size_t> bestIndex;
