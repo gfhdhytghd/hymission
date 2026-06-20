@@ -27,6 +27,7 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(HYPR_DEPS REQUIRED hyprland)
 pkg_check_modules(LUA REQUIRED lua)
+find_package(nlohmann_json REQUIRED)
 
 add_library(hymission SHARED
   src/main.cpp
@@ -44,7 +45,7 @@ foreach(inc ${HYPR_DEPS_INCLUDE_DIRS})
 endforeach()
 
 target_link_directories(hymission PRIVATE ${HYPR_DEPS_LIBRARY_DIRS} ${LUA_LIBRARY_DIRS})
-target_link_libraries(hymission PRIVATE ${HYPR_DEPS_LIBRARIES} ${LUA_LIBRARIES})
+target_link_libraries(hymission PRIVATE ${HYPR_DEPS_LIBRARIES} ${LUA_LIBRARIES} nlohmann_json::nlohmann_json)
 
 add_executable(hymission-layout-demo
   tools/layout_demo.cpp

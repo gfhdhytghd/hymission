@@ -18,6 +18,8 @@ extern "C" {
 
 inline HANDLE g_pluginHandle = nullptr;
 inline std::unique_ptr<hymission::OverviewController> g_overviewController;
+inline SP<SHyprCtlCommand> g_overviewStateCommand;
+inline SP<SHyprCtlCommand> g_rawWindowRenderCommand;
 
 namespace {
 bool addConfigValue(SP<Config::Values::IValue> value) {
@@ -64,6 +66,20 @@ SDispatchResult dispatchClose(const std::string&) {
 
 SDispatchResult dispatchDebugCurrentLayout(const std::string&) {
     return g_overviewController ? g_overviewController->debugCurrentLayout() : SDispatchResult{.success = false, .error = "overview controller unavailable"};
+}
+
+std::string hyprctlOverviewState(eHyprCtlOutputFormat, std::string) {
+    if (g_overviewController)
+        return g_overviewController->overviewStateJson();
+
+    return "{\"version\":1,\"active\":false,\"windows\":[]}\n";
+}
+
+std::string hyprctlRawWindowRender(eHyprCtlOutputFormat, std::string args) {
+    if (g_overviewController)
+        return g_overviewController->handleRawWindowRenderCommand(args);
+
+    return "error: overview controller unavailable\n";
 }
 
 int luaDispatchResult(lua_State* L, const SDispatchResult& result) {
@@ -358,6 +374,24 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     registerDispatcher("hymission:close", dispatchClose);
     registerDispatcher("hymission:debug_current_layout", dispatchDebugCurrentLayout);
 
+    g_overviewStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
+        .name = "hymission-overview-state",
+        .exact = true,
+        .fn = hyprctlOverviewState,
+    });
+    if (!g_overviewStateCommand)
+        HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to register hyprctl command hymission-overview-state",
+                                     CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+
+    g_rawWindowRenderCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
+        .name = "hymission-raw-window-render",
+        .exact = true,
+        .fn = hyprctlRawWindowRender,
+    });
+    if (!g_rawWindowRenderCommand)
+        HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to register hyprctl command hymission-raw-window-render",
+                                     CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+
     if (Config::mgr() && Config::mgr()->type() == Config::CONFIG_LUA) {
         const auto registerLuaFunction = [&](const char* name, PLUGIN_LUA_FN fn) {
             if (!HyprlandAPI::addLuaFunction(g_pluginHandle, "hymission", name, fn)) {
@@ -390,5 +424,13 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    if (g_overviewStateCommand) {
+        HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_overviewStateCommand);
+        g_overviewStateCommand.reset();
+    }
+    if (g_rawWindowRenderCommand) {
+        HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_rawWindowRenderCommand);
+        g_rawWindowRenderCommand.reset();
+    }
     g_overviewController.reset();
 }

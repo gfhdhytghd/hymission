@@ -66,6 +66,9 @@ class OverviewController {
     [[nodiscard]] SDispatchResult close();
     [[nodiscard]] SDispatchResult toggle(const std::string& args = {});
     [[nodiscard]] SDispatchResult debugCurrentLayout() const;
+    [[nodiscard]] std::string     overviewStateJson() const;
+    [[nodiscard]] std::string     handleRawWindowRenderCommand(const std::string& args);
+    [[nodiscard]] bool            rawWindowRenderActive() const;
     [[nodiscard]] bool            allowsWorkspaceSwitchInOverviewForGestures() const;
     [[nodiscard]] bool            blocksWorkspaceSwitchInOverviewForGestures() const;
     [[nodiscard]] bool            beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction);
@@ -654,6 +657,7 @@ class OverviewController {
     void debugLog(const std::string& message) const;
     void debugSurfaceLog(const std::string& message) const;
     [[nodiscard]] std::string debugWorkspaceLabel(const PHLWORKSPACE& workspace) const;
+    [[nodiscard]] std::string overviewWindowAddress(const PHLWINDOW& window) const;
     [[nodiscard]] std::string debugWindowLabel(const PHLWINDOW& window) const;
     void logOverviewLayoutState(const char* context, const State& state) const;
     void logScrollingWorkspaceSpotState(const char* context, const PHLWORKSPACE& workspace, const PHLWINDOW& focusWindow = {}) const;
@@ -810,6 +814,8 @@ class OverviewController {
     bool                     m_toggleSwitchSessionActive = false;
     bool                     m_toggleSwitchReleaseArmed = false;
     std::size_t              m_stripSnapshotRenderDepth = 0;
+    std::size_t              m_externalRawWindowRenderDepth = 0;
+    std::string              m_externalRawWindowRenderToken;
     bool                     m_stripSnapshotsDirty = false;
     bool                     m_stripSnapshotRefreshScheduled = false;
     bool                     m_primaryButtonPressed = false;

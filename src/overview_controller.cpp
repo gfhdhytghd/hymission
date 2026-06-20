@@ -19,6 +19,8 @@
 #include <vector>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
+#include <nlohmann/json.hpp>
+
 #define private public
 #include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
 #include <hyprland/src/managers/input/trackpad/TrackpadGestures.hpp>
@@ -1557,6 +1559,24 @@ std::string trimCopy(std::string value) {
     return value;
 }
 
+nlohmann::json rectJson(const Rect& rect) {
+    return nlohmann::json{
+        {"x", rect.x},
+        {"y", rect.y},
+        {"width", rect.width},
+        {"height", rect.height},
+    };
+}
+
+bool validRawWindowRenderToken(const std::string& token) {
+    if (token.empty() || token.size() > 128)
+        return false;
+
+    return std::ranges::all_of(token, [](unsigned char ch) {
+        return std::isalnum(ch) != 0 || ch == '-' || ch == '_' || ch == '.';
+    });
+}
+
 std::vector<std::string> splitCommaTokens(const std::string& value) {
     std::vector<std::string> tokens;
     std::string              current;
@@ -2386,8 +2406,101 @@ SDispatchResult OverviewController::debugCurrentLayout() const {
     return {};
 }
 
+std::string OverviewController::overviewStateJson() const {
+    const auto phaseName = [this]() {
+        switch (m_state.phase) {
+            case Phase::Inactive:
+                return "inactive";
+            case Phase::Opening:
+                return "opening";
+            case Phase::Active:
+                return "active";
+            case Phase::ClosingSettle:
+                return "closing_settle";
+            case Phase::Closing:
+                return "closing";
+        }
+        return "unknown";
+    };
+
+    nlohmann::json root{
+        {"version", 1},
+        {"active", isVisible()},
+        {"phase", phaseName()},
+        {"windows", nlohmann::json::array()},
+    };
+
+    if (!isVisible())
+        return root.dump() + "\n";
+
+    std::size_t zIndex = 0;
+    for (const auto& managed : m_state.windows) {
+        if (!managed.window)
+            continue;
+
+        const Rect content = currentPreviewRect(managed);
+        if (content.width <= 0.0 || content.height <= 0.0)
+            continue;
+
+        const Rect selection = overviewBorderOuterRectForWindow(managed.window, content);
+        nlohmann::json item{
+            {"address", overviewWindowAddress(managed.window)},
+            {"title", managed.window->m_title},
+            {"class", managed.window->m_class},
+            {"contentGeometry", rectJson(content)},
+            {"selectionGeometry", rectJson(selection)},
+            {"zIndex", zIndex++},
+        };
+
+        if (managed.targetMonitor)
+            item["monitor"] = managed.targetMonitor->m_name;
+
+        root["windows"].push_back(std::move(item));
+    }
+
+    return root.dump() + "\n";
+}
+
+std::string OverviewController::handleRawWindowRenderCommand(const std::string& args) {
+    std::istringstream stream(args);
+    std::string        action;
+    std::string        token;
+    stream >> action >> token;
+
+    action = trimCopy(action);
+    token = trimCopy(token);
+
+    if ((action != "begin" && action != "end") || !validRawWindowRenderToken(token))
+        return "error: usage: begin|end <token>\n";
+
+    if (action == "begin") {
+        if (m_externalRawWindowRenderDepth > 0 && m_externalRawWindowRenderToken != token)
+            return "error: raw window render already active\n";
+
+        m_externalRawWindowRenderToken = token;
+        ++m_externalRawWindowRenderDepth;
+        return "ok\n";
+    }
+
+    if (m_externalRawWindowRenderDepth == 0 || m_externalRawWindowRenderToken != token)
+        return "error: raw window render token mismatch\n";
+
+    --m_externalRawWindowRenderDepth;
+    if (m_externalRawWindowRenderDepth == 0)
+        m_externalRawWindowRenderToken.clear();
+
+    return "ok\n";
+}
+
+bool OverviewController::rawWindowRenderActive() const {
+    return m_externalRawWindowRenderDepth > 0;
+}
+
 void OverviewController::renderStage(eRenderStage stage) {
     if (m_stripSnapshotRenderDepth > 0)
+        return;
+
+    if (rawWindowRenderActive())
         return;
 
     if (!isVisible())
@@ -2938,6 +3051,9 @@ bool OverviewController::shouldRenderWindowHook(const PHLWINDOW& window, const P
     if (!m_shouldRenderWindowOriginal)
         return false;
 
+    if (rawWindowRenderActive())
+        return m_shouldRenderWindowOriginal(g_pHyprRenderer.get(), window, monitor);
+
     if (isVisible() && window && monitor && ownsMonitor(monitor) && hasManagedWindow(window) && previewMonitorForWindow(window) == monitor) {
         if (debugLogsEnabled()) {
             std::ostringstream out;
@@ -2975,6 +3091,11 @@ bool OverviewController::shouldHideLayerSurface(const PHLLS& layer, const PHLMON
 void OverviewController::renderLayerHook(void* rendererThisptr, PHLLS layer, PHLMONITOR monitor, const Time::steady_tp& now, bool popups, bool lockscreen) {
     if (!m_renderLayerOriginal)
         return;
+
+    if (rawWindowRenderActive()) {
+        m_renderLayerOriginal(rendererThisptr, layer, monitor, now, popups, lockscreen);
+        return;
+    }
 
     if (!lockscreen && shouldHideLayerSurface(layer, monitor)) {
         if (!hideBarAnimationEffectsEnabled())
@@ -3114,7 +3235,8 @@ void OverviewController::borderDrawHook(void* borderDecorationThisptr, const PHL
     }
 
     const auto window = g_pHyprRenderer->m_renderData.currentWindow.lock();
-    if (!window || !monitor || !isVisible() || !ownsMonitor(monitor) || !hasManagedWindow(window) || previewMonitorForWindow(window) != monitor) {
+    if (rawWindowRenderActive() || !window || !monitor || !isVisible() || !ownsMonitor(monitor) || !hasManagedWindow(window) ||
+        previewMonitorForWindow(window) != monitor) {
         m_borderDrawOriginal(borderDecorationThisptr, monitor, alpha);
         return;
     }
@@ -3128,7 +3250,8 @@ void OverviewController::shadowDrawHook(void* shadowDecorationThisptr, const PHL
     }
 
     const auto window = g_pHyprRenderer->m_renderData.currentWindow.lock();
-    if (!window || !monitor || !isVisible() || !ownsMonitor(monitor) || !hasManagedWindow(window) || previewMonitorForWindow(window) != monitor) {
+    if (rawWindowRenderActive() || !window || !monitor || !isVisible() || !ownsMonitor(monitor) || !hasManagedWindow(window) ||
+        previewMonitorForWindow(window) != monitor) {
         m_shadowDrawOriginal(shadowDecorationThisptr, monitor, alpha);
         return;
     }
@@ -3140,6 +3263,11 @@ void OverviewController::calculateUVForSurfaceHook(const PHLWINDOW& window, SP<C
                                                    const Vector2D& projSizeUnscaled, bool fixMisalignedFSV1) {
     if (!m_calculateUVForSurfaceOriginal)
         return;
+
+    if (rawWindowRenderActive()) {
+        m_calculateUVForSurfaceOriginal(g_pHyprRenderer.get(), window, std::move(surface), monitor, main, projSize, projSizeUnscaled, fixMisalignedFSV1);
+        return;
+    }
 
     Vector2D adjustedProjSize = projSize;
     Vector2D adjustedProjSizeUnscaled = projSizeUnscaled;
@@ -3435,7 +3563,7 @@ std::vector<UP<IPassElement>> OverviewController::surfaceDrawHook(void* surfaceP
         return {};
     }
 
-    if (m_surfaceRenderDataTransformDepth > 0) {
+    if (rawWindowRenderActive() || m_surfaceRenderDataTransformDepth > 0) {
         return m_surfaceDrawOriginal(surfacePassThisptr);
     }
 
@@ -3457,6 +3585,9 @@ bool OverviewController::surfaceNeedsLiveBlurHook(void* surfacePassThisptr) {
     if (!m_surfaceNeedsLiveBlurOriginal)
         return false;
 
+    if (rawWindowRenderActive())
+        return m_surfaceNeedsLiveBlurOriginal(surfacePassThisptr);
+
     if (shouldSuppressSurfaceBlur(surfacePassThisptr))
         return false;
 
@@ -3477,6 +3608,9 @@ bool OverviewController::surfaceNeedsPrecomputeBlurHook(void* surfacePassThisptr
     if (!m_surfaceNeedsPrecomputeBlurOriginal)
         return false;
 
+    if (rawWindowRenderActive())
+        return m_surfaceNeedsPrecomputeBlurOriginal(surfacePassThisptr);
+
     if (shouldSuppressSurfaceBlur(surfacePassThisptr))
         return false;
 
@@ -3496,6 +3630,9 @@ bool OverviewController::surfaceNeedsPrecomputeBlurHook(void* surfacePassThisptr
 CBox OverviewController::surfaceTexBoxHook(void* surfacePassThisptr) {
     if (!m_surfaceTexBoxOriginal)
         return {};
+
+    if (rawWindowRenderActive())
+        return m_surfaceTexBoxOriginal(surfacePassThisptr);
 
     if (m_surfaceRenderDataTransformDepth > 0) {
         CBox box = m_surfaceTexBoxOriginal(surfacePassThisptr);
@@ -3524,7 +3661,7 @@ std::optional<CBox> OverviewController::surfaceBoundingBoxHook(void* surfacePass
     if (!m_surfaceBoundingBoxOriginal)
         return {};
 
-    if (m_surfaceRenderDataTransformDepth > 0)
+    if (rawWindowRenderActive() || m_surfaceRenderDataTransformDepth > 0)
         return m_surfaceBoundingBoxOriginal(surfacePassThisptr);
 
     CSurfacePassElement::SRenderData* renderData = nullptr;
@@ -3544,7 +3681,7 @@ CRegion OverviewController::surfaceOpaqueRegionHook(void* surfacePassThisptr) {
     if (!m_surfaceOpaqueRegionOriginal)
         return {};
 
-    if (m_surfaceRenderDataTransformDepth > 0)
+    if (rawWindowRenderActive() || m_surfaceRenderDataTransformDepth > 0)
         return m_surfaceOpaqueRegionOriginal(surfacePassThisptr);
 
     CSurfacePassElement::SRenderData* renderData = nullptr;
@@ -3572,7 +3709,7 @@ CRegion OverviewController::surfaceVisibleRegionHook(void* surfacePassThisptr, b
     if (!m_surfaceVisibleRegionOriginal)
         return {};
 
-    if (m_surfaceRenderDataTransformDepth > 0)
+    if (rawWindowRenderActive() || m_surfaceRenderDataTransformDepth > 0)
         return m_surfaceVisibleRegionOriginal(surfacePassThisptr, cancel);
 
     CSurfacePassElement::SRenderData* renderData = nullptr;
@@ -6986,7 +7123,7 @@ Rect OverviewController::overviewContentTargetForSlot(const PHLWINDOW& window, c
 }
 
 std::optional<OverviewController::WindowTransform> OverviewController::windowTransformFor(const PHLWINDOW& window, const PHLMONITOR& monitor) const {
-    if (!window || !monitor || !isVisible() || !ownsMonitor(monitor))
+    if (rawWindowRenderActive() || !window || !monitor || !isVisible() || !ownsMonitor(monitor))
         return std::nullopt;
 
     const auto* managed = managedWindowFor(window);
@@ -10425,6 +10562,15 @@ std::string OverviewController::debugWorkspaceLabel(const PHLWORKSPACE& workspac
         out << "@" << monitor->m_name;
     else
         out << "@<no-monitor>";
+    return out.str();
+}
+
+std::string OverviewController::overviewWindowAddress(const PHLWINDOW& window) const {
+    if (!window)
+        return {};
+
+    std::ostringstream out;
+    out << "0x" << std::hex << reinterpret_cast<uintptr_t>(window.get());
     return out.str();
 }
 
