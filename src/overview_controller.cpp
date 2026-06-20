@@ -2544,7 +2544,10 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
             }
 
             if (targetWorkspace && window && window->m_workspace != targetWorkspace) {
+                const auto sourceWorkspace = window->m_workspace;
                 g_pCompositor->moveWindowToWorkspaceSafe(window, targetWorkspace);
+                refreshWorkspaceLayoutSnapshot(sourceWorkspace, true);
+                refreshWorkspaceLayoutSnapshot(targetWorkspace, true);
                 if (g_pAnimationManager)
                     g_pAnimationManager->frameTick();
                 rebuildVisibleState();
@@ -6664,18 +6667,18 @@ bool OverviewController::shouldUseGoalGeometryForStateSnapshot(const PHLWINDOW& 
     return hasUsableWindowSize(window->m_realSize->goal());
 }
 
-void OverviewController::refreshWorkspaceLayoutSnapshot(const PHLWORKSPACE& workspace) const {
+void OverviewController::refreshWorkspaceLayoutSnapshot(const PHLWORKSPACE& workspace, bool force) const {
     if (!workspace || !workspace->m_space)
         return;
 
-    const bool shouldRefresh = !workspace->isVisible() || isScrollingWorkspace(workspace);
+    const bool shouldRefresh = force || !workspace->isVisible() || isScrollingWorkspace(workspace);
     if (!shouldRefresh)
         return;
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] refresh workspace layout snapshot workspace=" << debugWorkspaceLabel(workspace) << " visible=" << (workspace->isVisible() ? 1 : 0)
-            << " scrolling=" << (isScrollingWorkspace(workspace) ? 1 : 0);
+            << " scrolling=" << (isScrollingWorkspace(workspace) ? 1 : 0) << " force=" << (force ? 1 : 0);
         debugLog(out.str());
     }
 

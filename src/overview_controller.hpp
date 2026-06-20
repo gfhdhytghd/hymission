@@ -535,7 +535,7 @@ class OverviewController {
     [[nodiscard]] Rect         liveGlobalRectForWindow(const PHLWINDOW& window) const;
     [[nodiscard]] Rect         goalGlobalRectForWindow(const PHLWINDOW& window) const;
     [[nodiscard]] bool         shouldUseGoalGeometryForStateSnapshot(const PHLWINDOW& window) const;
-    void                       refreshWorkspaceLayoutSnapshot(const PHLWORKSPACE& workspace) const;
+    void                       refreshWorkspaceLayoutSnapshot(const PHLWORKSPACE& workspace, bool force = false) const;
     [[nodiscard]] std::optional<Vector2D> predictedScrollingExitTranslation(const PHLWINDOW& window) const;
     [[nodiscard]] PHLWORKSPACE activeWorkspaceForAnimationEndpoint(const ManagedWindow& window, const PHLWORKSPACE& activeWorkspaceOverride = {}) const;
     [[nodiscard]] bool         shouldUseOffscreenAnimationEndpoint(const ManagedWindow& window, const State& state,
