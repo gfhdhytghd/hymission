@@ -195,6 +195,7 @@ constexpr auto   HOVER_SELECTION_RETARGET_COOLDOWN = std::chrono::milliseconds(s
 // filters out incidental cross-through.
 constexpr auto   HOVER_SELECTION_RETARGET_DWELL = std::chrono::milliseconds(150);
 constexpr auto   TOGGLE_SWITCH_RELEASE_POLL_INTERVAL = std::chrono::milliseconds(16);
+constexpr auto   CAPTURE_INPUT_SUPPRESS_TIMEOUT = std::chrono::seconds(10);
 constexpr auto   MISSION_CONTROL_WORKSPACE_NAME = "Mission Control";
 constexpr auto   MISSION_CONTROL_HIDDEN_WORKSPACE_PREFIX = "__hymission_hidden__:";
 OverviewController* g_controller = nullptr;
@@ -2494,6 +2495,46 @@ std::string OverviewController::handleRawWindowRenderCommand(const std::string& 
 
 bool OverviewController::rawWindowRenderActive() const {
     return m_externalRawWindowRenderDepth > 0;
+}
+
+std::string OverviewController::handleCaptureInputCommand(const std::string& args) {
+    std::istringstream stream(args);
+    std::string        action;
+    std::string        token;
+    stream >> action >> token;
+
+    action = trimCopy(action);
+    token = trimCopy(token);
+
+    if ((action != "begin" && action != "end") || !validRawWindowRenderToken(token))
+        return "error: usage: begin|end <token>\n";
+
+    if (action == "begin") {
+        if (captureInputSuppressed() && m_externalCaptureInputToken != token)
+            return "error: capture input suppression already active\n";
+
+        m_externalCaptureInputToken = token;
+        m_externalCaptureInputSuppressUntil = std::chrono::steady_clock::now() + CAPTURE_INPUT_SUPPRESS_TIMEOUT;
+        clearStripWindowDragState();
+        m_primaryButtonPressed = false;
+        m_closeButtonPressLatched = false;
+        return "ok\n";
+    }
+
+    if (m_externalCaptureInputToken == token || !captureInputSuppressed()) {
+        m_externalCaptureInputToken.clear();
+        m_externalCaptureInputSuppressUntil = {};
+        clearStripWindowDragState();
+        m_primaryButtonPressed = false;
+        m_closeButtonPressLatched = false;
+        return "ok\n";
+    }
+
+    return "error: capture input suppression token mismatch\n";
+}
+
+bool OverviewController::captureInputSuppressed() const {
+    return !m_externalCaptureInputToken.empty() && std::chrono::steady_clock::now() < m_externalCaptureInputSuppressUntil;
 }
 
 void OverviewController::renderStage(eRenderStage stage) {
@@ -6415,6 +6456,9 @@ bool OverviewController::isVisible() const {
 }
 
 bool OverviewController::shouldHandleInput() const {
+    if (captureInputSuppressed())
+        return false;
+
     if (m_gestureSession.active || m_workspaceTransition.active || m_workspaceSwipeGesture.active)
         return false;
 

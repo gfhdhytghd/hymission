@@ -20,6 +20,7 @@ inline HANDLE g_pluginHandle = nullptr;
 inline std::unique_ptr<hymission::OverviewController> g_overviewController;
 inline SP<SHyprCtlCommand> g_overviewStateCommand;
 inline SP<SHyprCtlCommand> g_rawWindowRenderCommand;
+inline SP<SHyprCtlCommand> g_captureInputCommand;
 
 namespace {
 bool addConfigValue(SP<Config::Values::IValue> value) {
@@ -78,6 +79,13 @@ std::string hyprctlOverviewState(eHyprCtlOutputFormat, std::string) {
 std::string hyprctlRawWindowRender(eHyprCtlOutputFormat, std::string args) {
     if (g_overviewController)
         return g_overviewController->handleRawWindowRenderCommand(args);
+
+    return "error: overview controller unavailable\n";
+}
+
+std::string hyprctlCaptureInput(eHyprCtlOutputFormat, std::string args) {
+    if (g_overviewController)
+        return g_overviewController->handleCaptureInputCommand(args);
 
     return "error: overview controller unavailable\n";
 }
@@ -392,6 +400,15 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to register hyprctl command hymission-raw-window-render",
                                      CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
 
+    g_captureInputCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
+        .name = "hymission-capture-input",
+        .exact = true,
+        .fn = hyprctlCaptureInput,
+    });
+    if (!g_captureInputCommand)
+        HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to register hyprctl command hymission-capture-input",
+                                     CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+
     if (Config::mgr() && Config::mgr()->type() == Config::CONFIG_LUA) {
         const auto registerLuaFunction = [&](const char* name, PLUGIN_LUA_FN fn) {
             if (!HyprlandAPI::addLuaFunction(g_pluginHandle, "hymission", name, fn)) {
@@ -431,6 +448,10 @@ APICALL EXPORT void PLUGIN_EXIT() {
     if (g_rawWindowRenderCommand) {
         HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_rawWindowRenderCommand);
         g_rawWindowRenderCommand.reset();
+    }
+    if (g_captureInputCommand) {
+        HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_captureInputCommand);
+        g_captureInputCommand.reset();
     }
     g_overviewController.reset();
 }

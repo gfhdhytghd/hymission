@@ -68,7 +68,9 @@ class OverviewController {
     [[nodiscard]] SDispatchResult debugCurrentLayout() const;
     [[nodiscard]] std::string     overviewStateJson() const;
     [[nodiscard]] std::string     handleRawWindowRenderCommand(const std::string& args);
+    [[nodiscard]] std::string     handleCaptureInputCommand(const std::string& args);
     [[nodiscard]] bool            rawWindowRenderActive() const;
+    [[nodiscard]] bool            captureInputSuppressed() const;
     [[nodiscard]] bool            allowsWorkspaceSwitchInOverviewForGestures() const;
     [[nodiscard]] bool            blocksWorkspaceSwitchInOverviewForGestures() const;
     [[nodiscard]] bool            beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction);
@@ -816,6 +818,8 @@ class OverviewController {
     std::size_t              m_stripSnapshotRenderDepth = 0;
     std::size_t              m_externalRawWindowRenderDepth = 0;
     std::string              m_externalRawWindowRenderToken;
+    std::string              m_externalCaptureInputToken;
+    std::chrono::steady_clock::time_point m_externalCaptureInputSuppressUntil = {};
     bool                     m_stripSnapshotsDirty = false;
     bool                     m_stripSnapshotRefreshScheduled = false;
     bool                     m_primaryButtonPressed = false;
