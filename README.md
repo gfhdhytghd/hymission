@@ -804,3 +804,37 @@ fi
 
 > [!NOTE]
 > `hl.unbind` does not reliably remove bindings created by Omarchy's `o.bind()` wrapper during config load. The override-hook pattern above is the most reliable approach.
+
+## Troubleshooting
+
+### Bindings don't register after plugin load
+
+**Symptom**: `SUPER+TAB` or other bindings don't work despite the plugin being loaded.
+
+**Cause**: In Lua config mode, `hl.plugin.hymission` is nil when the config first runs because `hl.exec_cmd("hyprctl plugin load ...")` is asynchronous. If your binding code is not guarded, it silently fails.
+
+**Fix**: Guard all `hl.plugin.hymission.*` calls:
+
+```lua
+if hl.plugin and hl.plugin.hymission then
+  hl.bind("SUPER + TAB", hl.plugin.hymission.toggle)
+end
+```
+
+The plugin triggers `reloadConfig()` after loading, which re-runs your Lua config with the plugin available.
+
+### Gestures don't work
+
+**Symptom**: Trackpad gestures (swipe, pinch) have no effect.
+
+**Check**: Verify gesture registration with `hyprctl configerrors`. Also ensure the gesture is not conflicting with another gesture using the same finger count and direction (e.g. 3-finger horizontal workspace swipe and 3-finger drag).
+
+**Fix**: If gestures conflict, disable competing features (e.g. `drag_3fg = 0` in touchpad config to free 3-finger gestures for overview).
+
+### Plugin loads but overview shows empty
+
+**Symptom**: Overview opens but shows no windows.
+
+**Check**: Run `hyprctl dispatch hymission:debug_current_layout` to see a notification with the layout count and preview rectangles.
+
+**Fix**: Verify `show_special` and `only_active_monitor` settings match your expected scope.
