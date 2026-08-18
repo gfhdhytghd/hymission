@@ -671,3 +671,61 @@ Project docs:
 
 - The repository includes a root [`hyprpm.toml`](hyprpm.toml) manifest, which is expected by `hyprpm`.
 - For inclusion in the official `hyprland-plugins` repository, Hyprland asks plugin authors to coordinate with the repository maintainer first.
+
+## Lua Config Mode (Hyprland 0.55+)
+
+Since Hyprland 0.55, the default configuration format is Lua. If your setup uses `configProvider: lua` (check with `hyprctl systeminfo`), follow these notes.
+
+### Loading order
+
+In Lua config mode, `hyprland.conf` is **not loaded**. Your entry point is `~/.config/hypr/hyprland.lua`. The `source` directive only works for `.conf` (hyprlang) files — it will silently ignore `.lua` files.
+
+Load hymission via `require` in your `hyprland.lua`:
+
+```lua
+-- ~/.config/hypr/hyprland.lua
+require("default.hypr.omarchy")  -- or your framework's defaults
+require("hypr.hymission")
+```
+
+This expects `hymission.lua` at `~/.config/hypr/hymission.lua`.
+
+### Plugin must be loaded before bindings
+
+`hl.plugin.hymission` is only available **after** the plugin binary is loaded. In Lua config mode, `hl.exec_cmd` is asynchronous, so the plugin is not yet loaded when your config file first runs.
+
+Guard your bindings to avoid a nil error:
+
+```lua
+-- hymission.lua
+hl.exec_cmd("hyprctl plugin load ~/.local/lib/hymission.so")
+
+if hl.plugin and hl.plugin.hymission then
+  hl.bind("SUPER + TAB", hl.plugin.hymission.toggle)
+  -- ... other bindings
+end
+```
+
+The plugin calls `HyprlandAPI::reloadConfig()` after loading, which re-runs all Lua files. On that second pass `hl.plugin.hymission` is available and your bindings register.
+
+For belt-and-suspenders, also load the plugin at session start:
+
+```lua
+-- In your autostart.lua
+hl.on("hyprland.start", function()
+  hl.exec_cmd("hyprctl plugin load ~/.local/lib/hymission.so")
+end)
+```
+
+### hl.config error handling
+
+Invalid keys inside `hl.config({ plugin = { hymission = { ... } } })` cause a runtime error. In Lua config mode this can abort the rest of the file before bindings and gestures are registered.
+
+The full list of valid config keys is documented in [Configuration](#configuration) above. If you encounter silent failures, check `hyprctl configerrors` and verify your config block uses the correct key names.
+
+### Persisting binding overrides across updates
+
+If you override default Hyprland bindings (e.g. rebinding `SUPER+TAB` to `hymission:toggle`), be aware that plugin or framework updates may overwrite the original binding file. To persist your overrides:
+
+- In Omarchy 4: the default bindings live in Lua files under `~/.local/share/omarchy/default/hypr/bindings/`. Add a `post-update` hook in `~/.config/omarchy/hooks/post-update` to re-apply your changes after `omarchy update`.
+- In other setups: prefer overriding bindings in your own Lua config files (loaded after defaults) rather than editing default files directly.
