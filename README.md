@@ -688,7 +688,7 @@ require("default.hypr.omarchy")  -- or your framework's defaults
 require("hypr.hymission")
 ```
 
-This expects `hymission.lua` at `~/.config/hypr/hymission.lua`.
+This expects `hymission.lua` at `~/.config/hypr/hypr/hymission.lua` (create the `hypr/` directory if needed).
 
 ### Plugin must be loaded before bindings
 
@@ -698,7 +698,7 @@ Guard your bindings to avoid a nil error:
 
 ```lua
 -- hymission.lua
-hl.exec_cmd("hyprctl plugin load ~/.local/lib/hymission.so")
+hl.exec_cmd("hyprctl plugin load " .. os.getenv("HOME") .. "/.local/lib/hymission.so")
 
 if hl.plugin and hl.plugin.hymission then
   hl.bind("SUPER + TAB", hl.plugin.hymission.toggle)
@@ -791,14 +791,14 @@ The default `SUPER+TAB` binding in Omarchy's `tiling.lua` is bound to workspace 
 
 1. Comment out the binding in `~/.local/share/omarchy/default/hypr/bindings/tiling.lua` and add a `post-update` hook to re-apply:
 
-```bash
-#!/bin/bash
-# ~/.config/omarchy/hooks/post-update
-TILING="$HOME/.local/share/omarchy/default/hypr/bindings/tiling.lua"
-if [ -f "$TILING" ] && ! grep -q 'omarchy-hymission-override' "$TILING" 2>/dev/null; then
-  sudo sed -i '30,32s/^/-- [omarchy-hymission-override] /' "$TILING" 2>/dev/null
-fi
-```
+   ```bash
+   #!/bin/bash
+   # ~/.config/omarchy/hooks/post-update
+   TILING="$HOME/.local/share/omarchy/default/hypr/bindings/tiling.lua"
+   if [ -f "$TILING" ] && ! grep -q 'omarchy-hymission-override' "$TILING" 2>/dev/null; then
+     sed -i '30,32s/^/-- [omarchy-hymission-override] /' "$TILING" 2>/dev/null
+   fi
+   ```
 
 2. Or accept both bindings: the default workspace-switch `SUPER+TAB` stays, and you add `SUPER+A` or another key for Mission Control.
 
