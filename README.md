@@ -729,3 +729,78 @@ If you override default Hyprland bindings (e.g. rebinding `SUPER+TAB` to `hymiss
 
 - In Omarchy 4: the default bindings live in Lua files under `~/.local/share/omarchy/default/hypr/bindings/`. Add a `post-update` hook in `~/.config/omarchy/hooks/post-update` to re-apply your changes after `omarchy update`.
 - In other setups: prefer overriding bindings in your own Lua config files (loaded after defaults) rather than editing default files directly.
+
+### Omarchy 4 integration example
+
+Omarchy 4 uses a pure Lua config (`configProvider: lua`). Here is a tested integration pattern:
+
+```lua
+-- ~/.config/hypr/hyprland.lua (add after other requires)
+require("hypr.hymission")
+```
+
+```lua
+-- ~/.config/hypr/hymission.lua
+-- Load plugin (async; will trigger config reload after init)
+hl.exec_cmd("hyprctl plugin load ~/.local/lib/hymission.so")
+
+-- macOS-like config
+hl.config({
+  plugin = {
+    hymission = {
+      toggle_switch_mode = 1,
+      switch_toggle_auto_next = 1,
+      switch_release_key = "Super_L",
+      gesture_invert_vertical = 1,
+    },
+  },
+})
+
+-- Bindings (only register when plugin is available)
+if hl.plugin and hl.plugin.hymission then
+  hl.bind("SUPER + TAB", hl.plugin.hymission.toggle, { description = "Mission Control" })
+  hl.bind("SUPER + SHIFT + TAB", function()
+    hl.plugin.hymission.toggle("reverse")
+  end, { description = "Mission Control (reverse)" })
+  hl.bind("SUPER + CTRL + TAB", hl.plugin.hymission.close, { description = "Close Mission Control" })
+  hl.bind("SUPER + A", function()
+    hl.plugin.hymission.toggle("forceall")
+  end, { description = "Mission Control (all)" })
+end
+
+-- Gesture: 3-finger swipe up opens overview
+hl.gesture({
+  fingers = 3,
+  direction = "up",
+  action = function()
+    if hl.plugin and hl.plugin.hymission then
+      hl.plugin.hymission.toggle("forceall")
+    end
+  end,
+})
+```
+
+```lua
+-- ~/.config/hypr/autostart.lua
+hl.on("hyprland.start", function()
+  hl.exec_cmd("hyprctl plugin load ~/.local/lib/hymission.so")
+end)
+```
+
+The default `SUPER+TAB` binding in Omarchy's `tiling.lua` is bound to workspace switching. To override it, you can either:
+
+1. Comment out the binding in `~/.local/share/omarchy/default/hypr/bindings/tiling.lua` and add a `post-update` hook to re-apply:
+
+```bash
+#!/bin/bash
+# ~/.config/omarchy/hooks/post-update
+TILING="$HOME/.local/share/omarchy/default/hypr/bindings/tiling.lua"
+if [ -f "$TILING" ] && ! grep -q 'omarchy-hymission-override' "$TILING" 2>/dev/null; then
+  sudo sed -i '30,32s/^/-- [omarchy-hymission-override] /' "$TILING" 2>/dev/null
+fi
+```
+
+2. Or accept both bindings: the default workspace-switch `SUPER+TAB` stays, and you add `SUPER+A` or another key for Mission Control.
+
+> [!NOTE]
+> `hl.unbind` does not reliably remove bindings created by Omarchy's `o.bind()` wrapper during config load. The override-hook pattern above is the most reliable approach.
