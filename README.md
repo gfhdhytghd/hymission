@@ -688,7 +688,7 @@ require("default.hypr.omarchy")  -- or your framework's defaults
 require("hypr.hymission")
 ```
 
-This expects `hymission.lua` at `~/.config/hypr/hypr/hymission.lua` (create the `hypr/` directory if needed).
+This expects `hymission.lua` at `~/.config/hypr/hymission.lua` (create the `hypr/` directory if needed).
 
 ### Plugin must be loaded before bindings
 
