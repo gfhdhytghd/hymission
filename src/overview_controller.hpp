@@ -508,6 +508,7 @@ class OverviewController {
     [[nodiscard]] bool         workspaceChangeKeepsOverviewEnabled() const;
     [[nodiscard]] bool         hideBarsWhenStripShownEnabled() const;
     [[nodiscard]] bool         hideHyprbarsDuringOverviewEnabled() const;
+    [[nodiscard]] bool         hideHyprglassDuringOverviewEnabled() const;
     [[nodiscard]] bool         hideBarAnimationEffectsEnabled() const;
     [[nodiscard]] bool         hideBarAnimationBlurEnabled() const;
     [[nodiscard]] double       hideBarAnimationMoveMultiplier() const;
@@ -762,6 +763,7 @@ class OverviewController {
     [[nodiscard]] SDispatchResult runHookedDispatcher(PostCloseDispatcher dispatcher, std::string args);
     void                       setFullscreenRenderOverride(bool suppress);
     [[nodiscard]] bool         shouldSuppressHyprbarsPassElement(IPassElement* element) const;
+    [[nodiscard]] bool         shouldSuppressHyprglassPassElement(IPassElement* element) const;
 
     void beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope, PHLWINDOW preferredSelectedWindow = {},
                    const std::vector<WorkspaceOverride>& workspaceOverrides = {});

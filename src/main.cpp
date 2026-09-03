@@ -351,6 +351,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("workspace_strip_gap", 24);
     INT_CONF("hide_bar_when_strip", 1);
     INT_CONF("hide_hyprbars_during_overview", 0);
+    INT_CONF("hide_hyprglass_during_overview", 1);
     INT_CONF("hide_bar_animation", 1);
     INT_CONF("hide_bar_animation_blur", 1);
     FLOAT_CONF("hide_bar_animation_move_multiplier", 0.8F);

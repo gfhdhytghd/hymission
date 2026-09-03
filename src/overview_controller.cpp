@@ -216,6 +216,7 @@ constexpr auto   PICK_LABEL_PREFIX_TIMEOUT = std::chrono::milliseconds(1500);
 constexpr auto   MISSION_CONTROL_WORKSPACE_NAME = "Mission Control";
 constexpr auto   MISSION_CONTROL_HIDDEN_WORKSPACE_PREFIX = "__hymission_hidden__:";
 constexpr auto   HYPRBARS_PASS_ELEMENT_NAME = "CBarPassElement";
+constexpr auto   HYPRGLASS_PASS_ELEMENT_NAME = "CGlassPassElement";
 OverviewController* g_controller = nullptr;
 
 float overviewPreviewAlphaForWindow(const PHLWINDOW& window, bool revealGroupedWindow = false) {
@@ -3960,6 +3961,9 @@ void OverviewController::rendererDrawElementHook(void* rendererThisptr, WP<IPass
     if (shouldSuppressHyprbarsPassElement(element.get()))
         return;
 
+    if (shouldSuppressHyprglassPassElement(element.get()))
+        return;
+
     auto* renderData = surfaceRenderDataMutable(element.get());
     auto  monitor = renderData ? renderData->pMonitor.lock() : PHLMONITOR{};
     if (!rawWindowRenderActive() && renderData && renderData->pWindow && monitor && isVisible() && ownsMonitor(monitor) &&
@@ -4572,6 +4576,26 @@ bool OverviewController::shouldSuppressHyprbarsPassElement(IPassElement* element
 
     const auto* const passName = element->passName();
     if (!passName || std::string_view(passName) != HYPRBARS_PASS_ELEMENT_NAME)
+        return false;
+
+    const auto monitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    return monitor && ownsMonitor(monitor);
+}
+
+bool OverviewController::hideHyprglassDuringOverviewEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:hide_hyprglass_during_overview", 1) != 0;
+}
+
+// hyprglass draws its glass slab from the window's own geometry, which the
+// overview transform never reaches, so previews end up buried under full-size
+// panes. Suppressing the pass element is enough: it only skips the draw, the
+// decoration itself is untouched and comes back when the overview closes.
+bool OverviewController::shouldSuppressHyprglassPassElement(IPassElement* element) const {
+    if (!element || !isVisible() || rawWindowRenderActive() || !hideHyprglassDuringOverviewEnabled())
+        return false;
+
+    const auto* const passName = element->passName();
+    if (!passName || std::string_view(passName) != HYPRGLASS_PASS_ELEMENT_NAME)
         return false;
 
     const auto monitor = g_pHyprRenderer->m_renderData.pMonitor.lock();

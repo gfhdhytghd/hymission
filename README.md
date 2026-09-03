@@ -336,6 +336,7 @@ hl.config({
             workspace_strip_gap = 24,
             hide_bar_when_strip = 1,
             hide_hyprbars_during_overview = 0,
+            hide_hyprglass_during_overview = 1,
             bar_single_mission_control = 0,
             hide_bar_animation = 1,
             hide_bar_animation_blur = 1,
@@ -564,6 +565,7 @@ background/wallpaper when available.
 | --- | --- | --- | --- |
 | `hide_bar_when_strip` | bool | `1` | Replace matching exclusive bars with a short self-blur / slide / scale proxy handoff while the strip is shown. |
 | `hide_hyprbars_during_overview` | bool | `0` | Suppress drawing of official `hyprbars` title bars while overview renders, without changing their reserved decoration space. This is a no-op unless `hyprbars` is loaded. |
+| `hide_hyprglass_during_overview` | bool | `1` | Suppress drawing of `hyprglass` window glass while overview renders. hyprglass sizes its glass pane from the window's own geometry, which the overview transform never reaches, so previews end up buried under full-size panes. Defaults to on because the previews are unreadable otherwise. This is a no-op unless `hyprglass` is loaded. |
 | `bar_single_mission_control` | bool | `0` | Multi-workspace overview only. Keep this at `0` to preserve the bar's normal numbered workspace display. When enabled, the bar workspace list collapses to a single `Mission Control` entry and the other regular overview workspaces are renamed to an internal hidden prefix so bars can filter them out. Intended for Waybar `ignore-workspaces`. |
 
 #### Bar handoff animation
