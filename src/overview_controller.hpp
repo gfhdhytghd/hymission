@@ -834,6 +834,7 @@ class OverviewController {
     [[nodiscard]] Rect workspaceStripThumbRect(const WorkspaceStripEntry& entry, const PHLMONITOR& monitor) const;
     void refreshWorkspaceStripSnapshots();
     void scheduleWorkspaceStripSnapshotRefresh();
+    void armWorkspaceStripRefreshTimer();
     void renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry);
     [[nodiscard]] bool shouldHideLayerSurface(const PHLLS& layer, const PHLMONITOR& monitor) const;
     void renderBackdrop() const;
@@ -926,6 +927,7 @@ class OverviewController {
     SP<CEventLoopTimer>       m_animationsEnabledRestoreTimer;
     SP<CEventLoopTimer>       m_toggleSwitchReleasePollTimer;
     SP<CEventLoopTimer>       m_pickLetterPrefixTimer;
+    SP<CEventLoopTimer>       m_stripRefreshTimer;
     std::unordered_map<PHLWINDOW, std::uint64_t> m_windowMruSerials;
     std::uint64_t            m_nextWindowMruSerial = 1;
     bool                      m_deactivatePending = false;

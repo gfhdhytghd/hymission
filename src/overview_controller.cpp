@@ -2320,6 +2320,7 @@ OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
 }
 
 OverviewController::~OverviewController() {
+    cancelAndClearTimer(m_stripRefreshTimer);
     stopSearchInput();
     setDamageTrackingOverride(false);
     destroyGaussianBlurPipeline();
@@ -2942,8 +2943,15 @@ void OverviewController::renderStage(eRenderStage stage) {
 
         g_pHyprRenderer->m_renderPass.add(makeUnique<OverviewOverlayPassElement>(this, monitor));
         if (shouldContinuouslyRefreshWorkspaceStripSnapshots()) {
-            m_stripSnapshotsDirty = true;
-            scheduleWorkspaceStripSnapshotRefresh();
+            if (getConfigInt(m_handle, "plugin:hymission:workspace_strip_refresh_ms", 500) <= 0) {
+                cancelAndClearTimer(m_stripRefreshTimer);
+                m_stripSnapshotsDirty = true;
+                scheduleWorkspaceStripSnapshotRefresh();
+            } else if (!m_stripRefreshTimer) {
+                armWorkspaceStripRefreshTimer();
+            }
+        } else {
+            cancelAndClearTimer(m_stripRefreshTimer);
         }
         if ((isAnimating() || m_state.phase == Phase::ClosingSettle || m_state.relayoutActive || m_postOpenRefreshFrames > 0 || m_dropAnimation ||
              (m_draggedWindowIndex && (std::abs(draggedPreviewScale() - m_draggedWindowTargetScale) > 0.001 ||
@@ -11068,6 +11076,7 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
     if (mode == CloseMode::Abort && m_state.phase == Phase::Closing)
         return;
 
+    cancelAndClearTimer(m_stripRefreshTimer);
     const ScopedFlag beginCloseGuard(m_beginCloseInProgress);
     stopSearchInput(false);
     clearToggleSwitchSession();
@@ -11265,6 +11274,7 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
 }
 
 void OverviewController::deactivate() {
+    cancelAndClearTimer(m_stripRefreshTimer);
     stopSearchInput();
     setDamageTrackingOverride(false);
     if (m_closeCursorOverride) {
@@ -13653,6 +13663,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
 }
 
 void OverviewController::refreshWorkspaceStripSnapshots() {
+    cancelAndClearTimer(m_stripRefreshTimer);
     if (!workspaceStripEnabled(m_state) || m_state.stripEntries.empty()) {
         for (auto& entry : m_state.stripEntries)
             entry.snapshot.reset();
@@ -13669,6 +13680,28 @@ void OverviewController::refreshWorkspaceStripSnapshots() {
     m_stripSnapshotsDirty = false;
     for (auto& entry : m_state.stripEntries)
         renderWorkspaceStripSnapshot(entry);
+
+    // Snapshots are produced outside a render pass; request a frame to present
+    // them even when clients have stopped damaging their surfaces.
+    if (isVisible())
+        damageOwnedMonitors();
+    armWorkspaceStripRefreshTimer();
+}
+
+void OverviewController::armWorkspaceStripRefreshTimer() {
+    const auto interval = getConfigInt(m_handle, "plugin:hymission:workspace_strip_refresh_ms", 500);
+    if (interval <= 0 || !shouldContinuouslyRefreshWorkspaceStripSnapshots() || m_state.stripEntries.empty())
+        return;
+
+    // Arm after completion, not from every rendered frame. Explicit interaction
+    // refreshes bypass the interval and start a fresh idle-refresh deadline.
+    armOrRescheduleTimer(m_stripRefreshTimer, std::chrono::milliseconds(interval), [this](SP<CEventLoopTimer>, void*) {
+        cancelAndClearTimer(m_stripRefreshTimer);
+        if (g_controller != this || !shouldContinuouslyRefreshWorkspaceStripSnapshots())
+            return;
+        m_stripSnapshotsDirty = true;
+        scheduleWorkspaceStripSnapshotRefresh();
+    });
 }
 
 void OverviewController::scheduleWorkspaceStripSnapshotRefresh() {
@@ -13681,7 +13714,7 @@ void OverviewController::scheduleWorkspaceStripSnapshotRefresh() {
             return;
 
         m_stripSnapshotRefreshScheduled = false;
-        if (!m_stripSnapshotsDirty)
+        if (!m_stripSnapshotsDirty || !isVisible())
             return;
 
         refreshWorkspaceStripSnapshots();

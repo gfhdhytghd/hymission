@@ -340,6 +340,7 @@ hl.config({
             workspace_strip_empty_mode = "existing",
             workspace_strip_thickness = 160,
             workspace_strip_gap = 24,
+            workspace_strip_refresh_ms = 500,
             hide_bar_when_strip = 1,
             hide_hyprbars_during_overview = 0,
             hide_hyprglass_during_overview = 1,
@@ -575,6 +576,7 @@ Search filters the current overview scope by Unicode-normalized, case-insensitiv
 | `workspace_strip_empty_mode` | string | `existing` | Empty-workspace strip policy. `existing` only shows real workspaces; `continuous` inserts the next missing numbered workspace in each positive-id gap without expanding named-workspace spans. |
 | `workspace_strip_thickness` | int | `160` | Strip thickness. |
 | `workspace_strip_gap` | int | `24` | Gap between the strip and the main overview content. |
+| `workspace_strip_refresh_ms` | int | `500` | Live workspace thumbnail refresh interval in milliseconds. Interaction changes refresh immediately; `0` (or a negative value) restores per-frame refresh. |
 
 The workspace strip is shown when the current overview scope displays only the
 active workspace. By default it only shows real workspaces plus the trailing
