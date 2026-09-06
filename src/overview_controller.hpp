@@ -1,4 +1,5 @@
 #pragma once
+#include "search_child_process.hpp"
 
 #include <array>
 #include <chrono>
@@ -1038,6 +1039,7 @@ class OverviewController {
     CHyprSignalListener       m_monitorFocusedListener;
     CHyprSignalListener       m_configReloadedListener;
     int                       m_searchInputFd = -1;
+    SearchChildReaper         m_searchChildReaper;
     pid_t                     m_searchInputPid = -1;
     wl_event_source*          m_searchInputSource = nullptr;
     std::string               m_searchQuery;

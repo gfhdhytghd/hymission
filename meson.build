@@ -72,3 +72,11 @@ overview_logic_test = executable('hymission-overview-logic-test',
 )
 
 test('hymission-overview-logic-test', overview_logic_test)
+
+search_child_process_test = executable('hymission-search-child-process-test',
+  'tools/search_child_process_test.cpp',
+  include_directories: include_directories('src'),
+  dependencies: dependency('wayland-server'),
+  install: false,
+)
+test('search-child-process-test', search_child_process_test, timeout: 10)

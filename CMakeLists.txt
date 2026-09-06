@@ -64,6 +64,12 @@ add_executable(hymission-layout-demo
 target_include_directories(hymission-layout-demo PRIVATE src)
 
 if(BUILD_TESTING)
+  pkg_check_modules(WAYLAND_SERVER REQUIRED IMPORTED_TARGET wayland-server)
+  add_executable(hymission-search-child-process-test tools/search_child_process_test.cpp)
+  target_include_directories(hymission-search-child-process-test PRIVATE src)
+  target_link_libraries(hymission-search-child-process-test PRIVATE PkgConfig::WAYLAND_SERVER)
+  add_test(NAME hymission-search-child-process-test COMMAND hymission-search-child-process-test)
+  set_tests_properties(hymission-search-child-process-test PROPERTIES TIMEOUT 10)
   add_executable(hymission-mission-layout-test
     tools/mission_layout_test.cpp
     src/mission_layout.cpp

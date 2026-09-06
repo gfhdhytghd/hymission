@@ -3548,7 +3548,15 @@ bool OverviewController::startSearchInput() {
         posix_spawn_file_actions_addclose(&actions, sockets[1]);
     char* argv[] = {const_cast<char*>(helper.c_str()), nullptr};
     pid_t pid = -1;
-    const int spawnError = posix_spawn(&pid, helper.c_str(), &actions, nullptr, argv, environ);
+    posix_spawnattr_t attributes;
+    const int attrError = posix_spawnattr_init(&attributes);
+    int spawnError = attrError;
+    if (!spawnError)
+        spawnError = configureSearchChildSignals(attributes);
+    if (!spawnError)
+        spawnError = posix_spawn(&pid, helper.c_str(), &actions, &attributes, argv, environ);
+    if (!attrError)
+        posix_spawnattr_destroy(&attributes);
     posix_spawn_file_actions_destroy(&actions);
     ::close(sockets[1]);
     if (spawnError != 0) {
@@ -3611,10 +3619,8 @@ void OverviewController::stopSearchInput(bool clearSearchState) {
         m_searchInputFd = -1;
     }
     if (m_searchInputPid > 0) {
-        if (waitpid(m_searchInputPid, nullptr, WNOHANG) == 0) {
-            kill(m_searchInputPid, SIGTERM);
-            (void)waitpid(m_searchInputPid, nullptr, 0);
-        }
+        auto* loop = g_pCompositor && g_pCompositor->m_wlDisplay ? wl_display_get_event_loop(g_pCompositor->m_wlDisplay) : nullptr;
+        m_searchChildReaper.retire(m_searchInputPid, loop);
         m_searchInputPid = -1;
     }
 }
