@@ -593,7 +593,8 @@ Search filters the current overview scope by Unicode-normalized, case-insensitiv
 
 By default, the workspace strip is shown when the current overview scope displays only the
 active workspace. Set `workspace_strip_force_show = 1` to also show it in other scopes,
-including `forceall`, for workspace navigation and dragging windows between workspaces.
+including `forceall`, for dragging windows between workspaces. In `forceall`, clicking
+a strip card does not switch workspaces; drag-and-drop remains available.
 By default it only shows real workspaces plus the trailing
 new-workspace card. In `continuous` mode, synthetic empty workspaces progressively
 expose numbered gaps one slot at a time and render the monitor

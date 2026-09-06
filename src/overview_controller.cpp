@@ -3306,7 +3306,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
             const auto pressedStripIndex = *m_pressedStripIndex;
             if (debugLogsEnabled()) {
                 std::ostringstream out;
-                out << "[hymission] mouse release activating strip index=" << pressedStripIndex;
+                out << "[hymission] mouse release on strip index=" << pressedStripIndex;
                 debugLog(out.str());
             }
             clearStripWindowDragState();
@@ -12402,6 +12402,10 @@ void OverviewController::clearStripWindowDragState() {
 }
 
 void OverviewController::activateStripTarget(std::size_t index) {
+    // Force-all keeps the strip as a drag target without switching workspaces on click.
+    if (m_state.collectionPolicy.requestedScope == ScopeOverride::ForceAll)
+        return;
+
     if (index >= m_state.stripEntries.size())
         return;
 
