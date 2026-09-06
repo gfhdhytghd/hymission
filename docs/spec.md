@@ -275,7 +275,7 @@ gesture-only 参数：
 
 窗口搜索与 label 互斥：
 
-- `pick_labels_enabled = 0` 时，overview 打开即透明启动并聚焦搜索输入 helper；首个直接字符或 IME preedit 出现时显示顶部居中的搜索条，首键不得丢失
+- `pick_labels_enabled = 0` 时，overview 打开即显示顶部居中的搜索条并聚焦搜索输入 helper，直接接受字符或 IME 输入；不以全透明窗口等待首键，避免 GTK 不提交首帧导致 layer-shell 无法映射和获取焦点
 - `pick_labels_enabled = 1` 时保持 label 模式，按 `/` 切换到搜索；`/` 的搜索入口优先于 spatial label 路径
 - 搜索按当前 overview scope 重新收集窗口，对标题和 class 执行 Unicode normalization 与 casefold 后的包含匹配
 - expanded group 逐成员过滤；collapsed group 任一成员命中即保留该组，并展示首个命中成员

@@ -18,20 +18,12 @@ struct AppState {
     std::string    query;
     std::string    preedit;
     std::size_t    cursor = 0;
-    bool           revealed = false;
 };
 
 bool sendPacket(char type, const std::string& payload = {}) {
     std::string packet(1, type);
     packet += payload;
     return send(IPC_FD, packet.data(), packet.size(), MSG_NOSIGNAL) == static_cast<ssize_t>(packet.size());
-}
-
-void reveal(AppState* state) {
-    if (state->revealed)
-        return;
-    state->revealed = true;
-    gtk_widget_set_opacity(GTK_WIDGET(state->window), 1.0);
 }
 
 void updateLabel(AppState* state) {
@@ -42,7 +34,6 @@ void updateLabel(AppState* state) {
 }
 
 void publishQuery(AppState* state) {
-    reveal(state);
     updateLabel(state);
     if (!sendPacket('Q', state->query))
         g_application_quit(g_application_get_default());
@@ -63,8 +54,6 @@ void preeditChanged(GtkIMContext* context, gpointer data) {
     gtk_im_context_get_preedit_string(context, &text, nullptr, &cursor);
     state->preedit = text ? text : "";
     g_free(text);
-    if (!state->preedit.empty())
-        reveal(state);
     updateLabel(state);
     sendPacket('P', state->preedit.empty() ? "0" : "1");
 }
@@ -193,7 +182,8 @@ void activate(GtkApplication* app, gpointer data) {
     g_signal_connect(keys, "key-pressed", G_CALLBACK(keyPressed), state);
     gtk_widget_add_controller(GTK_WIDGET(state->window), keys);
     gtk_widget_set_focusable(GTK_WIDGET(state->window), TRUE);
-    gtk_widget_set_opacity(GTK_WIDGET(state->window), 0.0);
+    // GTK can skip the initial buffer for a fully transparent window, leaving
+    // layer-shell unmapped and unable to receive the key that would reveal it.
     gtk_window_present(state->window);
     gtk_widget_grab_focus(GTK_WIDGET(state->window));
 

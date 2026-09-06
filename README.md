@@ -540,7 +540,7 @@ workspace thumbnail. Group order, membership, and lock state are preserved.
 
 Search filters the current overview scope by Unicode-normalized, case-insensitive window title or class and relayouts matching previews as the query changes.
 
-- With `pick_labels_enabled = 0`, the search helper is focused transparently when overview opens. Typing a character or starting an IME preedit reveals the top-centered search bar without losing the first key.
+- With `pick_labels_enabled = 0`, overview opens with the top-centered search bar visible and focused, ready for typing or IME input.
 - With `pick_labels_enabled = 1`, press `/` to enter search. This takes priority over the spatial `/` label. Labels and label-prefix state are disabled for the remainder of that overview search session.
 - An empty query restores all scoped windows while keeping search active. A query with no matches keeps overview open and displays `0 results`.
 - Arrow keys navigate matching previews, `Return` activates the selection, and `Escape` exits overview. While an IME preedit is active, candidate navigation, confirmation, and cancellation are handled by the IME first.
