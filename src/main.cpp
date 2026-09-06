@@ -350,6 +350,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("workspace_strip_thickness", 160);
     INT_CONF("workspace_strip_gap", 24);
     INT_CONF("workspace_strip_refresh_ms", 500);
+    // h/j/k/l move the selection like the arrow keys. Only meaningful with
+    // pick_labels_enabled = 1: with labels off the overview opens with the search bar
+    // focused and every plain key becomes text.
+    INT_CONF("vim_keys", 0);
     INT_CONF("hide_bar_when_strip", 1);
     INT_CONF("hide_hyprbars_during_overview", 0);
     INT_CONF("hide_hyprglass_during_overview", 1);

@@ -3461,6 +3461,36 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
         return;
     }
 
+    // Checked before handlePickLabelKey on purpose: in spatial mode h/j/k/l are label
+    // keys, and in sequential mode they arm a label prefix past the 9th window. Someone
+    // who turns vim_keys on wants the movement, not the label on those four keys.
+    if (getConfigInt(m_handle, "plugin:hymission:vim_keys", 0) != 0) {
+        Direction direction = Direction::Left;
+        bool      vimMove   = true;
+        switch (keysym) {
+            case XKB_KEY_h: direction = Direction::Left; break;
+            case XKB_KEY_j: direction = Direction::Down; break;
+            case XKB_KEY_k: direction = Direction::Up; break;
+            case XKB_KEY_l: direction = Direction::Right; break;
+            default: vimMove = false; break;
+        }
+        if (vimMove) {
+            clearPickLabelPrefixState();
+            moveSelection(direction);
+            info.cancelled = true;
+            return;
+        }
+    }
+
+    // Tab was unhandled and fell through to the window underneath. Cycle in the same
+    // order the mouse wheel already uses. No option for it: no label occupies Tab.
+    if (keysym == XKB_KEY_Tab || keysym == XKB_KEY_ISO_Left_Tab) {
+        clearPickLabelPrefixState();
+        moveSelectionCircular(keysym == XKB_KEY_ISO_Left_Tab ? -1 : 1, "keyboard-tab");
+        info.cancelled = true;
+        return;
+    }
+
     if (handlePickLabelKey(keysym, event.keycode)) {
         info.cancelled = true;
         return;

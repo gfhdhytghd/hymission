@@ -524,6 +524,15 @@ group member moves the whole group: all member previews shrink into a bounded
 stack under the pointer, then return together or animate into the target
 workspace thumbnail. Group order, membership, and lock state are preserved.
 
+### Keyboard navigation
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `vim_keys` | bool | `0` | Let `h` / `j` / `k` / `l` move the selection like the arrow keys. Checked before label picking, so those four keys stop acting as labels while it is on. Only meaningful with `pick_labels_enabled = 1`: with labels off the overview opens with the search bar focused and every plain key is text. |
+
+`Tab` and `Shift+Tab` cycle the selection in the same order the mouse wheel uses, independent of
+`vim_keys`. `Return` activates the selection and `Escape` closes overview.
+
 ### Label picking
 
 | Option | Type | Default | Description |
