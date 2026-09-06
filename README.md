@@ -528,6 +528,7 @@ workspace thumbnail. Group order, membership, and lock state are preserved.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
+| `vim_keys` | bool | `0` | Use `h/j/k/l` to move left/down/up/right. Forces keyboard pick labels off and shows a warning, regardless of `pick_labels_enabled`. Overview opens ready for navigation; press `/` to search. |
 | `pick_labels_enabled` | bool | `0` | Enable direct keyboard selection in the configured `pick_labels_mode`. When labels are shown, it reuses `close_button_color` / `close_button_glyph_color` / `close_button_size` for styling; previews too small for a legible chip skip drawing it but remain selectable. |
 | `pick_labels_show` | bool | `1` | Controls whether label chips are drawn. Set to `0` to keep keyboard picking active without displaying labels; `pick_labels_enabled` must still be `1`. |
 | `pick_labels_mode` | string | `sequential` | `sequential` keeps the numbered `1`-`9`, `A1`-`Z9` scheme. `spatial` maps the physical ANSI alphanumeric and punctuation area to preview centers across the participating monitors. Up to 47 windows receive distinct single-key labels; denser layouts share a primary key and show a two-key route such as `FF` or `FR`. |
@@ -541,7 +542,9 @@ workspace thumbnail. Group order, membership, and lock state are preserved.
 
 Search filters the current overview scope by Unicode-normalized, case-insensitive window title or class and relayouts matching previews as the query changes.
 
-- With `pick_labels_enabled = 0`, overview opens with the top-centered search bar visible and focused, ready for typing or IME input.
+- With `vim_keys = 1`, overview opens ready for `h/j/k/l` navigation with pick labels forcibly disabled. Press `/` to enter search; letters then type normally.
+- Outside search, `Tab` / `Shift+Tab` cycle selection forward / backward, independently of `vim_keys`.
+- With `vim_keys = 0` and `pick_labels_enabled = 0`, overview opens with the top-centered search bar visible and focused, ready for typing or IME input.
 - With `pick_labels_enabled = 1`, press `/` to enter search. This takes priority over the spatial `/` label. Labels and label-prefix state are disabled for the remainder of that overview search session.
 - An empty query restores all scoped windows while keeping search active. A query with no matches keeps overview open and displays `0 results`.
 - Arrow keys navigate matching previews, `Return` activates the selection, and `Escape` exits overview. While an IME preedit is active, candidate navigation, confirmation, and cancellation are handled by the IME first.

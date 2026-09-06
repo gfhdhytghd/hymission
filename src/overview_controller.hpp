@@ -519,6 +519,7 @@ class OverviewController {
     [[nodiscard]] double       hideBarAnimationAlphaEnd() const;
     [[nodiscard]] bool         barSingleMissionControlEnabled() const;
     [[nodiscard]] bool         showFocusIndicatorEnabled() const;
+    [[nodiscard]] bool         vimKeysEnabled() const;
     [[nodiscard]] bool         pickLabelsEnabled() const;
     [[nodiscard]] bool         pickLabelsShown() const;
     [[nodiscard]] PickLabelsMode pickLabelsMode() const;
@@ -802,6 +803,7 @@ class OverviewController {
     [[nodiscard]] const SpatialPickMap& spatialPickMapForCurrentState() const;
     void notify(const std::string& message, const CHyprColor& color, float durationMs) const;
     void warnAboutDeprecatedExpansionConfig();
+    void warnAboutVimLabels();
     void debugLog(const std::string& message) const;
     void debugSurfaceLog(const std::string& message) const;
     [[nodiscard]] std::string debugWorkspaceLabel(const PHLWORKSPACE& workspace) const;
@@ -936,6 +938,7 @@ class OverviewController {
     PHLWINDOWREF              m_lastLayoutSelectedWindow;
     PHLWINDOWREF              m_lastLayoutHoveredWindow;
     bool                      m_deprecatedExpansionConfigWarned = false;
+    bool                      m_vimLabelsWarned = false;
     PHLWINDOWREF              m_queuedOverviewSelectionTarget;
     bool                      m_queuedOverviewSelectionSyncScrollingSpot = false;
     PHLWINDOWREF              m_queuedOverviewLiveFocusTarget;

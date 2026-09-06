@@ -360,6 +360,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     FLOAT_CONF("hide_bar_animation_alpha_end", 0.0F);
     INT_CONF("bar_single_mission_control", 0);
     INT_CONF("show_focus_indicator", 0);
+    INT_CONF("vim_keys", 0);
     INT_CONF("pick_labels_enabled", 0);
     INT_CONF("pick_labels_show", 1);
     STRING_CONF("pick_labels_mode", "sequential");

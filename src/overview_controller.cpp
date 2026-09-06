@@ -2479,11 +2479,13 @@ bool OverviewController::initialize() {
     });
     m_configReloadedListener = events.config.reloaded.listen([this] {
         warnAboutDeprecatedExpansionConfig();
+        warnAboutVimLabels();
         replaceNativeWorkspaceGestures("config-reloaded");
         if (isVisible())
             scheduleVisibleStateRebuild();
     });
 
+    warnAboutVimLabels();
     replaceNativeWorkspaceGestures("initialize");
 
     return true;
@@ -3455,9 +3457,34 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
         return;
     }
 
-    if (pickLabelsEnabled() && (keysym == XKB_KEY_slash || keysym == XKB_KEY_KP_Divide)) {
+    if ((pickLabelsEnabled() || vimKeysEnabled()) && (keysym == XKB_KEY_slash || keysym == XKB_KEY_KP_Divide)) {
         if (startSearchInput())
             info.cancelled = true;
+        return;
+    }
+
+    if (vimKeysEnabled()) {
+        std::optional<Direction> direction;
+        switch (keysym) {
+            case XKB_KEY_h: direction = Direction::Left; break;
+            case XKB_KEY_j: direction = Direction::Down; break;
+            case XKB_KEY_k: direction = Direction::Up; break;
+            case XKB_KEY_l: direction = Direction::Right; break;
+            default: break;
+        }
+        if (direction) {
+            clearPickLabelPrefixState();
+            moveSelection(*direction);
+            info.cancelled = true;
+            return;
+        }
+    }
+
+    if (keysym == XKB_KEY_Tab || keysym == XKB_KEY_ISO_Left_Tab) {
+        clearPickLabelPrefixState();
+        const bool reverse = keysym == XKB_KEY_ISO_Left_Tab || (keyboard->getModifiers() & HL_MODIFIER_SHIFT);
+        (void)moveSelectionCircular(reverse ? -1 : 1, "keyboard-tab");
+        info.cancelled = true;
         return;
     }
 
@@ -4977,8 +5004,12 @@ bool OverviewController::showFocusIndicatorEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:show_focus_indicator", 0) != 0;
 }
 
+bool OverviewController::vimKeysEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:vim_keys", 0) != 0;
+}
+
 bool OverviewController::pickLabelsEnabled() const {
-    return getConfigInt(m_handle, "plugin:hymission:pick_labels_enabled", 0) != 0;
+    return !vimKeysEnabled() && getConfigInt(m_handle, "plugin:hymission:pick_labels_enabled", 0) != 0;
 }
 
 bool OverviewController::pickLabelsShown() const {
@@ -10966,7 +10997,8 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     m_deactivatePending = false;
     carryOverWorkspaceStripSnapshots(next, m_state);
     m_state = std::move(next);
-    if (!pickLabelsEnabled())
+    warnAboutVimLabels();
+    if (!pickLabelsEnabled() && !vimKeysEnabled())
         (void)startSearchInput();
     armOverviewRenderState(m_state);
     m_hoverSelectionAnchorValid = false;
@@ -12412,6 +12444,19 @@ void OverviewController::activateStripTarget(std::size_t index) {
 
 void OverviewController::notify(const std::string& message, const CHyprColor& color, float durationMs) const {
     HyprlandAPI::addNotification(m_handle, message, color, durationMs);
+}
+
+void OverviewController::warnAboutVimLabels() {
+    if (!vimKeysEnabled()) {
+        m_vimLabelsWarned = false;
+        return;
+    }
+    clearPickLabelPrefixState();
+    if (m_vimLabelsWarned)
+        return;
+    m_vimLabelsWarned = true;
+    notify("[hymission] vim_keys is enabled: pick labels are forcibly disabled; press / to search",
+           CHyprColor(1.0, 0.7, 0.2, 1.0), 8000);
 }
 
 void OverviewController::warnAboutDeprecatedExpansionConfig() {
