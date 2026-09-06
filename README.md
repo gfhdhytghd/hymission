@@ -22,7 +22,7 @@
 - Mouse, keyboard, and trackpad-driven overview interaction
 - Optional selected-preview expansion with local push-away animation
 - Gesture-only `recommand` mode for two-sided `toggle` gestures
-- Workspace strip when the current overview scope shows only the active workspace
+- Workspace strip for the active-workspace scope, optionally shown in all scopes
 - Multi-monitor support
 - Pinned-window, special-workspace, and scrolling-layout aware behavior
 - Workspace-to-workspace overview transitions without showing the native workspace animation in the middle
@@ -340,6 +340,7 @@ hl.config({
             workspace_strip_empty_mode = "existing",
             workspace_strip_thickness = 160,
             workspace_strip_gap = 24,
+            workspace_strip_force_show = 0,
             workspace_strip_refresh_ms = 500,
             hide_bar_when_strip = 1,
             hide_hyprbars_during_overview = 0,
@@ -585,12 +586,15 @@ Search filters the current overview scope by Unicode-normalized, case-insensitiv
 | --- | --- | --- | --- |
 | `workspace_strip_anchor` | string | `left` | Strip anchor. Supports `top`, `left`, and `right`. |
 | `workspace_strip_empty_mode` | string | `existing` | Empty-workspace strip policy. `existing` only shows real workspaces; `continuous` inserts the next missing numbered workspace in each positive-id gap without expanding named-workspace spans. |
+| `workspace_strip_force_show` | bool | `0` | Show the workspace strip in all overview scopes, including `forceall`. Internal thumbnail previews still suppress the strip. |
 | `workspace_strip_thickness` | int | `160` | Strip thickness. |
 | `workspace_strip_gap` | int | `24` | Gap between the strip and the main overview content. |
 | `workspace_strip_refresh_ms` | int | `500` | Live workspace thumbnail refresh interval in milliseconds. Interaction changes refresh immediately; `0` (or a negative value) restores per-frame refresh. |
 
-The workspace strip is shown when the current overview scope displays only the
-active workspace. By default it only shows real workspaces plus the trailing
+By default, the workspace strip is shown when the current overview scope displays only the
+active workspace. Set `workspace_strip_force_show = 1` to also show it in other scopes,
+including `forceall`, for workspace navigation and dragging windows between workspaces.
+By default it only shows real workspaces plus the trailing
 new-workspace card. In `continuous` mode, synthetic empty workspaces progressively
 expose numbered gaps one slot at a time and render the monitor
 background/wallpaper when available.
