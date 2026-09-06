@@ -9,5 +9,6 @@ output = "build-cmake/libhymission.so"
 build = [
   "cmake -E rm -f build-cmake/CMakeCache.txt",
   "cmake -DCMAKE_BUILD_TYPE=Release -B build-cmake",
-  "cmake --build build-cmake -j $(nproc)"
+  "cmake --build build-cmake -j $(nproc)",
+  "install -Dm755 build-cmake/hymission-search-input \"$HOME/.local/bin/hymission-search-input\""
 ]

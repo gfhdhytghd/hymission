@@ -4,6 +4,7 @@
 #include <any>
 #include <cmath>
 #include <cctype>
+#include <cstdlib>
 #include <expected>
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -92,6 +93,11 @@ std::string searchHelperPath() {
         std::filesystem::path sibling = std::filesystem::path(info.dli_fname).parent_path() / "hymission-search-input";
         if (access(sibling.c_str(), X_OK) == 0)
             return sibling.string();
+    }
+    if (const char* home = std::getenv("HOME"); home && *home) {
+        const auto installed = std::filesystem::path(home) / ".local/bin/hymission-search-input";
+        if (access(installed.c_str(), X_OK) == 0)
+            return installed.string();
     }
     for (const char* path : {"/usr/lib/hymission-search-input", "/usr/libexec/hymission-search-input", "/usr/local/libexec/hymission-search-input"}) {
         if (access(path, X_OK) == 0)

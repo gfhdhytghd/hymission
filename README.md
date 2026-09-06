@@ -47,6 +47,10 @@ hyprpm enable hymission
 hyprpm reload
 ```
 
+The build also installs `hymission-search-input` to `~/.local/bin/`, following the
+same user-local helper installation approach as HyprCapture. The plugin checks
+this location directly, so it does not need to be on `PATH`.
+
 If you use Hyprland's permission system, you may need to allow `hyprpm` in your config:
 
 ```lua
