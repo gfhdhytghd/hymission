@@ -1,4 +1,5 @@
 #include <gtk/gtk.h>
+#include <adwaita.h>
 #include <gtk4-layer-shell.h>
 
 #include <array>
@@ -147,6 +148,7 @@ gboolean ipcReady(GIOChannel* channel, GIOCondition condition, gpointer data) {
 void activate(GtkApplication* app, gpointer data) {
     auto* state = static_cast<AppState*>(data);
     state->window = GTK_WINDOW(gtk_application_window_new(app));
+    gtk_widget_add_css_class(GTK_WIDGET(state->window), "hymission-search");
     gtk_window_set_decorated(state->window, FALSE);
     gtk_layer_init_for_window(state->window);
     gtk_layer_set_layer(state->window, GTK_LAYER_SHELL_LAYER_OVERLAY);
@@ -167,8 +169,9 @@ void activate(GtkApplication* app, gpointer data) {
 
     auto* provider = gtk_css_provider_new();
     gtk_css_provider_load_from_string(provider,
-        ".searchbar { background: rgba(30,30,34,0.96); color: white; border-radius: 8px; padding: 12px 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); }"
-        ".searchbar label:last-child { color: rgba(255,255,255,0.62); }");
+        "window.hymission-search { background: transparent; box-shadow: none; }"
+        ".searchbar { background: @window_bg_color; color: @window_fg_color; border-radius: 8px; padding: 12px 16px; margin: 12px; box-shadow: 0 3px 10px alpha(black,0.18); }"
+        ".searchbar label:last-child { opacity: 0.62; }");
     gtk_style_context_add_provider_for_display(gtk_widget_get_display(GTK_WIDGET(state->window)), GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(provider);
 
@@ -197,7 +200,7 @@ void activate(GtkApplication* app, gpointer data) {
 
 int main(int argc, char** argv) {
     AppState state;
-    GtkApplication* app = gtk_application_new("io.github.wilf.hymission.search", G_APPLICATION_NON_UNIQUE);
+    GtkApplication* app = GTK_APPLICATION(adw_application_new("io.github.wilf.hymission.search", G_APPLICATION_NON_UNIQUE));
     g_signal_connect(app, "activate", G_CALLBACK(activate), &state);
     const int status = g_application_run(G_APPLICATION(app), argc, argv);
     if (state.im) {

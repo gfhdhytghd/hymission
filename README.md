@@ -69,7 +69,7 @@ Requirements:
 - `cmake`
 - `pkg-config`
 - a C++23-capable compiler
-- GLib 2, GTK 4, and gtk4-layer-shell (used by the bundled Wayland IME search helper)
+- GLib 2, GTK 4, gtk4-layer-shell, and libadwaita (used by the bundled Wayland IME search helper; libadwaita follows the system light/dark preference)
 
 `nlohmann/json` is bundled as a single header under `src/vendor/` (v3.12.0),
 so no system package is required. Do not re-add `find_package(nlohmann_json)`.

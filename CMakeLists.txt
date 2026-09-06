@@ -30,6 +30,7 @@ pkg_check_modules(HYPR_DEPS REQUIRED hyprland)
 pkg_check_modules(LUA REQUIRED lua)
 pkg_check_modules(GLIB REQUIRED glib-2.0)
 pkg_check_modules(GTK4 REQUIRED gtk4)
+pkg_check_modules(ADWAITA REQUIRED IMPORTED_TARGET libadwaita-1)
 pkg_check_modules(GTK4_LAYER_SHELL REQUIRED gtk4-layer-shell-0)
 # nlohmann/json is vendored as a single header in src/vendor; no system package required.
 
@@ -55,6 +56,7 @@ add_executable(hymission-search-input src/search_input.cpp)
 target_include_directories(hymission-search-input PRIVATE ${GTK4_INCLUDE_DIRS} ${GTK4_LAYER_SHELL_INCLUDE_DIRS})
 target_link_directories(hymission-search-input PRIVATE ${GTK4_LIBRARY_DIRS} ${GTK4_LAYER_SHELL_LIBRARY_DIRS})
 target_link_libraries(hymission-search-input PRIVATE ${GTK4_LIBRARIES} ${GTK4_LAYER_SHELL_LIBRARIES})
+target_link_libraries(hymission-search-input PRIVATE PkgConfig::ADWAITA)
 
 add_executable(hymission-layout-demo
   tools/layout_demo.cpp

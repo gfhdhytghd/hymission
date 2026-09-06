@@ -45,7 +45,7 @@ shared_module(meson.project_name(), src,
 )
 
 executable('hymission-search-input', 'src/search_input.cpp',
-  dependencies: [dependency('gtk4'), dependency('gtk4-layer-shell-0')],
+  dependencies: [dependency('gtk4'), dependency('gtk4-layer-shell-0'), dependency('libadwaita-1')],
   install: true,
   install_dir: get_option('libexecdir'),
 )
