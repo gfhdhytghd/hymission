@@ -791,6 +791,7 @@ class OverviewController {
     void               clearPickLabelPrefixState();
     void               clearSpatialPickCache();
     [[nodiscard]] bool startSearchInput();
+    [[nodiscard]] bool ensureSearchInputFocus();
     void               stopSearchInput(bool clearSearchState = true);
     int                handleSearchInputFd(uint32_t mask);
     void               applySearchQuery(std::string query);
@@ -1041,6 +1042,12 @@ class OverviewController {
     wl_event_source*          m_searchInputSource = nullptr;
     std::string               m_searchQuery;
     std::string               m_searchNormalizedQuery;
+    wl_event_source*          m_searchFocusTimer = nullptr;
+    struct PendingSearchKey {
+        IKeyboard::SKeyEvent event;
+        uint32_t depressed = 0, latched = 0, locked = 0, group = 0;
+    };
+    std::vector<PendingSearchKey> m_searchPendingKeys;
     bool                      m_searchActive = false;
     bool                      m_searchPreeditActive = false;
     bool                      m_searchFailureNotified = false;

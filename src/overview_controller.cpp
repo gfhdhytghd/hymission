@@ -62,6 +62,7 @@
 #include <hyprland/src/pointer/PointerManager.hpp>
 #include <hyprland/src/pointer/cursor/CursorManager.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
+#include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/EventManager.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopTimer.hpp>
@@ -3417,8 +3418,24 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
         return;
     }
 
-    if (m_searchActive && m_searchInputFd >= 0)
+    if (m_searchActive && m_searchInputFd >= 0) {
+        // A spawned helper is not necessarily mapped or focused yet. Never let
+        // search keystrokes reach the application underneath the overview.
+        if (!ensureSearchInputFocus()) {
+            if (m_searchPendingKeys.size() < 256) {
+                auto* state = keyboard->m_xkbState;
+                m_searchPendingKeys.push_back({event,
+                    xkb_state_serialize_mods(state, XKB_STATE_MODS_DEPRESSED),
+                    xkb_state_serialize_mods(state, XKB_STATE_MODS_LATCHED),
+                    xkb_state_serialize_mods(state, XKB_STATE_MODS_LOCKED),
+                    xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE)});
+            }
+            info.cancelled = true;
+            if (m_searchFocusTimer)
+                wl_event_source_timer_update(m_searchFocusTimer, 8);
+        }
         return;
+    }
 
     if (event.state != WL_KEYBOARD_KEY_STATE_PRESSED)
         return;
@@ -3469,6 +3486,41 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
 
     if (handled)
         info.cancelled = true;
+}
+
+bool OverviewController::ensureSearchInputFocus() {
+    if (!m_searchActive || m_searchInputPid <= 0 || !g_pSeatManager)
+        return false;
+
+    for (const auto& layer : Desktop::viewState()->layers()) {
+        if (!layer || !layer->m_mapped || layer->m_namespace != "hymission-search" || layer->getPID() != m_searchInputPid)
+            continue;
+        const auto resource = layer->m_layerSurface.lock();
+        const auto surface = resource ? resource->m_surface.lock() : nullptr;
+        if (!surface)
+            continue;
+        if (g_pSeatManager->m_state.keyboardFocus.lock() != surface)
+            Desktop::focusState()->rawSurfaceFocus(surface);
+        if (g_pSeatManager->m_state.keyboardFocus.lock() != surface)
+            return false;
+        for (const auto& key : m_searchPendingKeys) {
+            g_pSeatManager->sendKeyboardMods(key.depressed, key.latched, key.locked, key.group);
+            g_pSeatManager->sendKeyboardKey(key.event.timeMs, key.event.keycode, key.event.state);
+        }
+        if (!m_searchPendingKeys.empty()) {
+            if (const auto keyboard = inputKeyboardWithState(); keyboard && keyboard->m_xkbState) {
+                auto* state = keyboard->m_xkbState;
+                g_pSeatManager->sendKeyboardMods(
+                    xkb_state_serialize_mods(state, XKB_STATE_MODS_DEPRESSED),
+                    xkb_state_serialize_mods(state, XKB_STATE_MODS_LATCHED),
+                    xkb_state_serialize_mods(state, XKB_STATE_MODS_LOCKED),
+                    xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE));
+            }
+        }
+        m_searchPendingKeys.clear();
+        return true;
+    }
+    return false;
 }
 
 bool OverviewController::startSearchInput() {
@@ -3524,10 +3576,26 @@ bool OverviewController::startSearchInput() {
         stopSearchInput();
         return false;
     }
+    m_searchFocusTimer = wl_event_loop_add_timer(loop, [](void* data) {
+        auto* controller = static_cast<OverviewController*>(data);
+        if (controller->m_searchActive && !controller->ensureSearchInputFocus())
+            wl_event_source_timer_update(controller->m_searchFocusTimer, 8);
+        return 0;
+    }, this);
+    if (!m_searchFocusTimer) {
+        stopSearchInput();
+        return false;
+    }
+    wl_event_source_timer_update(m_searchFocusTimer, 8);
     return true;
 }
 
 void OverviewController::stopSearchInput(bool clearSearchState) {
+    if (m_searchFocusTimer) {
+        wl_event_source_remove(m_searchFocusTimer);
+        m_searchFocusTimer = nullptr;
+    }
+    m_searchPendingKeys.clear();
     m_searchPreeditActive = false;
     if (clearSearchState) {
         m_searchActive = false;
@@ -7511,7 +7579,7 @@ std::vector<PHLMONITOR> OverviewController::ownedMonitors() const {
 }
 
 bool OverviewController::shouldSyncRealFocusDuringOverview() const {
-    return shouldSyncOverviewLiveFocus(shouldHandleInput(), focusFollowsMouseEnabled(), m_inputFollowMouseBackup);
+    return !m_searchActive && shouldSyncOverviewLiveFocus(shouldHandleInput(), focusFollowsMouseEnabled(), m_inputFollowMouseBackup);
 }
 
 bool OverviewController::insideRenderLifecycle() const {
