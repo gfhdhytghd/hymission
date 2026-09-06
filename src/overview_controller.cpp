@@ -5445,7 +5445,8 @@ double OverviewController::workspaceStripGap() const {
 }
 
 bool OverviewController::workspaceStripEnabled(const State& state) const {
-    return state.collectionPolicy.onlyActiveWorkspace && !state.suppressWorkspaceStrip;
+    const bool forceShow = getConfigInt(m_handle, "plugin:hymission:workspace_strip_force_show", 0) != 0;
+    return (state.collectionPolicy.onlyActiveWorkspace || forceShow) && !state.suppressWorkspaceStrip;
 }
 
 bool OverviewController::isStripOnlyOverviewState(const State& state) const {
