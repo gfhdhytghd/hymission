@@ -528,16 +528,15 @@ workspace thumbnail. Group order, membership, and lock state are preserved.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `vim_keys` | bool | `0` | Let `h` / `j` / `k` / `l` move the selection like the arrow keys. Checked before label picking, so those four keys stop acting as labels while it is on. Only meaningful with `pick_labels_enabled = 1`: with labels off the overview opens with the search bar focused and every plain key is text. |
+| `vim_keys` | bool | `0` | Use `h/j/k/l` to move left/down/up/right. Forces keyboard pick labels off and shows a warning, regardless of `pick_labels_enabled`. Overview opens ready for navigation; press `/` to search. |
 
-`Tab` and `Shift+Tab` cycle the selection in the same order the mouse wheel uses, independent of
+Outside search, `Tab` and `Shift+Tab` cycle the selection in the same order the mouse wheel uses, independent of
 `vim_keys`. `Return` activates the selection and `Escape` closes overview.
 
 ### Label picking
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `vim_keys` | bool | `0` | Use `h/j/k/l` to move left/down/up/right. Forces keyboard pick labels off and shows a warning, regardless of `pick_labels_enabled`. Overview opens ready for navigation; press `/` to search. |
 | `pick_labels_enabled` | bool | `0` | Enable direct keyboard selection in the configured `pick_labels_mode`. When labels are shown, it reuses `close_button_color` / `close_button_glyph_color` / `close_button_size` for styling; previews too small for a legible chip skip drawing it but remain selectable. |
 | `pick_labels_show` | bool | `1` | Controls whether label chips are drawn. Set to `0` to keep keyboard picking active without displaying labels; `pick_labels_enabled` must still be `1`. |
 | `pick_labels_mode` | string | `sequential` | `sequential` keeps the numbered `1`-`9`, `A1`-`Z9` scheme. `spatial` maps the physical ANSI alphanumeric and punctuation area to preview centers across the participating monitors. Up to 47 windows receive distinct single-key labels; denser layouts share a primary key and show a two-key route such as `FF` or `FR`. |
