@@ -48,8 +48,11 @@ A single transform maps the reduced desktop into the card; windows extending
 outside that desktop are clipped, not rearranged. Live client geometry is unchanged.
 
 Each window is rendered directly into a miniature-sized transparent framebuffer
-using render-pass translation/scaling. Miniatures are then composed into the
-workspace card. No wallpaper/layer surfaces are rendered, and the sidebar and
+using render-pass translation/scaling. Miniatures are cached separately and
+composed during the sidebar's live render pass. Windows that Hyprland considers
+blur-enabled blur the wallpaper and lower previews behind them at their displayed
+size, respecting global blur and window no-blur rules. No wallpaper/layer surfaces
+are captured, and the sidebar and
 cards have no background fill, leaving the actual wallpaper visible between
 windows. Window main surfaces are previewed; transient popups are not separate
 miniatures. Compositor decorations default off (`stage_window_decorations = 0`);

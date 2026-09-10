@@ -93,7 +93,7 @@ class StagePassElement final : public IPassElement {
   public:
     StagePassElement(std::function<void()> draw, const CBox& bounds) : m_draw(std::move(draw)), m_bounds(bounds) {}
     std::vector<UP<IPassElement>> draw() override { m_draw(); return {}; }
-    bool needsLiveBlur() override { return false; }
+    bool needsLiveBlur() override { return true; }
     bool needsPrecomputeBlur() override { return false; }
     bool undiscardable() override { return true; }
     bool disableSimplification() override { return true; }
@@ -108,9 +108,14 @@ class StagePassElement final : public IPassElement {
 } // namespace
 
 struct StageController::Impl {
+    struct Preview {
+        PHLWINDOWREF window;
+        SP<Render::IFramebuffer> framebuffer;
+        CBox target;
+    };
     struct Card {
         PHLWORKSPACEREF workspace;
-        SP<Render::IFramebuffer> snapshot;
+        std::vector<Preview> previews;
         bool dirty = true;
         bool snapshotReady = false;
     };
@@ -137,6 +142,7 @@ struct StageController::Impl {
     using WindowAtFn = PHLWINDOW (*)(const Desktop::CViewHitTester*, const Vector2D&, uint16_t, PHLWINDOW);
     using RoundingFn = float (*)(Desktop::View::CWindow*);
     using RenderWindowFn = void (*)(Render::IHyprRenderer*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, Render::eRenderPassMode, bool, bool);
+    using ShouldBlurFn = bool (*)(Render::IHyprRenderer*, PHLWINDOW);
     inline static Impl* instance = nullptr;
 
     HANDLE handle;
@@ -148,6 +154,7 @@ struct StageController::Impl {
     CFunctionHook* hitHook = nullptr;
     CFunctionHook* roundingHook = nullptr;
     RenderWindowFn renderWindow = nullptr;
+    ShouldBlurFn shouldBlur = nullptr;
     UP<SEventLoopDoLaterLock> deferred;
     SP<CEventLoopTimer> refreshTimer;
     SP<CEventLoopTimer> motionTimer;
@@ -252,7 +259,8 @@ bool StageController::Impl::installHooks() {
     const auto hit = find("windowAt", "Desktop::CViewHitTester::windowAt(");
     const auto rounding = find("rounding", "Desktop::View::CWindow::rounding()");
     renderWindow = reinterpret_cast<RenderWindowFn>(find("renderWindow", "IHyprRenderer::renderWindow("));
-    if (area && drag && hit && rounding && renderWindow && g_pHyprOpenGL) {
+    shouldBlur = reinterpret_cast<ShouldBlurFn>(find("shouldBlur", "IHyprRenderer::shouldBlur(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>)"));
+    if (area && drag && hit && rounding && renderWindow && shouldBlur && g_pHyprOpenGL) {
         areaHook = HyprlandAPI::createFunctionHook(handle, area, reinterpret_cast<void*>(&recheckThunk));
         dragHook = HyprlandAPI::createFunctionHook(handle, drag, reinterpret_cast<void*>(&dragThunk));
         hitHook = HyprlandAPI::createFunctionHook(handle, hit, reinterpret_cast<void*>(&windowAtThunk));
@@ -496,7 +504,7 @@ void StageController::Impl::sync() {
             relayout.push_back(monitor);
         for (auto& card : screen->cards) {
             if (changedGeometry) {
-                card.snapshot.reset();
+                card.previews.clear();
                 card.snapshotReady = false;
             }
             card.dirty |= forceRefresh || changedGeometry || changedCards || changedActive || changedSuspension || changedCover;
@@ -752,8 +760,29 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
             continue;
         const CBox box{screen->base.x + geometry.padding + slide, screen->base.y + top, geometry.cardWidth, geometry.cardHeight};
         const bool hover = screen->hovered == i && !screen->covered;
-        if (card.snapshotReady && card.snapshot)
-            g_pHyprOpenGL->renderTexture(card.snapshot->getTexture(), physical(box), {});
+        if (card.snapshotReady) {
+            const auto stripClip = g_pHyprRenderer->m_renderData.clipBox;
+            const auto cardClip = physical(box).intersection(stripClip);
+            g_pHyprRenderer->m_renderData.clipBox = cardClip;
+            for (const auto& preview : card.previews) {
+                const auto window = preview.window.lock();
+                if (!window || !window->m_isMapped || window->isHidden() || window->m_pinned)
+                    continue;
+                const auto radius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
+                    numberSetting("decoration:rounding", 0), preview.target.w, preview.target.h);
+                CTexPassElement::SRenderData data;
+                data.tex = preview.framebuffer->getTexture();
+                data.box = physical(preview.target.copy().translate(box.pos()));
+                data.round = static_cast<int>(std::lround(radius * monitor->m_scale));
+                // Blur the actual sidebar backdrop, not the transparent capture
+                // framebuffer. Live blur also includes lower window previews.
+                data.blur = shouldBlur && shouldBlur(g_pHyprRenderer.get(), window);
+                data.blockBlurOptimization = true;
+                data.clipBox = cardClip;
+                g_pHyprRenderer->draw(data, g_pHyprRenderer->m_renderData.damage);
+            }
+            g_pHyprRenderer->m_renderData.clipBox = stripClip;
+        }
         if (hover) {
             const CHyprColor color(0.6, 0.82, 1.0, 1.0);
             for (const auto& edge : {CBox{box.x, box.y, box.w, 2}, CBox{box.x, box.y + box.h - 2, box.w, 2},
@@ -793,18 +822,11 @@ bool StageController::Impl::snapshot(Screen& screen, Card& card) {
     if (!monitor || !workspace || !g_pHyprOpenGL || !renderWindow)
         return false;
     g_pHyprOpenGL->makeEGLCurrent();
-    if (!card.snapshot)
-        card.snapshot = g_pHyprRenderer->createFB("hymission stage card");
-    const int thumbWidth = std::max(1, static_cast<int>(std::lround(screen.geometry.cardWidth * monitor->m_scale)));
-    const int thumbHeight = std::max(1, static_cast<int>(std::lround(screen.geometry.cardHeight * monitor->m_scale)));
-    if (!card.snapshot || !card.snapshot->alloc(thumbWidth, thumbHeight))
-        return false;
     const auto prepare = [&](const SP<Render::IFramebuffer>& fb) {
         fb->setImageDescription(monitor->workBufferImageDescription());
         fb->getTexture()->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         fb->getTexture()->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     };
-    prepare(card.snapshot);
 
     // Restore every temporary render override before returning to the event
     // loop. In particular, never switch the monitor's real active workspace.
@@ -874,7 +896,7 @@ bool StageController::Impl::snapshot(Screen& screen, Card& card) {
         g_pHyprRenderer->draw(CClearPassElement::SClearData{.color = CHyprColor(0, 0, 0, 0)}, damage);
         return true;
     };
-    std::vector<SP<Render::IFramebuffer>> previews;
+    std::vector<Preview> previews;
     for (const auto& slot : slots) {
         auto framebuffer = g_pHyprRenderer->createFB("hymission stage window miniature");
         if (!framebuffer || !framebuffer->alloc(std::max(1, static_cast<int>(std::ceil(slot.target.width * monitor->m_scale))),
@@ -893,22 +915,12 @@ bool StageController::Impl::snapshot(Screen& screen, Card& card) {
         renderWindow(g_pHyprRenderer.get(), windows[slot.index], monitor, Time::steadyNow(), decorations, Render::RENDER_PASS_MAIN, !decorations, !decorations);
         g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{Render::SRenderModifData{}}));
         g_pHyprRenderer->endRender();
-        previews.emplace_back(std::move(framebuffer));
+        previews.push_back(Preview{windows[slot.index], std::move(framebuffer), CBox{slot.target.x, slot.target.y, slot.target.width, slot.target.height}});
     }
-    if (!begin(card.snapshot))
-        return false;
-    const double configuredRadius = numberSetting("plugin:hymission:stage_window_rounding", -1);
-    const double systemRadius = numberSetting("decoration:rounding", 0);
-    for (std::size_t i = 0; i < slots.size(); ++i) {
-        const auto& target = slots[i].target;
-        const double radius = stage::previewRounding(configuredRadius, systemRadius, target.width, target.height);
-        g_pHyprOpenGL->renderTexture(previews[i]->getTexture(), CBox{target.x, target.y, target.width, target.height}.scale(monitor->m_scale),
-                                    {.round = static_cast<int>(std::lround(radius * monitor->m_scale))});
-    }
-    g_pHyprRenderer->endRender();
     restore.reset();
     if (glGetError() != GL_NO_ERROR)
         return false;
+    card.previews = std::move(previews);
     card.snapshotReady = true;
     return true;
 }
