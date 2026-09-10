@@ -48,9 +48,12 @@ logged on activation/config reload.
 ## Rendering and input
 
 Workspace switches animate outgoing windows into their sidebar card and incoming
-windows from their previous card into the desktop. Both directions use the same
-cubic ease-out `1 - (1 - t)^3` for position, width and height, starting fast and
-slowing together. `stage_transition_ms` defaults to 300 ms (0 disables, maximum
+windows from their previous card into the desktop. Both directions share one
+linear timeline `t`. Position follows the symmetric smoothstep `t*t*(3-2*t)`
+(slow, fast, slow); width, height and rounding follow cubic ease-out
+`1-(1-t)^3` (fast then slow). Incoming desktop windows are drawn last, above all
+departing windows, including when a transition is retargeted.
+`stage_transition_ms` defaults to 300 ms (0 disables, maximum
 2000 ms), and disabling Hyprland animations also disables these flights.
 Rapid switches retarget from the currently displayed boxes and rounding.
 

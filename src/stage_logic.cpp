@@ -116,7 +116,11 @@ double transitionProgress(double elapsed, double duration) {
 
 Rect transitionBox(const Rect& from, const Rect& to, double p) {
     p = std::clamp(sane(p, 1), 0.0, 1.0);
-    return {from.x + (to.x - from.x) * p, from.y + (to.y - from.y) * p,
-        from.width + (to.width - from.width) * p, from.height + (to.height - from.height) * p};
+    // A shared linear timeline drives separate curves: symmetric smoothstep
+    // for translation, cubic ease-out for both growing and shrinking.
+    const double position = p * p * (3 - 2 * p);
+    const double scale = transitionProgress(p, 1);
+    return {from.x + (to.x - from.x) * position, from.y + (to.y - from.y) * position,
+        from.width + (to.width - from.width) * scale, from.height + (to.height - from.height) * scale};
 }
 } // namespace hymission::stage

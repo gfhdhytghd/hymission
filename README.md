@@ -620,7 +620,7 @@ hl.config({
 | `stage_padding` | `-1` | Follow `general:gaps_out` on the outer left/top/bottom edges; the desktop-facing edge accounts for native gaps. Nonnegative values override all sidebar edges in logical pixels. |
 | `stage_card_gap` | `-1` | Follow the sum of top/bottom `general:gaps_in`; nonnegative values override the vertical card gap. |
 | `stage_desktop_gap` | `-1` | No additional gap beyond native spacing; nonnegative values add explicit spacing before the desktop. |
-| `stage_transition_ms` | `300` | Workspace window flights between sidebar and desktop; `0` disables. Translation and scale share cubic ease-out in both directions. Respects `animations:enabled`. |
+| `stage_transition_ms` | `300` | Workspace window flights; `0` disables. Shared timeline, symmetric ease-in-out translation and ease-out scale. Incoming desktop stays above departing windows. Respects `animations:enabled`. |
 | `stage_show_empty` | `1` | Keep inactive empty workspaces as transparent empty slots; `0` hides them. Hover outlines indicate their click/drop area. No synthetic workspaces or plus card. |
 | `stage_drop_follow` | `0` | After dropping a window, stay on the current workspace; `1` follows the moved window. |
 | `stage_maximize_cover_strip` | `0` | Maximization fills the right desktop; `1` lets maximization also cover the sidebar. True fullscreen always covers the output. |

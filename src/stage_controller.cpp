@@ -877,7 +877,9 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
 }
 
 double StageController::Impl::flightProgress(const Screen& screen) const {
-    return stage::transitionProgress(std::chrono::duration<double, std::milli>(Clock::now() - screen.flightStart).count(), screen.flightDuration);
+    if (screen.flightDuration <= 0)
+        return 1;
+    return std::clamp(std::chrono::duration<double, std::milli>(Clock::now() - screen.flightStart).count() / screen.flightDuration, 0.0, 1.0);
 }
 
 bool StageController::Impl::flying(const Screen& screen, const PHLWINDOW& window) const {
@@ -947,7 +949,7 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
             if (!from || !to)
                 continue;
             const auto nativeRadius = window->rounding();
-            const double fromRadius = old != previousFlights.end() ? old->fromRadius + (old->toRadius - old->fromRadius) * oldProgress :
+            const double fromRadius = old != previousFlights.end() ? old->fromRadius + (old->toRadius - old->fromRadius) * stage::transitionProgress(oldProgress, 1) :
                 workspace->m_id == previous ? nativeRadius : radius(*from);
             const double toRadius = workspace == monitor->m_activeWorkspace ? nativeRadius : radius(*to);
             screen.flights.push_back({std::move(preview), *from, *to, static_cast<float>(fromRadius), static_cast<float>(toRadius)});
@@ -955,6 +957,12 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
     }
     if (screen.flights.empty())
         return;
+    // Stable partition retains each workspace's stacking order while keeping
+    // the new desktop above every departing workspace, including on retarget.
+    std::stable_partition(screen.flights.begin(), screen.flights.end(), [&](const Flight& flight) {
+        const auto window = flight.preview.window.lock();
+        return !window || window->m_workspace != monitor->m_activeWorkspace;
+    });
     // Our flight owns the visual switch. Stop the native workspace slide/fade
     // so it cannot resume behind the texture or flash at the handoff.
     for (const auto& workspace : workspaces) {
@@ -984,7 +992,7 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
         CTexPassElement::SRenderData data;
         data.tex = flight.preview.framebuffer->getTexture();
         data.box = CBox{box.x, box.y, box.width, box.height}.translate(-monitor->m_position).scale(monitor->m_scale);
-        data.round = static_cast<int>(std::lround((flight.fromRadius + (flight.toRadius - flight.fromRadius) * p) * monitor->m_scale));
+        data.round = static_cast<int>(std::lround((flight.fromRadius + (flight.toRadius - flight.fromRadius) * stage::transitionProgress(p, 1)) * monitor->m_scale));
         data.blur = shouldBlur && shouldBlur(g_pHyprRenderer.get(), window);
         data.blockBlurOptimization = true;
         data.clipBox = clip;
