@@ -444,7 +444,7 @@ void StageController::Impl::sync() {
                 continue;
             if (workspace == monitor->m_activeWorkspace)
                 continue;
-            if (!showEmpty && workspace->getWindowCount() == 0)
+            if (!showEmpty && workspace->getWindowCount(std::nullopt, false) == 0)
                 continue;
             targets.emplace_back(workspace);
         }
@@ -846,9 +846,9 @@ bool StageController::Impl::snapshot(Screen& screen, Card& card) {
     std::vector<CBox> boxes;
     std::vector<WindowInput> inputs;
     for (const auto& window : Desktop::windowState()->windows()) {
-        if (!window->m_isMapped || window->isHidden() || window->onSpecialWorkspace())
+        if (!window->m_isMapped || window->isHidden() || window->onSpecialWorkspace() || window->m_pinned)
             continue;
-        if (window->m_workspace == workspace || (window->m_pinned && window->m_monitor == monitor)) {
+        if (window->m_workspace == workspace) {
             const auto box = decorations ? window->getFullWindowBoundingBox() : CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
             if (box.w <= 0 || box.h <= 0)
                 continue;

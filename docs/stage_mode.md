@@ -42,7 +42,7 @@ removed and the old one becomes eligible. There are no numeric/name labels.
 Empty-workspace slots are transparent and identified by a hover/drop outline.
 
 Offscreen capture runs outside a compositor render pass. Mapped, non-hidden
-windows belonging to each target workspace (plus its monitor's pinned windows)
+non-pinned windows belonging to each target workspace
 retain their original positions, relative sizes, overlap and stacking order.
 A single transform maps the reduced desktop into the card; windows extending
 outside that desktop are clipped, not rearranged. Live client geometry is unchanged.
