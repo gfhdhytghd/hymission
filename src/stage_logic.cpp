@@ -131,4 +131,11 @@ std::pair<double, double> mapDropPoint(const Rect& card, const Rect& desktop, do
     const double v = card.height > 0 ? std::clamp((y - card.y) / card.height, 0.0, 1.0) : 0.5;
     return {desktop.x + u * desktop.width, desktop.y + v * desktop.height};
 }
+Rect sidebarArea(const Rect& base, const Geometry& geometry, bool right) {
+    return {right ? base.x + base.width - geometry.bandWidth : base.x, base.y, geometry.bandWidth, base.height};
+}
+
+Rect desktopArea(const Rect& base, const Geometry& geometry, bool right) {
+    return {right ? base.x : base.x + geometry.reservation, base.y, geometry.desktopWidth, base.height};
+}
 } // namespace hymission::stage

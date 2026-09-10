@@ -128,5 +128,15 @@ int main() {
     ok &= expect(near(drop.first, -1250) && near(drop.second, 640), "drop focal point maps both axes across monitor offsets and reserved areas");
     const auto shiftedDrop = mapDropPoint({-1900, 150, 200, 100}, dropDesktop, -1850, 225);
     ok &= expect(near(drop.first, shiftedDrop.first) && near(drop.second, shiftedDrop.second), "animated or scrolled card position does not change the relative drop location");
+    const hymission::Rect outputBase{-1920, 40, 1920, 1040};
+    const auto leftBand = sidebarArea(outputBase, small, false);
+    const auto rightBand = sidebarArea(outputBase, small, true);
+    const auto leftDesktop = desktopArea(outputBase, small, true);
+    const auto rightDesktop = desktopArea(outputBase, small, false);
+    ok &= expect(near(leftBand.x, -1920) && near(rightBand.x + rightBand.width, 0), "both sidebar sides are relative to their own output");
+    ok &= expect(near(leftDesktop.x, -1920) && near(rightDesktop.x + rightDesktop.width, 0), "desktop reservation mirrors with the sidebar");
+    ok &= expect(leftDesktop.x + leftDesktop.width <= rightBand.x && rightDesktop.x >= leftBand.x + leftBand.width, "desktop and sidebar do not overlap on either side");
+    const auto rightDrop = mapDropPoint(rightBand, leftDesktop, rightBand.x + rightBand.width / 2, rightBand.y + rightBand.height / 2);
+    ok &= expect(near(rightDrop.first, leftDesktop.x + leftDesktop.width / 2) && near(rightDrop.second, leftDesktop.y + leftDesktop.height / 2), "right sidebar drops map into the left desktop on a negative-coordinate monitor");
     return ok ? 0 : 1;
 }

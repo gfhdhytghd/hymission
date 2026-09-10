@@ -47,6 +47,27 @@ logged on activation/config reload.
 
 ## Rendering and input
 
+### Smartisan mode
+
+`stage_smartisan_mode = 1` enables an optional per-monitor side transition.
+The sidebar starts on the left. On the first ordinary workspace switch, the
+selected workspace expands into the left desktop area; the old desktop shrinks
+into its matching right-hand card. The remaining left sidebar translates out
+through the left edge while its new contents enter from the right edge, both
+moving left on the same transition timeline. The sidebar remains on the right
+for subsequent switches. Disabling this mode returns it to the left.
+
+Both copies are clipped to the owning monitor's logical rectangle, converted
+to render pixels; flight textures use the same output limit. Neither copy is
+submitted to an adjacent monitor. The native work-area reservation, sidebar
+hit tests, snapshot coordinates, floating-window correction and drag-drop focal
+points all follow the new side. Input to the sidebar is paused during the
+edge transition. Zero duration or disabled animations changes sides immediately.
+Fullscreen/overview/session lock and output reconfiguration cancel the visual
+transition safely. Mode/side/transition state is exposed in `hymission-stage-state`.
+
+### Window flights
+
 Workspace switches animate outgoing windows into their sidebar card and incoming
 windows from their previous card into the desktop. Both directions share one
 linear timeline `t`. Window center position follows the symmetric smoothstep `t*t*(3-2*t)`
