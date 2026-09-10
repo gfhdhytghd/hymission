@@ -617,9 +617,9 @@ hl.config({
 | `stage_card_max_width` | `0` | `0` automatically caps card width at one fifth of each output's logical width. Positive values override the cap in logical pixels. |
 | `stage_window_rounding` | `-1.0` | Window miniature corner radius in logical pixels at its displayed size. Negative values use half of `decoration:rounding`; `0` makes square corners. |
 | `stage_window_decorations` | `0` | Hide compositor window decorations in miniatures; `1` includes them. Client-drawn titlebars remain part of application content. |
-| `stage_padding` | `12` | Padding inside the sidebar, in logical pixels. |
-| `stage_card_gap` | `12` | Vertical gap between cards. |
-| `stage_desktop_gap` | `12` | Gap between the sidebar and the native desktop. |
+| `stage_padding` | `-1` | Follow `general:gaps_out` on the outer left/top/bottom edges; the desktop-facing edge accounts for native gaps. Nonnegative values override all sidebar edges in logical pixels. |
+| `stage_card_gap` | `-1` | Follow the sum of top/bottom `general:gaps_in`; nonnegative values override the vertical card gap. |
+| `stage_desktop_gap` | `-1` | No additional gap beyond native spacing; nonnegative values add explicit spacing before the desktop. |
 | `stage_show_empty` | `1` | Keep inactive empty workspaces as transparent empty slots; `0` hides them. Hover outlines indicate their click/drop area. No synthetic workspaces or plus card. |
 | `stage_drop_follow` | `0` | After dropping a window, stay on the current workspace; `1` follows the moved window. |
 | `stage_maximize_cover_strip` | `0` | Maximization fills the right desktop; `1` lets maximization also cover the sidebar. True fullscreen always covers the output. |

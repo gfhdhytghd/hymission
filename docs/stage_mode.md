@@ -7,14 +7,24 @@ the physical output mode. It is disabled by default.
 ## Geometry and layout ownership
 
 Start with the monitor's logical box and apply its existing reserved area once.
-For available dimensions `W × H`, padding `p`, desktop gap `g`, card gap `q`,
-and `N` visible inactive workspaces, define `A = W − 2p − g` and
-`L = H − 2p − (N−1)q`. The largest fitting card width is
+For available dimensions `W × H`, directional padding `left/right/top/bottom`,
+desktop gap `g`, card gap `q`, and `N` visible inactive workspaces,
+define `A = W − left − right − g` and
+`L = H − top − bottom − (N−1)q`. The largest fitting card width is
 `c = L*A / (N*H + L)` when `L > 0`. Clamp to the configured minimum/maximum,
 then derive desktop width `D = A − c` and card height `h = c*H/D`.
 The default maximum (`stage_card_max_width = 0`) is one fifth of the output's
 logical width, independently on each monitor. Positive values are pixel overrides.
 At the minimum width, any excess height becomes scrollable content.
+
+Sidebar spacing defaults to Hyprland's global gaps and updates on configuration
+reload. Outer left/top/bottom margins follow `general:gaps_out`, including
+asymmetric and zero values. Between cards, both adjacent `general:gaps_in`
+edges are added. The desktop-facing margin adds only the remainder of the
+left/right inner gap after the native desktop's left outer gap, clamped at zero;
+this avoids adding the native outer gap twice. Workspace-specific gap overrides
+remain owned by the native layout. The three `stage_*` spacing options default
+to `-1` for automatic spacing and accept nonnegative manual overrides.
 
 The work-area hook calls the original `CSpace::recheckWorkArea` first, then
 insets both fresh tiled and floating work areas. This preserves per-workspace
@@ -30,7 +40,7 @@ slide does not resize the native desktop on every animation frame.
 No cards means no reservation. On unusually small outputs the controller may
 go below the configured minimum card width, retaining at least 64 logical pixels
 of desktop; if even an 8-pixel card cannot fit, that output's sidebar is suspended.
-Negative gaps become zero, minimum widths below 8 become 8, and maximum width
+Resolved negative gaps become zero, minimum widths below 8 become 8, and maximum width
 is raised to the minimum when positive limits are configured in reverse order.
 Non-positive maxima select the automatic output-relative cap. Normalization is
 logged on activation/config reload.

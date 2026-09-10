@@ -13,6 +13,8 @@
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
+#include <hyprland/src/config/ConfigValue.hpp>
+#include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/GlobalWindowController.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
@@ -409,9 +411,24 @@ void StageController::Impl::sync() {
         return;
     }
 
-    const stage::Settings raw{static_cast<double>(setting("stage_card_min_width", 120)), static_cast<double>(setting("stage_card_max_width", 0)),
-                              static_cast<double>(setting("stage_padding", 12)), static_cast<double>(setting("stage_card_gap", 12)),
-                              static_cast<double>(setting("stage_desktop_gap", 12))};
+    static auto gapsInValue = CConfigValue<Config::IComplexConfigValue>("general:gaps_in");
+    static auto gapsOutValue = CConfigValue<Config::IComplexConfigValue>("general:gaps_out");
+    const auto& inner = *static_cast<Config::CCssGapData*>(gapsInValue.ptr());
+    const auto& outer = *static_cast<Config::CCssGapData*>(gapsOutValue.ptr());
+    const double padding = setting("stage_padding", -1);
+    const double cardGap = setting("stage_card_gap", -1);
+    const double desktopGap = setting("stage_desktop_gap", -1);
+    const stage::Settings raw{
+        .minWidth = static_cast<double>(setting("stage_card_min_width", 120)),
+        .maxWidth = static_cast<double>(setting("stage_card_max_width", 0)),
+        .padding = padding < 0 ? static_cast<double>(outer.m_left) : padding,
+        .cardGap = cardGap < 0 ? static_cast<double>(inner.m_top + inner.m_bottom) : cardGap,
+        .desktopGap = desktopGap < 0 ? 0 : desktopGap,
+        .paddingTop = padding < 0 ? static_cast<double>(outer.m_top) : padding,
+        // Native windows already receive gaps_out on the reduced work area.
+        // Add only the remainder of the desired two-sided inner gap here.
+        .paddingRight = padding < 0 ? std::max(0.0, static_cast<double>(inner.m_left + inner.m_right - outer.m_left)) : padding,
+        .paddingBottom = padding < 0 ? static_cast<double>(outer.m_bottom) : padding};
     settings = stage::normalize(raw);
     if ((reconfigure || !wasEnabled) && (raw.minWidth != settings.minWidth || raw.maxWidth != settings.maxWidth || raw.padding != settings.padding || raw.cardGap != settings.cardGap || raw.desktopGap != settings.desktopGap))
         Log::logger->log(Log::WARN, "[hymission] normalized invalid stage widths/padding/gaps");
@@ -482,7 +499,9 @@ void StageController::Impl::sync() {
         if (!dragged)
             screen->frozenWidth.reset();
         screen->geometry = stage::layout(base.w, base.h, targets.size(), settings, screen->frozenWidth, monitor->m_size.x);
-        const bool changedGeometry = changedOutput || oldGeometry.reservation != screen->geometry.reservation || oldGeometry.cardHeight != screen->geometry.cardHeight;
+        const bool changedGeometry = changedOutput || oldGeometry.reservation != screen->geometry.reservation || oldGeometry.cardHeight != screen->geometry.cardHeight ||
+            oldGeometry.padding != screen->geometry.padding || oldGeometry.paddingTop != screen->geometry.paddingTop ||
+            oldGeometry.paddingBottom != screen->geometry.paddingBottom || oldGeometry.cardGap != screen->geometry.cardGap;
         screen->scroll = screen->geometry.clampScroll(screen->scroll);
         const WORKSPACEID active = monitor->m_activeWorkspace ? monitor->m_activeWorkspace->m_id : WORKSPACE_INVALID;
         const bool changedActive = screen->active != active;
@@ -749,11 +768,11 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
     const auto physical = [&](CBox box) { return box.translate(-monitor->m_position).scale(monitor->m_scale); };
     const auto previousClip = g_pHyprRenderer->m_renderData.clipBox;
     g_pHyprRenderer->m_renderData.clipBox = physical(CBox{screen->base.x, screen->base.y, geometry.bandWidth, screen->base.h});
-    g_pHyprRenderer->m_renderData.clipBox = physical(CBox{screen->base.x, screen->base.y + geometry.padding, geometry.bandWidth, screen->base.h - 2 * geometry.padding});
+    g_pHyprRenderer->m_renderData.clipBox = physical(CBox{screen->base.x, screen->base.y + geometry.paddingTop, geometry.bandWidth, screen->base.h - geometry.paddingTop - geometry.paddingBottom});
     for (std::size_t i = 0; i < screen->cards.size(); ++i) {
         auto& card = screen->cards[i];
         const double top = geometry.cardTop(i, screen->scroll);
-        if (top + geometry.cardHeight <= geometry.padding || top >= screen->base.h - geometry.padding)
+        if (top + geometry.cardHeight <= geometry.paddingTop || top >= screen->base.h - geometry.paddingBottom)
             continue;
         const auto workspace = card.workspace.lock();
         if (!workspace)
@@ -803,7 +822,7 @@ void StageController::Impl::snapshots() {
         for (std::size_t i = 0; i < screen.cards.size(); ++i) {
             auto& card = screen.cards[i];
             const auto top = screen.geometry.cardTop(i, screen.scroll);
-            if (!card.dirty || top + screen.geometry.cardHeight <= screen.geometry.padding || top >= screen.base.h - screen.geometry.padding)
+            if (!card.dirty || top + screen.geometry.cardHeight <= screen.geometry.paddingTop || top >= screen.base.h - screen.geometry.paddingBottom)
                 continue;
             if (snapshot(screen, card)) {
                 card.dirty = false;

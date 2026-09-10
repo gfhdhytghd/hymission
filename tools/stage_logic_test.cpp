@@ -26,6 +26,12 @@ int main() {
     ok &= expect(near(small.reservation, 276), "reservation includes card, padding and desktop gap exactly once");
     ok &= expect(near(small.cardWidth / small.cardHeight, small.desktopWidth / 1050), "thumbnail matches reduced desktop, not output aspect");
     ok &= expect(near(small.maxScroll, 0), "few cards do not scroll");
+    const Settings asymmetric{.maxWidth = 240, .padding = 10, .cardGap = 10, .desktopGap = 0,
+        .paddingTop = 0, .paddingRight = 0, .paddingBottom = 10};
+    const auto edges = layout(1920, 1050, 30, asymmetric);
+    ok &= expect(near(edges.cardTop(0, 0), 0) && near(edges.reservation, edges.cardWidth + 10), "native zero top and separate horizontal gaps are preserved");
+    ok &= expect(edges.hit(10, 0, 0) == 0 && !edges.hit(9, 0, 0), "hit testing uses distinct top and left margins");
+    ok &= expect(near(edges.cardTop(29, edges.maxScroll) + edges.cardHeight, 1040), "scrolling preserves the native bottom margin");
 
     for (const double width : {640.0, 1080.0, 1536.0, 1920.0, 2560.0}) {
         for (const double height : {480.0, 864.0, 1050.0, 1920.0}) {

@@ -14,6 +14,9 @@ struct Settings {
     double padding = 12;
     double cardGap = 12;
     double desktopGap = 12;
+    double paddingTop = -1;
+    double paddingRight = -1;
+    double paddingBottom = -1;
 };
 
 struct Geometry {
@@ -24,6 +27,8 @@ struct Geometry {
     double desktopWidth = 0;
     double height = 0;
     double padding = 0;
+    double paddingTop = 0;
+    double paddingBottom = 0;
     double cardGap = 0;
     double maxScroll = 0;
     std::size_t count = 0;
