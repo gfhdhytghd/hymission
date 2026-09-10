@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <utility>
 #include "mission_layout.hpp"
 
 namespace hymission::stage {
@@ -48,6 +49,7 @@ double previewRounding(double configured, double system, double width, double he
 double transitionProgress(double elapsed, double duration);
 // progress is the linear timeline, before either easing curve is applied.
 Rect transitionBox(const Rect& from, const Rect& to, double progress);
+std::pair<double, double> mapDropPoint(const Rect& card, const Rect& desktop, double x, double y);
 
 // Keep this policy independent of compositor enum values for state tests.
 enum class CoverMode { None, Maximized, Fullscreen };

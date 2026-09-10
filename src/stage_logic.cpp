@@ -126,4 +126,9 @@ Rect transitionBox(const Rect& from, const Rect& to, double p) {
     const double centerY = from.y + from.height / 2 + (to.y + to.height / 2 - from.y - from.height / 2) * position;
     return {centerX - width / 2, centerY - height / 2, width, height};
 }
+std::pair<double, double> mapDropPoint(const Rect& card, const Rect& desktop, double x, double y) {
+    const double u = card.width > 0 ? std::clamp((x - card.x) / card.width, 0.0, 1.0) : 0.5;
+    const double v = card.height > 0 ? std::clamp((y - card.y) / card.height, 0.0, 1.0) : 0.5;
+    return {desktop.x + u * desktop.width, desktop.y + v * desktop.height};
+}
 } // namespace hymission::stage

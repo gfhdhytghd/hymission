@@ -70,7 +70,9 @@ The real client geometry and pointer coordinate system remain native throughout.
 
 Only inactive workspaces appear; after a switch the new active workspace is
 removed and the old one becomes eligible. There are no numeric/name labels.
-Empty-workspace slots are transparent and identified by a hover/drop outline.
+Empty-workspace slots are transparent. Hovering does not draw a frame.
+Retained cards animate vertical position changes using the transition duration;
+hit testing and drop mapping follow their displayed positions throughout.
 
 Offscreen capture runs outside a compositor render pass. Mapped, non-hidden
 non-pinned windows belonging to each target workspace
@@ -118,7 +120,10 @@ the sidebar keeps its release, so application file/text drags are not consumed.
 Native move drags are observed through the compositor drag controller; the
 normal drag end restores floating/tiling and ends the grab before the native
 workspace-move path commits the drop. This path also preserves native group
-movement and cross-monitor behavior. Dropping on the current workspace does not
+movement and cross-monitor behavior. The release point is mapped from the animated
+card's rectangle into the destination desktop's global logical coordinates.
+Tiled targets are reinserted using the native algorithm's focal-point API;
+floating targets retain their grab offset at the mapped point. Dropping on the current workspace does not
 issue a second move. Escape cancels sidebar delivery; no resize or application
 data drag is interpreted as a window move.
 
