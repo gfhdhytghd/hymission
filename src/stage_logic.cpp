@@ -120,7 +120,10 @@ Rect transitionBox(const Rect& from, const Rect& to, double p) {
     // for translation, cubic ease-out for both growing and shrinking.
     const double position = p * p * (3 - 2 * p);
     const double scale = transitionProgress(p, 1);
-    return {from.x + (to.x - from.x) * position, from.y + (to.y - from.y) * position,
-        from.width + (to.width - from.width) * scale, from.height + (to.height - from.height) * scale};
+    const double width = from.width + (to.width - from.width) * scale;
+    const double height = from.height + (to.height - from.height) * scale;
+    const double centerX = from.x + from.width / 2 + (to.x + to.width / 2 - from.x - from.width / 2) * position;
+    const double centerY = from.y + from.height / 2 + (to.y + to.height / 2 - from.y - from.height / 2) * position;
+    return {centerX - width / 2, centerY - height / 2, width, height};
 }
 } // namespace hymission::stage

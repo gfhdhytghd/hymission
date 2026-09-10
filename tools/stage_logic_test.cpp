@@ -107,14 +107,19 @@ int main() {
     const double p = 0.5;
     const auto growing = transitionBox(miniature, full, p);
     const auto shrinking = transitionBox(full, miniature, p);
-    ok &= expect(near((growing.x - miniature.x) / (full.x - miniature.x), 0.5) &&
-                 near((shrinking.y - full.y) / (miniature.y - full.y), 0.5), "both translations reach midpoint on the shared timeline");
+    const auto cx = [](const hymission::Rect& r) { return r.x + r.width / 2; };
+    const auto cy = [](const hymission::Rect& r) { return r.y + r.height / 2; };
+    ok &= expect(near((cx(growing) - cx(miniature)) / (cx(full) - cx(miniature)), 0.5) &&
+                 near((cy(shrinking) - cy(full)) / (cy(miniature) - cy(full)), 0.5), "both window centers reach midpoint on the shared timeline");
     ok &= expect(near((growing.width - miniature.width) / (full.width - miniature.width), 0.875) &&
                  near((shrinking.height - full.height) / (miniature.height - full.height), 0.875), "both scales ease out independently of translation");
     const auto early = transitionBox(miniature, full, 0.25);
     const auto late = transitionBox(miniature, full, 0.75);
-    ok &= expect(near(early.x - miniature.x, full.x - late.x), "translation curve is symmetric about the timeline midpoint");
-    ok &= expect(early.x - miniature.x < growing.x - early.x, "translation accelerates before the midpoint");
+    ok &= expect(near(cx(early) - cx(miniature), cx(full) - cx(late)), "center translation is symmetric about the timeline midpoint");
+    ok &= expect(cx(early) - cx(miniature) < cx(growing) - cx(early), "center translation accelerates before the midpoint");
+    const hymission::Rect centeredSmall{450, 350, 100, 100}, centeredLarge{0, 0, 1000, 800};
+    const auto centered = transitionBox(centeredSmall, centeredLarge, 0.3);
+    ok &= expect(near(cx(centered), 500) && near(cy(centered), 400), "scaling about a stationary center does not introduce translation");
     ok &= expect(near(growing.width / growing.height, full.width / full.height) && near(shrinking.width / shrinking.height, full.width / full.height), "flight preserves aspect ratio");
     const auto retargeted = transitionBox(growing, miniature, 0);
     ok &= expect(near(retargeted.x, growing.x) && near(retargeted.width, growing.width), "interrupted transition resumes from its current box without a jump");
