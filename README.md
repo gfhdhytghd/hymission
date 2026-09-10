@@ -580,6 +580,65 @@ Search filters the current overview scope by Unicode-normalized, case-insensitiv
 
 ### Workspace strip and bar
 
+#### Persistent desktop sidebar (stage mode)
+
+Stage mode is separate from overview. It reserves a left band on each monitor;
+the native layout resizes the actual desktop to the remaining area. Applications
+keep their normal rendering scale and input coordinates. Each card shows that
+monitor's workspace windows at their original relative positions and stacking
+order, with no wallpaper or bar. Card aspect ratios match the reduced desktop
+after the monitor's existing reserved areas have been subtracted.
+
+Enable it in your existing plugin configuration **after updating the plugin**:
+
+```lua
+hl.config({
+    plugin = {
+        hymission = {
+            stage_enabled = 1,
+            stage_card_min_width = 120,
+            stage_card_max_width = 240,
+            stage_show_empty = 1,
+            stage_drop_follow = 0,
+            stage_maximize_cover_strip = 0,
+        },
+    },
+})
+```
+
+| Option | Default | Behavior |
+| --- | --- | --- |
+| `stage_enabled` | `0` | Enable the persistent sidebar independently on each monitor. |
+| `stage_card_min_width` | `120` | Minimum card width in logical pixels. Below this limit, excess cards scroll vertically. |
+| `stage_card_max_width` | `240` | Maximum card width; a few workspaces cannot expand the sidebar beyond this limit. |
+| `stage_padding` | `12` | Padding inside the sidebar, in logical pixels. |
+| `stage_card_gap` | `12` | Vertical gap between cards. |
+| `stage_desktop_gap` | `12` | Gap between the sidebar and the native desktop. |
+| `stage_show_empty` | `1` | Keep existing empty workspaces as labeled empty cards; `0` hides them. No synthetic workspaces or plus card. |
+| `stage_drop_follow` | `0` | After dropping a window, stay on the current workspace; `1` follows the moved window. |
+| `stage_maximize_cover_strip` | `0` | Maximization fills the right desktop; `1` lets maximization also cover the sidebar. True fullscreen always covers the output. |
+| `stage_refresh_ms` | `500` | Thumbnail refresh interval; interaction changes refresh immediately. Values below `16` use `16` ms. Hidden sidebars do not capture thumbnails. |
+
+Cards automatically grow or shrink within the configured bounds to fit the
+available height. Scroll the sidebar if they cannot fit at minimum width.
+Click a card to switch that monitor's workspace. Use the normal compositor
+window-move drag (for example, your existing `SUPER + left mouse` binding) to
+drop a window onto a card. Holding a drag near the top/bottom scrolls the list;
+the width remains fixed during the drag. File/text drags inside applications
+and window-resize gestures do not move windows between workspaces.
+
+True fullscreen slides the sidebar out; exiting restores it. Overview and special
+workspaces temporarily hide the persistent sidebar while preserving its desktop
+reservation. With `stage_show_empty = 0`, a monitor without visible cards releases
+the sidebar reservation. Extremely small outputs prioritize a usable desktop
+over the minimum card width, or suspend the sidebar if neither can fit.
+
+`hyprctl hymission-stage-state` reports each monitor's computed dimensions,
+workspace cards, coverage and suspension state. See
+[`docs/stage_mode.md`](docs/stage_mode.md) for implementation details and the
+live acceptance checklist. Disabling the mode restores native work areas;
+existing `workspace_strip_*` options continue to control overview only.
+
 #### Workspace strip behavior and geometry
 
 | Option | Type | Default | Description |

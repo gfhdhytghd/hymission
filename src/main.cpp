@@ -15,9 +15,12 @@ extern "C" {
 }
 
 #include "overview_controller.hpp"
+#include "stage_controller.hpp"
 
 inline HANDLE g_pluginHandle = nullptr;
 inline std::unique_ptr<hymission::OverviewController> g_overviewController;
+inline std::unique_ptr<hymission::StageController> g_stageController;
+inline SP<SHyprCtlCommand> g_stageStateCommand;
 inline SP<SHyprCtlCommand> g_overviewStateCommand;
 inline SP<SHyprCtlCommand> g_rawWindowRenderCommand;
 inline SP<SHyprCtlCommand> g_captureInputCommand;
@@ -348,6 +351,16 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("switch_toggle_auto_next", 1);
     INT_CONF("workspace_change_keeps_overview", 1);
     INT_CONF("workspace_strip_thickness", 160);
+    INT_CONF("stage_enabled", 0);
+    INT_CONF("stage_card_min_width", 120);
+    INT_CONF("stage_card_max_width", 240);
+    INT_CONF("stage_padding", 12);
+    INT_CONF("stage_card_gap", 12);
+    INT_CONF("stage_desktop_gap", 12);
+    INT_CONF("stage_show_empty", 1);
+    INT_CONF("stage_drop_follow", 0);
+    INT_CONF("stage_maximize_cover_strip", 0);
+    INT_CONF("stage_refresh_ms", 500);
     INT_CONF("workspace_strip_gap", 24);
     INT_CONF("workspace_strip_refresh_ms", 500);
     INT_CONF("workspace_strip_force_show", 0);
@@ -410,6 +423,16 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     if (!g_overviewController->initialize()) {
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to initialize overview controller", CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
     }
+
+    g_stageController = std::make_unique<hymission::StageController>(g_pluginHandle, [] {
+        return g_overviewController && g_overviewController->suspendsStage();
+    });
+    g_stageController->initialize();
+    g_stageStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
+        .name = "hymission-stage-state",
+        .exact = true,
+        .fn = [](eHyprCtlOutputFormat, std::string) { return g_stageController ? g_stageController->stateJson() : "{\"enabled\":false}\n"; },
+    });
 
     // Lua configs call the plugin-owned functions registered below directly.
     // Hyprland builds without the legacy config parser keep addDispatcherV2 for
@@ -488,6 +511,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    if (g_stageStateCommand) {
+        HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_stageStateCommand);
+        g_stageStateCommand.reset();
+    }
+    g_stageController.reset();
     if (g_overviewStateCommand) {
         HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_overviewStateCommand);
         g_overviewStateCommand.reset();

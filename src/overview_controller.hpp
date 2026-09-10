@@ -81,6 +81,7 @@ class OverviewController {
     [[nodiscard]] std::string     handleCaptureInputCommand(const std::string& args);
     [[nodiscard]] bool            rawWindowRenderActive() const;
     [[nodiscard]] bool            captureInputSuppressed() const;
+    [[nodiscard]] bool            suspendsStage() const { return isVisible() || rawWindowRenderActive() || captureInputSuppressed(); }
     [[nodiscard]] bool            allowsWorkspaceSwitchInOverviewForGestures() const;
     [[nodiscard]] bool            blocksWorkspaceSwitchInOverviewForGestures() const;
     [[nodiscard]] bool            beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction);

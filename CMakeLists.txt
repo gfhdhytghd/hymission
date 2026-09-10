@@ -39,6 +39,8 @@ add_library(hymission SHARED
   src/mission_layout.cpp
   src/overview_logic.cpp
   src/overview_controller.cpp
+  src/stage_logic.cpp
+  src/stage_controller.cpp
 )
 
 target_include_directories(hymission PRIVATE ${HYPR_DEPS_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS} ${GLIB_INCLUDE_DIRS})
@@ -66,6 +68,9 @@ add_executable(hymission-layout-demo
 target_include_directories(hymission-layout-demo PRIVATE src)
 
 if(BUILD_TESTING)
+  add_executable(hymission-stage-logic-test tools/stage_logic_test.cpp src/stage_logic.cpp)
+  target_include_directories(hymission-stage-logic-test PRIVATE src)
+  add_test(NAME hymission-stage-logic-test COMMAND hymission-stage-logic-test)
   pkg_check_modules(WAYLAND_SERVER REQUIRED IMPORTED_TARGET wayland-server)
   add_executable(hymission-search-child-process-test tools/search_child_process_test.cpp)
   target_include_directories(hymission-search-child-process-test PRIVATE src)

@@ -31,6 +31,8 @@ src = [
   'src/mission_layout.cpp',
   'src/overview_logic.cpp',
   'src/overview_controller.cpp',
+  'src/stage_logic.cpp',
+  'src/stage_controller.cpp',
 ]
 
 glib_dep = dependency('glib-2.0')
@@ -63,6 +65,13 @@ mission_layout_test = executable('hymission-mission-layout-test',
 )
 
 test('hymission-mission-layout-test', mission_layout_test)
+
+stage_logic_test = executable('hymission-stage-logic-test',
+  ['tools/stage_logic_test.cpp', 'src/stage_logic.cpp'],
+  include_directories: include_directories('src'),
+  install: false,
+)
+test('hymission-stage-logic-test', stage_logic_test)
 
 overview_logic_test = executable('hymission-overview-logic-test',
   ['tools/overview_logic_test.cpp', 'src/overview_logic.cpp'],
