@@ -54,8 +54,10 @@ The sidebar starts on the left. On the first ordinary workspace switch, the
 selected workspace expands into the left desktop area; the old desktop shrinks
 into its matching right-hand card. The remaining left sidebar translates out
 through the left edge while its new contents enter from the right edge, both
-moving left on the same transition timeline. The sidebar remains on the right
-for subsequent switches. Disabling this mode returns it to the left.
+moving left on the same transition timeline. Every subsequent ordinary workspace
+switch exchanges the sides again: right-to-left mirrors the complete animation,
+moving right. Each monitor alternates independently. Disabling this mode returns
+the sidebar to the left.
 
 Both copies are clipped to the owning monitor's logical rectangle, converted
 to render pixels; flight textures use the same output limit. Neither copy is

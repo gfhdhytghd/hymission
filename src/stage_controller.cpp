@@ -157,6 +157,7 @@ struct StageController::Impl {
         std::vector<Card> departingCards;
         stage::Geometry departingGeometry;
         double departingScroll = 0;
+        bool departingRight = false;
         Clock::time_point paneStart;
         double paneDuration = 300;
     };
@@ -531,12 +532,13 @@ void StageController::Impl::sync() {
         if (!smartisan || changedMode)
             screen->right = false;
         if (smartisan && switching && !blocked() && !screen->covered && !screen->suspended)
-            screen->right = true;
+            screen->right = !screen->right;
         const bool changedSide = oldRight != screen->right;
-        if (changedSide && screen->right && !changedOutput && !reconfigure && numberSetting("animations:enabled", 1) != 0 && setting("stage_transition_ms", 300) > 0) {
+        if (changedSide && smartisan && switching && !changedOutput && !reconfigure && numberSetting("animations:enabled", 1) != 0 && setting("stage_transition_ms", 300) > 0) {
             screen->departingCards = screen->cards;
             screen->departingGeometry = oldGeometry;
             screen->departingScroll = screen->scroll;
+            screen->departingRight = oldRight;
             screen->paneTransition = true;
             screen->paneStart = {};
         }
@@ -755,7 +757,8 @@ std::pair<StageController::Impl::Screen*, std::optional<std::size_t>> StageContr
         if (screen.paneTransition) {
             // Do not click through either moving copy into the live desktop.
             if (point.y >= screen.base.y && point.y < screen.base.y + screen.base.h &&
-                ((point.x >= screen.base.x && point.x < screen.base.x + screen.departingGeometry.bandWidth) ||
+                ((point.x >= screen.base.x && point.x < screen.base.x + std::max(screen.departingGeometry.bandWidth, screen.geometry.bandWidth)) ||
+                 (point.x >= screen.base.x + screen.base.w - std::max(screen.departingGeometry.bandWidth, screen.geometry.bandWidth) && point.x < screen.base.x + screen.base.w) ||
                  (point.x >= band.x && point.x < band.x + band.w)))
                 return {&screen, std::nullopt};
             continue;
@@ -997,10 +1000,14 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
         const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - screen->paneStart).count();
         const double t = screen->paneDuration > 0 ? std::clamp(elapsed / screen->paneDuration, 0.0, 1.0) : 1;
         const double p = t * t * (3 - 2 * t);
-        const double leftTravel = screen->base.x - monitor->m_position.x + screen->departingGeometry.bandWidth;
-        const double rightTravel = monitor->m_position.x + monitor->m_size.x - (screen->base.x + screen->base.w) + screen->geometry.bandWidth;
-        drawPane(screen->departingCards, screen->departingGeometry, screen->departingScroll, false, -leftTravel * p);
-        drawPane(screen->cards, screen->geometry, screen->scroll, true, rightTravel * (1 - p));
+        const auto travel = [&](bool right, double width) {
+            return right ? monitor->m_position.x + monitor->m_size.x - (screen->base.x + screen->base.w) + width :
+                           screen->base.x - monitor->m_position.x + width;
+        };
+        drawPane(screen->departingCards, screen->departingGeometry, screen->departingScroll, screen->departingRight,
+            (screen->departingRight ? 1 : -1) * travel(screen->departingRight, screen->departingGeometry.bandWidth) * p);
+        drawPane(screen->cards, screen->geometry, screen->scroll, screen->right,
+            (screen->right ? 1 : -1) * travel(screen->right, screen->geometry.bandWidth) * (1 - p));
     } else {
         const double slide = (screen->right ? 1 : -1) * (1 - screen->shown) * screen->geometry.bandWidth;
         drawPane(screen->cards, screen->geometry, screen->scroll, screen->right, slide);
@@ -1264,7 +1271,7 @@ bool StageController::Impl::snapshot(Screen& screen, Card& card) {
             // A side change moves native tiled geometry. Hidden cards should
             // depict its destination, not bake the intermediate layout slide
             // into a thumbnail that persists until the next refresh.
-            const auto offset = screen.right ? window->positionAnimation()->goal() - window->positionAnimation()->value() : Vector2D{};
+            const auto offset = smartisan ? window->positionAnimation()->goal() - window->positionAnimation()->value() : Vector2D{};
             inputs.push_back(WindowInput{.index = windows.size(), .natural = Rect{box.x + offset.x, box.y + offset.y, box.w, box.h}});
             boxes.push_back(box);
             windows.push_back(window);
