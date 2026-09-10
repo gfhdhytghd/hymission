@@ -80,17 +80,21 @@ bool coversStrip(CoverMode mode, bool maximizeCover) {
     return mode == CoverMode::Fullscreen || (mode == CoverMode::Maximized && maximizeCover);
 }
 
-std::vector<WindowSlot> arrangeWindows(const std::vector<WindowInput>& windows, const Geometry& g) {
-    LayoutConfig config;
-    config.engine = LayoutEngine::Grid;
-    const auto padding = std::min(4.0, std::min(g.cardWidth, g.cardHeight) * 0.04);
-    config.outerPaddingTop = config.outerPaddingRight = config.outerPaddingBottom = config.outerPaddingLeft = padding;
-    config.rowSpacing = config.columnSpacing = std::min(6.0, std::min(g.cardWidth, g.cardHeight) * 0.04);
-    config.smallWindowBoost = 1;
-    config.maxPreviewScale = 1;
-    config.minWindowLength = config.minPreviewShortEdge = config.minSlotScale = 0;
-    config.preserveInputOrder = true;
-    return MissionControlLayout{}.compute(windows, Rect{0, 0, g.cardWidth, g.cardHeight}, config);
+std::vector<WindowSlot> arrangeWindows(const std::vector<WindowInput>& windows, const Geometry& g, const Rect& desktop) {
+    std::vector<WindowSlot> slots;
+    if (desktop.width <= 0 || desktop.height <= 0 || g.cardWidth <= 0 || g.cardHeight <= 0)
+        return slots;
+    const double scale = std::min(g.cardWidth / desktop.width, g.cardHeight / desktop.height);
+    const double x = (g.cardWidth - desktop.width * scale) / 2;
+    const double y = (g.cardHeight - desktop.height * scale) / 2;
+    // One transform for the entire workspace preserves placement, overlap and
+    // stacking order. Off-desktop portions are clipped by the card framebuffer.
+    for (const auto& window : windows) {
+        const auto& box = window.natural;
+        slots.push_back(WindowSlot{.index = window.index, .natural = box,
+            .target = {x + (box.x - desktop.x) * scale, y + (box.y - desktop.y) * scale, box.width * scale, box.height * scale}, .scale = scale});
+    }
+    return slots;
 }
 
 double previewRounding(double configured, double system, double width, double height) {

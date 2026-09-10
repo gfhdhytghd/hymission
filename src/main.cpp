@@ -8,6 +8,7 @@
 #include <hyprland/src/config/values/types/IntValue.hpp>
 #include <hyprland/src/config/values/types/StringValue.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
+#include <hyprland/src/render/Renderer.hpp>
 
 extern "C" {
 #include <lauxlib.h>
@@ -513,6 +514,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    // The pass survives endRender until the next beginRender. Its smart-pointer
+    // deleters can live in this DSO even for native pass element types. Destroy
+    // them before dlclose, while both the code and controller callbacks exist.
+    if (g_pHyprRenderer)
+        g_pHyprRenderer->m_renderPass.clear();
     if (g_stageStateCommand) {
         HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_stageStateCommand);
         g_stageStateCommand.reset();
@@ -531,4 +537,6 @@ APICALL EXPORT void PLUGIN_EXIT() {
         g_captureInputCommand.reset();
     }
     g_overviewController.reset();
+    if (g_pHyprRenderer)
+        g_pHyprRenderer->m_renderPass.clear();
 }

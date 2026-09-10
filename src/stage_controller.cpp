@@ -852,12 +852,13 @@ bool StageController::Impl::snapshot(Screen& screen, Card& card) {
             const auto box = decorations ? window->getFullWindowBoundingBox() : CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
             if (box.w <= 0 || box.h <= 0)
                 continue;
-            inputs.push_back(WindowInput{.index = windows.size(), .natural = Rect{0, 0, box.w, box.h}});
+            inputs.push_back(WindowInput{.index = windows.size(), .natural = Rect{box.x, box.y, box.w, box.h}});
             boxes.push_back(box);
             windows.push_back(window);
         }
     }
-    const auto slots = stage::arrangeWindows(inputs, screen.geometry);
+    const auto slots = stage::arrangeWindows(inputs, screen.geometry,
+        Rect{screen.base.x + screen.geometry.reservation, screen.base.y, screen.geometry.desktopWidth, screen.base.h});
     const auto begin = [&](const SP<Render::IFramebuffer>& framebuffer) {
         CRegion damage{0, 0, framebuffer->m_size.x, framebuffer->m_size.y};
         if (!g_pHyprRenderer->beginFullFakeRender(monitor, damage, framebuffer))

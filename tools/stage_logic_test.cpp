@@ -78,18 +78,20 @@ int main() {
     ok &= expect(near(previewRounding(0, 12, 100, 80), 0), "zero explicitly disables rounding");
     ok &= expect(near(previewRounding(9, 12, 100, 80), 9), "explicit preview rounding overrides system value");
     ok &= expect(near(previewRounding(50, 12, 20, 10), 5), "radius is bounded by miniature dimensions");
-    const std::vector<hymission::WindowInput> windows{{.index=0, .natural={0,0,1200,800}}, {.index=1, .natural={0,0,600,1000}}, {.index=2, .natural={0,0,900,600}}};
-    const auto arranged = arrangeWindows(windows, automatic);
-    ok &= expect(arranged.size() == windows.size(), "all workspace windows receive overview slots");
+    const hymission::Rect desktop{2300, 40, 1600, 1000};
+    const std::vector<hymission::WindowInput> windows{{.index=0, .natural={2300,40,1200,800}}, {.index=1, .natural={2500,140,600,700}}, {.index=2, .natural={2200,500,900,600}}};
+    const auto arranged = arrangeWindows(windows, automatic, desktop);
+    ok &= expect(arranged.size() == windows.size(), "all workspace windows receive spatial slots");
     for (std::size_t i = 0; i < arranged.size(); ++i) {
         const auto& slot = arranged[i];
         const auto& box = slot.target;
         ok &= expect(near(box.width / box.height, windows[slot.index].natural.width / windows[slot.index].natural.height), "individual windows retain their own aspect");
-        ok &= expect(box.x >= 0 && box.y >= 0 && box.x + box.width <= automatic.cardWidth + 1e-7 && box.y + box.height <= automatic.cardHeight + 1e-7, "window miniatures fit inside workspace card");
-        for (std::size_t j = 0; j < i; ++j) {
-            const auto& other = arranged[j].target;
-            ok &= expect(box.x + box.width <= other.x || other.x + other.width <= box.x || box.y + box.height <= other.y || other.y + other.height <= box.y, "overview window miniatures do not overlap");
-        }
+        ok &= expect(slot.index == i && near(slot.scale, arranged.front().scale), "stacking order and common scale are preserved");
+        ok &= expect(near(box.x - arranged[0].target.x, (windows[i].natural.x - windows[0].natural.x) * slot.scale) &&
+                     near(box.y - arranged[0].target.y, (windows[i].natural.y - windows[0].natural.y) * slot.scale), "relative placement survives monitor offset and reserved area");
     }
+    ok &= expect(arranged[1].target.x < arranged[0].target.x + arranged[0].target.width, "overlapping windows stay overlapping");
+    ok &= expect(arranged[2].target.x < arranged[0].target.x, "off-desktop window is not repositioned to fit");
+    ok &= expect(arrangeWindows(windows, automatic, {0, 0, 0, 1000}).empty(), "invalid desktop cannot produce a transform");
     return ok ? 0 : 1;
 }

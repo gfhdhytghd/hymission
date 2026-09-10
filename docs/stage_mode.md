@@ -43,9 +43,9 @@ Empty-workspace slots are transparent and identified by a hover/drop outline.
 
 Offscreen capture runs outside a compositor render pass. Mapped, non-hidden
 windows belonging to each target workspace (plus its monitor's pinned windows)
-are assigned non-overlapping miniature slots by the same Grid layout engine as
-overview. Each window preserves its own aspect ratio. This rearranges only the
-previews, without changing live client geometry or the native desktop layout.
+retain their original positions, relative sizes, overlap and stacking order.
+A single transform maps the reduced desktop into the card; windows extending
+outside that desktop are clipped, not rearranged. Live client geometry is unchanged.
 
 Each window is rendered directly into a miniature-sized transparent framebuffer
 using render-pass translation/scaling. Miniatures are then composed into the
@@ -54,7 +54,15 @@ cards have no background fill, leaving the actual wallpaper visible between
 windows. Window main surfaces are previewed; transient popups are not separate
 miniatures. Compositor decorations default off (`stage_window_decorations = 0`);
 application-drawn titlebars remain client content. Enabling decorations includes
-their extents in each window's layout footprint.
+their extents in each window's capture footprint.
+
+On plugin exit the pending render pass is cleared before controller destruction
+and again before returning to the loader. Hyprland retains pass elements until
+the next render begins, and even native elements created here can carry a
+smart-pointer deleter compiled into the plugin. Leaving them queued across
+`dlclose` can crash the next render (including another plugin's capture).
+For the first upgrade from a version without this cleanup, restart the compositor
+from a safe context: the new exit code cannot repair the old loaded version's exit.
 
 `stage_window_rounding` sets the radius at the miniature's displayed logical
 size, independently of the real window. Its default `-1` follows half the system

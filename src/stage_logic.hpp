@@ -38,7 +38,7 @@ struct Geometry {
 Settings normalize(Settings settings);
 Geometry layout(double width, double height, std::size_t count, Settings settings,
                 std::optional<double> frozenCardWidth = std::nullopt, double outputWidth = 0);
-std::vector<WindowSlot> arrangeWindows(const std::vector<WindowInput>& windows, const Geometry& geometry);
+std::vector<WindowSlot> arrangeWindows(const std::vector<WindowInput>& windows, const Geometry& geometry, const Rect& desktop);
 double previewRounding(double configured, double system, double width, double height);
 
 // Keep this policy independent of compositor enum values for state tests.

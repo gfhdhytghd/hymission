@@ -585,8 +585,8 @@ Search filters the current overview scope by Unicode-normalized, case-insensitiv
 Stage mode is separate from overview. It reserves a left band on each monitor;
 the native layout resizes the actual desktop to the remaining area. Applications
 keep their normal rendering scale and input coordinates. The sidebar lists only
-that monitor's **inactive workspaces**. Each card arranges individual window
-miniatures using overview's Grid layout, preserving each window's aspect ratio.
+that monitor's **inactive workspaces**. Each card preserves the windows' original
+positions, relative sizes and overlap using one workspace-wide scale.
 There are no number/name labels or card/sidebar background fills: the real wallpaper
 shows through the gaps. Card aspect ratios match the reduced desktop
 after the monitor's existing reserved areas have been subtracted.
