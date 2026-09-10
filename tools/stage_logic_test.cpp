@@ -99,5 +99,18 @@ int main() {
     ok &= expect(arranged[1].target.x < arranged[0].target.x + arranged[0].target.width, "overlapping windows stay overlapping");
     ok &= expect(arranged[2].target.x < arranged[0].target.x, "off-desktop window is not repositioned to fit");
     ok &= expect(arrangeWindows(windows, automatic, {0, 0, 0, 1000}).empty(), "invalid desktop cannot produce a transform");
+    ok &= expect(near(transitionProgress(0, 300), 0) && near(transitionProgress(300, 300), 1), "transition has exact endpoints");
+    ok &= expect(near(transitionProgress(150, 300), 0.875), "both flight directions use cubic ease-out");
+    ok &= expect(transitionProgress(75, 300) > transitionProgress(150, 300) - transitionProgress(75, 300), "equal time intervals decelerate");
+    ok &= expect(near(transitionProgress(-10, 300), 0) && near(transitionProgress(999, 300), 1) && near(transitionProgress(0, 0), 1), "disabled and out-of-range timings are bounded");
+    const hymission::Rect miniature{10, 250, 160, 100}, full{320, 10, 1600, 1000};
+    const double p = transitionProgress(100, 300);
+    const auto growing = transitionBox(miniature, full, p);
+    const auto shrinking = transitionBox(full, miniature, p);
+    ok &= expect(near((growing.x - miniature.x) / (full.x - miniature.x), (growing.width - miniature.width) / (full.width - miniature.width)) &&
+                 near((shrinking.y - full.y) / (miniature.y - full.y), (shrinking.height - full.height) / (miniature.height - full.height)), "translation and scaling use exactly the same progress in both directions");
+    ok &= expect(near(growing.width / growing.height, full.width / full.height) && near(shrinking.width / shrinking.height, full.width / full.height), "flight preserves aspect ratio");
+    const auto retargeted = transitionBox(growing, miniature, 0);
+    ok &= expect(near(retargeted.x, growing.x) && near(retargeted.width, growing.width), "interrupted transition resumes from its current box without a jump");
     return ok ? 0 : 1;
 }

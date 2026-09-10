@@ -106,4 +106,17 @@ double previewRounding(double configured, double system, double width, double he
     const double radius = configured < 0 ? std::max(0.0, sane(system, 0)) / 2 : sane(configured, 0);
     return std::clamp(radius, 0.0, std::max(0.0, std::min(width, height) / 2));
 }
+
+double transitionProgress(double elapsed, double duration) {
+    if (duration <= 0)
+        return 1;
+    const double t = std::clamp(sane(elapsed / duration, 1), 0.0, 1.0);
+    return 1 - std::pow(1 - t, 3);
+}
+
+Rect transitionBox(const Rect& from, const Rect& to, double p) {
+    p = std::clamp(sane(p, 1), 0.0, 1.0);
+    return {from.x + (to.x - from.x) * p, from.y + (to.y - from.y) * p,
+        from.width + (to.width - from.width) * p, from.height + (to.height - from.height) * p};
+}
 } // namespace hymission::stage

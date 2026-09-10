@@ -45,6 +45,8 @@ Geometry layout(double width, double height, std::size_t count, Settings setting
                 std::optional<double> frozenCardWidth = std::nullopt, double outputWidth = 0);
 std::vector<WindowSlot> arrangeWindows(const std::vector<WindowInput>& windows, const Geometry& geometry, const Rect& desktop);
 double previewRounding(double configured, double system, double width, double height);
+double transitionProgress(double elapsed, double duration);
+Rect transitionBox(const Rect& from, const Rect& to, double progress);
 
 // Keep this policy independent of compositor enum values for state tests.
 enum class CoverMode { None, Maximized, Fullscreen };

@@ -47,6 +47,22 @@ logged on activation/config reload.
 
 ## Rendering and input
 
+Workspace switches animate outgoing windows into their sidebar card and incoming
+windows from their previous card into the desktop. Both directions use the same
+cubic ease-out `1 - (1 - t)^3` for position, width and height, starting fast and
+slowing together. `stage_transition_ms` defaults to 300 ms (0 disables, maximum
+2000 ms), and disabling Hyprland animations also disables these flights.
+Rapid switches retarget from the currently displayed boxes and rounding.
+
+Flights temporarily hold desktop-resolution window snapshots, with live blur
+against the backdrop; client content inside the snapshot is fixed for the short
+transition. Native window rendering is suppressed only for captured participants,
+and native workspace slide/fade is stopped to avoid two simultaneous animations.
+Capture failure leaves native rendering available. Pinned windows never fly.
+Session lock, overview, fullscreen, output geometry changes and config reload
+cancel flights. Textures are released when the motion timer finishes or cancels.
+The real client geometry and pointer coordinate system remain native throughout.
+
 Only inactive workspaces appear; after a switch the new active workspace is
 removed and the old one becomes eligible. There are no numeric/name labels.
 Empty-workspace slots are transparent and identified by a hover/drop outline.
