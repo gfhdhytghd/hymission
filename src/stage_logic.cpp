@@ -10,21 +10,23 @@ double sane(double value, double fallback) { return std::isfinite(value) ? value
 
 Settings normalize(Settings s) {
     s.minWidth = std::max(8.0, sane(s.minWidth, 120));
-    s.maxWidth = std::max(s.minWidth, sane(s.maxWidth, 240));
+    s.maxWidth = sane(s.maxWidth, 0);
+    s.maxWidth = s.maxWidth <= 0 ? 0 : std::max(s.minWidth, s.maxWidth);
     s.padding = std::max(0.0, sane(s.padding, 12));
     s.cardGap = std::max(0.0, sane(s.cardGap, 12));
     s.desktopGap = std::max(0.0, sane(s.desktopGap, 12));
     return s;
 }
 
-Geometry layout(double width, double height, std::size_t count, Settings settings, std::optional<double> frozenCardWidth) {
+Geometry layout(double width, double height, std::size_t count, Settings settings, std::optional<double> frozenCardWidth, double outputWidth) {
     Geometry result;
     result.desktopWidth = std::max(0.0, sane(width, 0));
     result.height = std::max(0.0, sane(height, 0));
     const auto s = normalize(settings);
     // A 64px usable desktop and an 8px card are hard floors only on tiny outputs.
     const double availableWidth = width - 2 * s.padding - s.desktopGap;
-    const double upper = std::min(s.maxWidth, availableWidth - 64);
+    const double maximum = s.maxWidth > 0 ? s.maxWidth : (outputWidth > 0 ? outputWidth : width) / 5;
+    const double upper = std::min(maximum, availableWidth - 64);
     if (!count || !std::isfinite(width) || !std::isfinite(height) || upper < 8 || height <= 2 * s.padding + 8)
         return result;
 
@@ -76,5 +78,23 @@ std::optional<std::size_t> Geometry::hit(double x, double y, double scroll) cons
 
 bool coversStrip(CoverMode mode, bool maximizeCover) {
     return mode == CoverMode::Fullscreen || (mode == CoverMode::Maximized && maximizeCover);
+}
+
+std::vector<WindowSlot> arrangeWindows(const std::vector<WindowInput>& windows, const Geometry& g) {
+    LayoutConfig config;
+    config.engine = LayoutEngine::Grid;
+    const auto padding = std::min(4.0, std::min(g.cardWidth, g.cardHeight) * 0.04);
+    config.outerPaddingTop = config.outerPaddingRight = config.outerPaddingBottom = config.outerPaddingLeft = padding;
+    config.rowSpacing = config.columnSpacing = std::min(6.0, std::min(g.cardWidth, g.cardHeight) * 0.04);
+    config.smallWindowBoost = 1;
+    config.maxPreviewScale = 1;
+    config.minWindowLength = config.minPreviewShortEdge = config.minSlotScale = 0;
+    config.preserveInputOrder = true;
+    return MissionControlLayout{}.compute(windows, Rect{0, 0, g.cardWidth, g.cardHeight}, config);
+}
+
+double previewRounding(double configured, double system, double width, double height) {
+    const double radius = configured < 0 ? std::max(0.0, sane(system, 0)) / 2 : sane(configured, 0);
+    return std::clamp(radius, 0.0, std::max(0.0, std::min(width, height) / 2));
 }
 } // namespace hymission::stage

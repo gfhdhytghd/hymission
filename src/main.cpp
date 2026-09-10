@@ -353,7 +353,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("workspace_strip_thickness", 160);
     INT_CONF("stage_enabled", 0);
     INT_CONF("stage_card_min_width", 120);
-    INT_CONF("stage_card_max_width", 240);
+    INT_CONF("stage_card_max_width", 0);
+    FLOAT_CONF("stage_window_rounding", -1.0);
+    INT_CONF("stage_window_decorations", 0);
     INT_CONF("stage_padding", 12);
     INT_CONF("stage_card_gap", 12);
     INT_CONF("stage_desktop_gap", 12);

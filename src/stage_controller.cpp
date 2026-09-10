@@ -29,6 +29,7 @@
 #include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/pass/PassElement.hpp>
+#include <hyprland/src/render/pass/RendererHintsPassElement.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
@@ -53,6 +54,17 @@ long setting(const char* suffix, long fallback) {
         return fallback;
     if (*value.type == typeid(bool))
         return **reinterpret_cast<bool* const*>(value.dataptr);
+    if (*value.type == typeid(Config::INTEGER))
+        return **reinterpret_cast<Config::INTEGER* const*>(value.dataptr);
+    return fallback;
+}
+
+double numberSetting(const char* key, double fallback) {
+    const auto value = Config::mgr()->getConfigValue(key);
+    if (!value.dataptr || !value.type)
+        return fallback;
+    if (*value.type == typeid(Config::FLOAT))
+        return **reinterpret_cast<Config::FLOAT* const*>(value.dataptr);
     if (*value.type == typeid(Config::INTEGER))
         return **reinterpret_cast<Config::INTEGER* const*>(value.dataptr);
     return fallback;
@@ -99,8 +111,6 @@ struct StageController::Impl {
     struct Card {
         PHLWORKSPACEREF workspace;
         SP<Render::IFramebuffer> snapshot;
-        SP<Render::ITexture> label;
-        std::string labelText;
         bool dirty = true;
         bool snapshotReady = false;
     };
@@ -109,7 +119,6 @@ struct StageController::Impl {
         CBox base;
         stage::Geometry geometry;
         std::vector<Card> cards;
-        SP<Render::IFramebuffer> scratch;
         double scroll = 0;
         float scale = 1;
         int transform = 0;
@@ -126,6 +135,7 @@ struct StageController::Impl {
     using RecheckFn = void (*)(Layout::CSpace*);
     using DragEndFn = void (*)(Layout::Supplementary::CDragStateController*);
     using WindowAtFn = PHLWINDOW (*)(const Desktop::CViewHitTester*, const Vector2D&, uint16_t, PHLWINDOW);
+    using RoundingFn = float (*)(Desktop::View::CWindow*);
     using RenderWindowFn = void (*)(Render::IHyprRenderer*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, Render::eRenderPassMode, bool, bool);
     inline static Impl* instance = nullptr;
 
@@ -136,6 +146,7 @@ struct StageController::Impl {
     CFunctionHook* areaHook = nullptr;
     CFunctionHook* dragHook = nullptr;
     CFunctionHook* hitHook = nullptr;
+    CFunctionHook* roundingHook = nullptr;
     RenderWindowFn renderWindow = nullptr;
     UP<SEventLoopDoLaterLock> deferred;
     SP<CEventLoopTimer> refreshTimer;
@@ -190,6 +201,12 @@ struct StageController::Impl {
         self->afterRecheck(space);
     }
     static void dragThunk(Layout::Supplementary::CDragStateController* drag) { instance->endDrag(drag); }
+    static float roundingThunk(Desktop::View::CWindow* window) {
+        auto* self = instance;
+        // Apply stage rounding once, at the final miniature size. Do not retain
+        // the real window's corner mask when the user requests square previews.
+        return self->rendering ? 0.F : reinterpret_cast<RoundingFn>(self->roundingHook->m_original)(window);
+    }
     static PHLWINDOW windowAtThunk(const Desktop::CViewHitTester* tester, const Vector2D& position, uint16_t properties, PHLWINDOW ignore) {
         auto* self = instance;
         // The sidebar is above windows, including floats partially under it.
@@ -233,17 +250,19 @@ bool StageController::Impl::installHooks() {
     const auto area = find("recheckWorkArea", "Layout::CSpace::recheckWorkArea()");
     const auto drag = find("dragEnd", "Layout::Supplementary::CDragStateController::dragEnd()");
     const auto hit = find("windowAt", "Desktop::CViewHitTester::windowAt(");
+    const auto rounding = find("rounding", "Desktop::View::CWindow::rounding()");
     renderWindow = reinterpret_cast<RenderWindowFn>(find("renderWindow", "IHyprRenderer::renderWindow("));
-    if (area && drag && hit && renderWindow && g_pHyprOpenGL) {
+    if (area && drag && hit && rounding && renderWindow && g_pHyprOpenGL) {
         areaHook = HyprlandAPI::createFunctionHook(handle, area, reinterpret_cast<void*>(&recheckThunk));
         dragHook = HyprlandAPI::createFunctionHook(handle, drag, reinterpret_cast<void*>(&dragThunk));
         hitHook = HyprlandAPI::createFunctionHook(handle, hit, reinterpret_cast<void*>(&windowAtThunk));
-        hooksReady = areaHook && dragHook && hitHook && areaHook->hook() && dragHook->hook() && hitHook->hook();
+        roundingHook = HyprlandAPI::createFunctionHook(handle, rounding, reinterpret_cast<void*>(&roundingThunk));
+        hooksReady = areaHook && dragHook && hitHook && roundingHook && areaHook->hook() && dragHook->hook() && hitHook->hook() && roundingHook->hook();
     }
     if (!hooksReady) {
         releaseHooks();
         hookFailure = true;
-        error = "stage disabled: work-area / native-drag / hit-test / window-render hook or OpenGL renderer unavailable";
+        error = "stage disabled: work-area / native-drag / hit-test / rounding / window-render hook or OpenGL renderer unavailable";
         Log::logger->log(Log::ERR, "[hymission] {}", error);
         HyprlandAPI::addNotification(handle, "[hymission] " + error, CHyprColor(1.0, 0.3, 0.2, 1.0), 8000);
     }
@@ -251,7 +270,7 @@ bool StageController::Impl::installHooks() {
 }
 
 void StageController::Impl::releaseHooks() {
-    for (auto** hook : {&areaHook, &dragHook, &hitHook}) {
+    for (auto** hook : {&areaHook, &dragHook, &hitHook, &roundingHook}) {
         if (!*hook)
             continue;
         (*hook)->unhook();
@@ -382,7 +401,7 @@ void StageController::Impl::sync() {
         return;
     }
 
-    const stage::Settings raw{static_cast<double>(setting("stage_card_min_width", 120)), static_cast<double>(setting("stage_card_max_width", 240)),
+    const stage::Settings raw{static_cast<double>(setting("stage_card_min_width", 120)), static_cast<double>(setting("stage_card_max_width", 0)),
                               static_cast<double>(setting("stage_padding", 12)), static_cast<double>(setting("stage_card_gap", 12)),
                               static_cast<double>(setting("stage_desktop_gap", 12))};
     settings = stage::normalize(raw);
@@ -423,6 +442,8 @@ void StageController::Impl::sync() {
         for (const auto& workspace : workspaces) {
             if (workspace->m_isSpecialWorkspace || workspace->m_monitor != monitor)
                 continue;
+            if (workspace == monitor->m_activeWorkspace)
+                continue;
             if (!showEmpty && workspace->getWindowCount() == 0)
                 continue;
             targets.emplace_back(workspace);
@@ -452,16 +473,10 @@ void StageController::Impl::sync() {
             screen->frozenWidth = oldGeometry.cardWidth;
         if (!dragged)
             screen->frozenWidth.reset();
-        screen->geometry = stage::layout(base.w, base.h, targets.size(), settings, screen->frozenWidth);
+        screen->geometry = stage::layout(base.w, base.h, targets.size(), settings, screen->frozenWidth, monitor->m_size.x);
         const bool changedGeometry = changedOutput || oldGeometry.reservation != screen->geometry.reservation || oldGeometry.cardHeight != screen->geometry.cardHeight;
         screen->scroll = screen->geometry.clampScroll(screen->scroll);
         const WORKSPACEID active = monitor->m_activeWorkspace ? monitor->m_activeWorkspace->m_id : WORKSPACE_INVALID;
-        if ((!dragged && (changedCards || changedGeometry)) || active != screen->active) {
-            for (std::size_t i = 0; i < targets.size(); ++i) {
-                if (targets[i]->m_id == active)
-                    screen->scroll = screen->geometry.reveal(i, screen->scroll);
-            }
-        }
         const bool changedActive = screen->active != active;
         screen->active = active;
         const auto mode = monitor->m_activeWorkspace ? Fullscreen::controller()->getFullscreenModes(monitor->m_activeWorkspace).internal : Fullscreen::FSMODE_NONE;
@@ -479,13 +494,10 @@ void StageController::Impl::sync() {
         screen->suspended = suspended;
         if (changedGeometry || changedPolicy || changedCover || reconfigure)
             relayout.push_back(monitor);
-        if (changedOutput)
-            screen->scratch.reset();
         for (auto& card : screen->cards) {
             if (changedGeometry) {
                 card.snapshot.reset();
                 card.snapshotReady = false;
-                card.label.reset();
             }
             card.dirty |= forceRefresh || changedGeometry || changedCards || changedActive || changedSuspension || changedCover;
         }
@@ -729,7 +741,6 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
     const auto physical = [&](CBox box) { return box.translate(-monitor->m_position).scale(monitor->m_scale); };
     const auto previousClip = g_pHyprRenderer->m_renderData.clipBox;
     g_pHyprRenderer->m_renderData.clipBox = physical(CBox{screen->base.x, screen->base.y, geometry.bandWidth, screen->base.h});
-    g_pHyprOpenGL->renderRect(physical(CBox{screen->base.x + slide, screen->base.y, geometry.bandWidth, screen->base.h}), CHyprColor(0.035, 0.045, 0.06, 1.0), {});
     g_pHyprRenderer->m_renderData.clipBox = physical(CBox{screen->base.x, screen->base.y + geometry.padding, geometry.bandWidth, screen->base.h - 2 * geometry.padding});
     for (std::size_t i = 0; i < screen->cards.size(); ++i) {
         auto& card = screen->cards[i];
@@ -740,25 +751,14 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
         if (!workspace)
             continue;
         const CBox box{screen->base.x + geometry.padding + slide, screen->base.y + top, geometry.cardWidth, geometry.cardHeight};
-        const bool active = workspace->m_id == screen->active;
         const bool hover = screen->hovered == i && !screen->covered;
-        g_pHyprOpenGL->renderRect(physical(box), active ? CHyprColor(0.13, 0.19, 0.27, 1.0) : CHyprColor(0.075, 0.085, 0.10, 1.0), {});
         if (card.snapshotReady && card.snapshot)
             g_pHyprOpenGL->renderTexture(card.snapshot->getTexture(), physical(box), {});
-        if (hover)
-            g_pHyprOpenGL->renderRect(physical(box), CHyprColor(0.4, 0.65, 1.0, 0.15), {});
-        if (active || hover) {
-            const CHyprColor color = hover ? CHyprColor(0.6, 0.82, 1.0, 1.0) : CHyprColor(0.3, 0.6, 1.0, 1.0);
+        if (hover) {
+            const CHyprColor color(0.6, 0.82, 1.0, 1.0);
             for (const auto& edge : {CBox{box.x, box.y, box.w, 2}, CBox{box.x, box.y + box.h - 2, box.w, 2},
                                     CBox{box.x, box.y, 2, box.h}, CBox{box.x + box.w - 2, box.y, 2, box.h}})
                 g_pHyprOpenGL->renderRect(physical(edge), color, {});
-        }
-        if (card.label) {
-            const double labelHeight = std::min(geometry.cardHeight, card.label->m_size.y / monitor->m_scale);
-            const double labelWidth = std::min(geometry.cardWidth, card.label->m_size.x / monitor->m_scale);
-            const CBox labelBox{box.x + 4, box.y + 3, std::max(1.0, labelWidth), labelHeight};
-            g_pHyprOpenGL->renderRect(physical(CBox{box.x + 2, box.y + 2, std::min(box.w - 4, labelWidth + 4), labelHeight + 2}), CHyprColor(0, 0, 0, 0.65), {});
-            g_pHyprOpenGL->renderTexture(card.label, physical(labelBox), {});
         }
     }
     g_pHyprRenderer->m_renderData.clipBox = previousClip;
@@ -793,21 +793,18 @@ bool StageController::Impl::snapshot(Screen& screen, Card& card) {
     if (!monitor || !workspace || !g_pHyprOpenGL || !renderWindow)
         return false;
     g_pHyprOpenGL->makeEGLCurrent();
-    const int width = std::max(1, static_cast<int>(std::lround(monitor->m_transformedSize.x)));
-    const int height = std::max(1, static_cast<int>(std::lround(monitor->m_transformedSize.y)));
-    if (!screen.scratch)
-        screen.scratch = g_pHyprRenderer->createFB("hymission stage window scratch");
     if (!card.snapshot)
         card.snapshot = g_pHyprRenderer->createFB("hymission stage card");
     const int thumbWidth = std::max(1, static_cast<int>(std::lround(screen.geometry.cardWidth * monitor->m_scale)));
     const int thumbHeight = std::max(1, static_cast<int>(std::lround(screen.geometry.cardHeight * monitor->m_scale)));
-    if (!screen.scratch || !card.snapshot || !screen.scratch->alloc(width, height) || !card.snapshot->alloc(thumbWidth, thumbHeight))
+    if (!card.snapshot || !card.snapshot->alloc(thumbWidth, thumbHeight))
         return false;
-    for (const auto& fb : {screen.scratch, card.snapshot}) {
+    const auto prepare = [&](const SP<Render::IFramebuffer>& fb) {
         fb->setImageDescription(monitor->workBufferImageDescription());
         fb->getTexture()->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         fb->getTexture()->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    }
+    };
+    prepare(card.snapshot);
 
     // Restore every temporary render override before returning to the event
     // loop. In particular, never switch the monitor's real active workspace.
@@ -820,6 +817,7 @@ bool StageController::Impl::snapshot(Screen& screen, Card& card) {
     const bool oldSnapshot = g_pHyprRenderer->m_bRenderingSnapshot;
     const bool oldFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
     const bool oldShader = g_pHyprRenderer->m_renderData.blockScreenShader;
+    const bool oldNoSimplify = g_pHyprRenderer->m_renderData.noSimplify;
     rendering = true;
     workspace->m_renderOffset->setValueAndWarp(Vector2D{});
     workspace->m_alpha->setValueAndWarp(1.F);
@@ -839,74 +837,77 @@ bool StageController::Impl::snapshot(Screen& screen, Card& card) {
         g_pHyprRenderer->m_bRenderingSnapshot = oldSnapshot;
         g_pHyprRenderer->m_bBlockSurfaceFeedback = oldFeedback;
         g_pHyprRenderer->m_renderData.blockScreenShader = oldShader;
+        g_pHyprRenderer->m_renderData.noSimplify = oldNoSimplify;
         rendering = false;
     });
 
-    CRegion damage{0, 0, width, height};
-    if (!g_pHyprRenderer->beginFullFakeRender(monitor, damage, screen.scratch)) {
-        return false;
-    }
-    g_pHyprRenderer->setViewport(0, 0, width, height);
-    g_pHyprRenderer->m_renderData.fbSize = screen.scratch->m_size;
-    g_pHyprRenderer->m_renderData.transformDamage = false;
-    g_pHyprRenderer->m_renderData.blockScreenShader = true;
-    g_pHyprRenderer->setProjectionType(Render::RPT_EXPORT);
-    g_pHyprRenderer->draw(CClearPassElement::SClearData{.color = CHyprColor(0, 0, 0, 0)}, damage);
-
+    const bool decorations = setting("stage_window_decorations", 0) != 0;
     std::vector<PHLWINDOW> windows;
+    std::vector<CBox> boxes;
+    std::vector<WindowInput> inputs;
     for (const auto& window : Desktop::windowState()->windows()) {
         if (!window->m_isMapped || window->isHidden() || window->onSpecialWorkspace())
             continue;
-        if (window->m_workspace == workspace || (window->m_pinned && window->m_monitor == monitor))
+        if (window->m_workspace == workspace || (window->m_pinned && window->m_monitor == monitor)) {
+            const auto box = decorations ? window->getFullWindowBoundingBox() : CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
+            if (box.w <= 0 || box.h <= 0)
+                continue;
+            inputs.push_back(WindowInput{.index = windows.size(), .natural = Rect{0, 0, box.w, box.h}});
+            boxes.push_back(box);
             windows.push_back(window);
+        }
     }
-    const auto rank = [&](const PHLWINDOW& w) {
-        if (w->m_pinned)
-            return 5;
-        if (Fullscreen::controller()->isFullscreen(w))
-            return 3;
-        if (w->m_isFloating)
-            return w->shouldRenderOverFullscreen() ? 4 : 2;
-        return workspace->m_lastFocusedWindow == w ? 1 : 0;
+    const auto slots = stage::arrangeWindows(inputs, screen.geometry);
+    const auto begin = [&](const SP<Render::IFramebuffer>& framebuffer) {
+        CRegion damage{0, 0, framebuffer->m_size.x, framebuffer->m_size.y};
+        if (!g_pHyprRenderer->beginFullFakeRender(monitor, damage, framebuffer))
+            return false;
+        g_pHyprRenderer->setViewport(0, 0, static_cast<int>(framebuffer->m_size.x), static_cast<int>(framebuffer->m_size.y));
+        g_pHyprRenderer->m_renderData.fbSize = framebuffer->m_size;
+        g_pHyprRenderer->m_renderData.transformDamage = false;
+        g_pHyprRenderer->m_renderData.blockScreenShader = true;
+        // Bounds are still in native window coordinates until the hints pass
+        // applies the miniature transform; native occlusion must not cull them.
+        g_pHyprRenderer->m_renderData.noSimplify = true;
+        g_pHyprRenderer->setProjectionType(Render::RPT_EXPORT);
+        g_pHyprRenderer->draw(CClearPassElement::SClearData{.color = CHyprColor(0, 0, 0, 0)}, damage);
+        return true;
     };
-    std::stable_sort(windows.begin(), windows.end(), [&](const auto& a, const auto& b) { return rank(a) < rank(b); });
-    const auto now = Time::steadyNow();
-    for (const auto& window : windows)
-        renderWindow(g_pHyprRenderer.get(), window, monitor, now, true, Render::RENDER_PASS_ALL, false, false);
+    std::vector<SP<Render::IFramebuffer>> previews;
+    for (const auto& slot : slots) {
+        auto framebuffer = g_pHyprRenderer->createFB("hymission stage window miniature");
+        if (!framebuffer || !framebuffer->alloc(std::max(1, static_cast<int>(std::ceil(slot.target.width * monitor->m_scale))),
+                                               std::max(1, static_cast<int>(std::ceil(slot.target.height * monitor->m_scale)))))
+            return false;
+        prepare(framebuffer);
+        if (!begin(framebuffer))
+            return false;
+        Render::SRenderModifData transform;
+        // Render transforms only: no client resize, position warp or app input
+        // mapping. Standalone client capture has its origin at the monitor.
+        transform.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_TRANSLATE,
+            ((decorations ? monitor->m_position - boxes[slot.index].pos() : Vector2D{}) - windows[slot.index]->m_floatingOffset) * monitor->m_scale);
+        transform.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_SCALE, static_cast<float>(slot.scale));
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{transform}));
+        renderWindow(g_pHyprRenderer.get(), windows[slot.index], monitor, Time::steadyNow(), decorations, Render::RENDER_PASS_MAIN, !decorations, !decorations);
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{Render::SRenderModifData{}}));
+        g_pHyprRenderer->endRender();
+        previews.emplace_back(std::move(framebuffer));
+    }
+    if (!begin(card.snapshot))
+        return false;
+    const double configuredRadius = numberSetting("plugin:hymission:stage_window_rounding", -1);
+    const double systemRadius = numberSetting("decoration:rounding", 0);
+    for (std::size_t i = 0; i < slots.size(); ++i) {
+        const auto& target = slots[i].target;
+        const double radius = stage::previewRounding(configuredRadius, systemRadius, target.width, target.height);
+        g_pHyprOpenGL->renderTexture(previews[i]->getTexture(), CBox{target.x, target.y, target.width, target.height}.scale(monitor->m_scale),
+                                    {.round = static_cast<int>(std::lround(radius * monitor->m_scale))});
+    }
     g_pHyprRenderer->endRender();
     restore.reset();
-
-    // Crop the desktop (excluding the bar and our band) while reducing it into
-    // the card. Both are axis-aligned logical-orientation export framebuffers.
-    auto* source = dynamic_cast<Render::GL::CGLFramebuffer*>(screen.scratch.get());
-    auto* target = dynamic_cast<Render::GL::CGLFramebuffer*>(card.snapshot.get());
-    if (!source || !target)
-        return false;
-    const CBox crop = CBox{screen.base.x + screen.geometry.reservation - monitor->m_position.x,
-                          screen.base.y - monitor->m_position.y, screen.geometry.desktopWidth, screen.base.h}.scale(monitor->m_scale);
-    GLint readFB = 0, drawFB = 0;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFB);
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFB);
-    const bool scissor = glIsEnabled(GL_SCISSOR_TEST);
-    glDisable(GL_SCISSOR_TEST);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, source->getFBID());
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target->getFBID());
-    glBlitFramebuffer(static_cast<int>(std::lround(crop.x)), height - static_cast<int>(std::lround(crop.y + crop.h)),
-                      static_cast<int>(std::lround(crop.x + crop.w)), height - static_cast<int>(std::lround(crop.y)),
-                      0, 0, thumbWidth, thumbHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, readFB);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawFB);
-    if (scissor)
-        glEnable(GL_SCISSOR_TEST);
     if (glGetError() != GL_NO_ERROR)
         return false;
-
-    const auto label = workspace->m_name.empty() ? std::to_string(workspace->m_id) : workspace->m_name;
-    if (!card.label || card.labelText != label) {
-        card.labelText = label;
-        card.label = g_pHyprRenderer->renderText(label, CHyprColor(0.95, 0.96, 0.98, 1.0), std::max(1, static_cast<int>(12 * monitor->m_scale)), false, "sans",
-                                                std::max(1, thumbWidth - static_cast<int>(12 * monitor->m_scale)));
-    }
     card.snapshotReady = true;
     return true;
 }

@@ -68,7 +68,7 @@ add_executable(hymission-layout-demo
 target_include_directories(hymission-layout-demo PRIVATE src)
 
 if(BUILD_TESTING)
-  add_executable(hymission-stage-logic-test tools/stage_logic_test.cpp src/stage_logic.cpp)
+  add_executable(hymission-stage-logic-test tools/stage_logic_test.cpp src/stage_logic.cpp src/mission_layout.cpp)
   target_include_directories(hymission-stage-logic-test PRIVATE src)
   add_test(NAME hymission-stage-logic-test COMMAND hymission-stage-logic-test)
   pkg_check_modules(WAYLAND_SERVER REQUIRED IMPORTED_TARGET wayland-server)

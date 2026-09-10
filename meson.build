@@ -67,7 +67,7 @@ mission_layout_test = executable('hymission-mission-layout-test',
 test('hymission-mission-layout-test', mission_layout_test)
 
 stage_logic_test = executable('hymission-stage-logic-test',
-  ['tools/stage_logic_test.cpp', 'src/stage_logic.cpp'],
+  ['tools/stage_logic_test.cpp', 'src/stage_logic.cpp', 'src/mission_layout.cpp'],
   include_directories: include_directories('src'),
   install: false,
 )

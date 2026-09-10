@@ -16,7 +16,11 @@ bool near(double a, double b) { return std::abs(a - b) < 1e-7; }
 int main() {
     using namespace hymission::stage;
     bool ok = true;
-    const Settings defaults;
+    const Settings defaults{.maxWidth = 240}; // explicit pixel override remains supported
+    const auto automatic = layout(1920, 1050, 2, Settings{});
+    ok &= expect(near(automatic.cardWidth, 384), "default maximum is one fifth of output width");
+    const auto reserved = layout(1800, 1050, 2, Settings{}, std::nullopt, 1920);
+    ok &= expect(near(reserved.cardWidth, 384), "side bar reservations do not change output-relative maximum");
     const auto small = layout(1920, 1050, 3, defaults); // 1080 screen, 30px bar
     ok &= expect(small.enabled() && near(small.cardWidth, 240), "few workspaces stop at maximum card width");
     ok &= expect(near(small.reservation, 276), "reservation includes card, padding and desktop gap exactly once");
@@ -64,11 +68,28 @@ int main() {
     invalid.padding = -2;
     invalid.cardGap = std::numeric_limits<double>::quiet_NaN();
     const auto normalized = normalize(invalid);
-    ok &= expect(normalized.minWidth == 8 && normalized.maxWidth == 8 && normalized.padding == 0 && normalized.cardGap == 12, "bad configuration is normalized");
+    ok &= expect(normalized.minWidth == 8 && normalized.maxWidth == 0 && normalized.padding == 0 && normalized.cardGap == 12, "bad configuration is normalized");
     ok &= expect(!layout(std::numeric_limits<double>::infinity(), 1000, 3, defaults).enabled(), "non-finite output dimensions disable layout");
 
     ok &= expect(coversStrip(CoverMode::Fullscreen, false) && coversStrip(CoverMode::Fullscreen, true), "true fullscreen always covers strip");
     ok &= expect(!coversStrip(CoverMode::Maximized, false) && coversStrip(CoverMode::Maximized, true), "maximization coverage is configurable");
     ok &= expect(!coversStrip(CoverMode::None, true), "ordinary desktop never covers strip");
+    ok &= expect(near(previewRounding(-1, 12, 100, 80), 6), "default preview rounding is half system rounding");
+    ok &= expect(near(previewRounding(0, 12, 100, 80), 0), "zero explicitly disables rounding");
+    ok &= expect(near(previewRounding(9, 12, 100, 80), 9), "explicit preview rounding overrides system value");
+    ok &= expect(near(previewRounding(50, 12, 20, 10), 5), "radius is bounded by miniature dimensions");
+    const std::vector<hymission::WindowInput> windows{{.index=0, .natural={0,0,1200,800}}, {.index=1, .natural={0,0,600,1000}}, {.index=2, .natural={0,0,900,600}}};
+    const auto arranged = arrangeWindows(windows, automatic);
+    ok &= expect(arranged.size() == windows.size(), "all workspace windows receive overview slots");
+    for (std::size_t i = 0; i < arranged.size(); ++i) {
+        const auto& slot = arranged[i];
+        const auto& box = slot.target;
+        ok &= expect(near(box.width / box.height, windows[slot.index].natural.width / windows[slot.index].natural.height), "individual windows retain their own aspect");
+        ok &= expect(box.x >= 0 && box.y >= 0 && box.x + box.width <= automatic.cardWidth + 1e-7 && box.y + box.height <= automatic.cardHeight + 1e-7, "window miniatures fit inside workspace card");
+        for (std::size_t j = 0; j < i; ++j) {
+            const auto& other = arranged[j].target;
+            ok &= expect(box.x + box.width <= other.x || other.x + other.width <= box.x || box.y + box.height <= other.y || other.y + other.height <= box.y, "overview window miniatures do not overlap");
+        }
+    }
     return ok ? 0 : 1;
 }

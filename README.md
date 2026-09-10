@@ -584,9 +584,11 @@ Search filters the current overview scope by Unicode-normalized, case-insensitiv
 
 Stage mode is separate from overview. It reserves a left band on each monitor;
 the native layout resizes the actual desktop to the remaining area. Applications
-keep their normal rendering scale and input coordinates. Each card shows that
-monitor's workspace windows at their original relative positions and stacking
-order, with no wallpaper or bar. Card aspect ratios match the reduced desktop
+keep their normal rendering scale and input coordinates. The sidebar lists only
+that monitor's **inactive workspaces**. Each card arranges individual window
+miniatures using overview's Grid layout, preserving each window's aspect ratio.
+There are no number/name labels or card/sidebar background fills: the real wallpaper
+shows through the gaps. Card aspect ratios match the reduced desktop
 after the monitor's existing reserved areas have been subtracted.
 
 Enable it in your existing plugin configuration **after updating the plugin**:
@@ -597,7 +599,9 @@ hl.config({
         hymission = {
             stage_enabled = 1,
             stage_card_min_width = 120,
-            stage_card_max_width = 240,
+            stage_card_max_width = 0, -- automatic: output width / 5
+            stage_window_rounding = -1.0, -- half of decoration:rounding
+            stage_window_decorations = 0,
             stage_show_empty = 1,
             stage_drop_follow = 0,
             stage_maximize_cover_strip = 0,
@@ -610,18 +614,21 @@ hl.config({
 | --- | --- | --- |
 | `stage_enabled` | `0` | Enable the persistent sidebar independently on each monitor. |
 | `stage_card_min_width` | `120` | Minimum card width in logical pixels. Below this limit, excess cards scroll vertically. |
-| `stage_card_max_width` | `240` | Maximum card width; a few workspaces cannot expand the sidebar beyond this limit. |
+| `stage_card_max_width` | `0` | `0` automatically caps card width at one fifth of each output's logical width. Positive values override the cap in logical pixels. |
+| `stage_window_rounding` | `-1.0` | Window miniature corner radius in logical pixels at its displayed size. Negative values use half of `decoration:rounding`; `0` makes square corners. |
+| `stage_window_decorations` | `0` | Hide compositor window decorations in miniatures; `1` includes them. Client-drawn titlebars remain part of application content. |
 | `stage_padding` | `12` | Padding inside the sidebar, in logical pixels. |
 | `stage_card_gap` | `12` | Vertical gap between cards. |
 | `stage_desktop_gap` | `12` | Gap between the sidebar and the native desktop. |
-| `stage_show_empty` | `1` | Keep existing empty workspaces as labeled empty cards; `0` hides them. No synthetic workspaces or plus card. |
+| `stage_show_empty` | `1` | Keep inactive empty workspaces as transparent empty slots; `0` hides them. Hover outlines indicate their click/drop area. No synthetic workspaces or plus card. |
 | `stage_drop_follow` | `0` | After dropping a window, stay on the current workspace; `1` follows the moved window. |
 | `stage_maximize_cover_strip` | `0` | Maximization fills the right desktop; `1` lets maximization also cover the sidebar. True fullscreen always covers the output. |
 | `stage_refresh_ms` | `500` | Thumbnail refresh interval; interaction changes refresh immediately. Values below `16` use `16` ms. Hidden sidebars do not capture thumbnails. |
 
 Cards automatically grow or shrink within the configured bounds to fit the
 available height. Scroll the sidebar if they cannot fit at minimum width.
-Click a card to switch that monitor's workspace. Use the normal compositor
+Click a card to switch that monitor's workspace. The selected workspace leaves
+the sidebar and the previously active workspace returns to it. Use the normal compositor
 window-move drag (for example, your existing `SUPER + left mouse` binding) to
 drop a window onto a card. Holding a drag near the top/bottom scrolls the list;
 the width remains fixed during the drag. File/text drags inside applications
@@ -630,7 +637,8 @@ and window-resize gestures do not move windows between workspaces.
 True fullscreen slides the sidebar out; exiting restores it. Overview and special
 workspaces temporarily hide the persistent sidebar while preserving its desktop
 reservation. With `stage_show_empty = 0`, a monitor without visible cards releases
-the sidebar reservation. Extremely small outputs prioritize a usable desktop
+the sidebar reservation. A monitor with no inactive workspace cards likewise
+releases the reservation. Extremely small outputs prioritize a usable desktop
 over the minimum card width, or suspend the sidebar if neither can fit.
 
 `hyprctl hymission-stage-state` reports each monitor's computed dimensions,

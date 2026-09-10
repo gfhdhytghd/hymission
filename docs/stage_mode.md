@@ -8,10 +8,12 @@ the physical output mode. It is disabled by default.
 
 Start with the monitor's logical box and apply its existing reserved area once.
 For available dimensions `W × H`, padding `p`, desktop gap `g`, card gap `q`,
-and `N` visible workspaces, define `A = W − 2p − g` and
+and `N` visible inactive workspaces, define `A = W − 2p − g` and
 `L = H − 2p − (N−1)q`. The largest fitting card width is
 `c = L*A / (N*H + L)` when `L > 0`. Clamp to the configured minimum/maximum,
 then derive desktop width `D = A − c` and card height `h = c*H/D`.
+The default maximum (`stage_card_max_width = 0`) is one fifth of the output's
+logical width, independently on each monitor. Positive values are pixel overrides.
 At the minimum width, any excess height becomes scrollable content.
 
 The work-area hook calls the original `CSpace::recheckWorkArea` first, then
@@ -29,25 +31,43 @@ No cards means no reservation. On unusually small outputs the controller may
 go below the configured minimum card width, retaining at least 64 logical pixels
 of desktop; if even an 8-pixel card cannot fit, that output's sidebar is suspended.
 Negative gaps become zero, minimum widths below 8 become 8, and maximum width
-is raised to the minimum when configured in reverse order. Normalization is
+is raised to the minimum when positive limits are configured in reverse order.
+Non-positive maxima select the automatic output-relative cap. Normalization is
 logged on activation/config reload.
 
 ## Rendering and input
 
-Offscreen capture runs outside a compositor render pass. It clears a per-monitor
-scratch framebuffer to transparent and renders only mapped, non-hidden windows
-belonging to the target workspace (plus its monitor's pinned windows), including
-decorations and popups. It never calls overview's workspace re-layout or renders
-wallpaper/layer surfaces. Temporary workspace visibility, opacity and render
-offset overrides are restored before returning to the event loop; the real
-active workspace is never switched for capture.
+Only inactive workspaces appear; after a switch the new active workspace is
+removed and the old one becomes eligible. There are no numeric/name labels.
+Empty-workspace slots are transparent and identified by a hover/drop outline.
 
-The reduced desktop rectangle is cropped from the logical-orientation export
-framebuffer into each card. Display rendering uses physical pixels only at the
-final composition boundary. Only visible cards are captured; dirty offscreen
-cards refresh when scrolled into view. Each output owns one reusable full-size
-scratch buffer, plus its small card textures. Removing outputs/cards releases
-their resources. Suspended/covered sidebars skip capture.
+Offscreen capture runs outside a compositor render pass. Mapped, non-hidden
+windows belonging to each target workspace (plus its monitor's pinned windows)
+are assigned non-overlapping miniature slots by the same Grid layout engine as
+overview. Each window preserves its own aspect ratio. This rearranges only the
+previews, without changing live client geometry or the native desktop layout.
+
+Each window is rendered directly into a miniature-sized transparent framebuffer
+using render-pass translation/scaling. Miniatures are then composed into the
+workspace card. No wallpaper/layer surfaces are rendered, and the sidebar and
+cards have no background fill, leaving the actual wallpaper visible between
+windows. Window main surfaces are previewed; transient popups are not separate
+miniatures. Compositor decorations default off (`stage_window_decorations = 0`);
+application-drawn titlebars remain client content. Enabling decorations includes
+their extents in each window's layout footprint.
+
+`stage_window_rounding` sets the radius at the miniature's displayed logical
+size, independently of the real window. Its default `-1` follows half the system
+`decoration:rounding`; `0` disables rounding. The native corner mask is suppressed
+during stage capture only, and the desired radius is applied when composing each
+miniature. Temporary workspace visibility, opacity and render offset overrides
+are restored before returning to the event loop; capture never changes the real
+active workspace.
+
+Only visible cards are captured; dirty offscreen cards refresh when scrolled
+into view. Per-window temporary textures are released after card composition;
+only small card textures persist. Removing outputs/cards releases their
+resources. Suspended/covered sidebars skip capture.
 
 The sidebar is a render-pass element above windows. It intercepts input only in
 its own band; native window hit testing excludes windows behind that band. Mouse
@@ -69,7 +89,7 @@ direct-scanout flag used by overview.
 ## Compatibility and verification
 
 The controller requires the current Hyprland work-area, native drag-end,
-window-hit-test and window-render symbols, and the OpenGL renderer. It refuses
+window-hit-test, rounding and window-render symbols, and the OpenGL renderer. It refuses
 to enable if a required hook is unavailable, leaving the native layout intact
 and reporting the failure via notification and `hyprctl hymission-stage-state`.
 It adds no extra process or layer-shell client.
@@ -77,18 +97,21 @@ It adds no extra process or layer-shell client.
 Both CMake and Meson include the stage controller and `hymission-stage-logic-test`.
 The automated tests cover coupled card/desktop aspect, width limits, portrait
 and fractional-scale logical geometry, overflow, scroll hit testing/reveal,
-drag-width freezing, empty outputs, invalid settings and coverage policy.
+drag-width freezing, empty outputs, invalid settings, coverage policy,
+output-relative width caps, miniature aspect/non-overlap and independent rounding.
 They do not substitute for the following compositor acceptance checks:
 
 1. Enable with multiple tiled windows. Verify their actual sizes change and
    typing, scrolling, popups and clicks remain aligned at 100% and fractional
    output scales. Repeat with dwindle, master and scrolling layouts.
-2. Compare each card to its workspace: relative window positions, overlap,
-   decorations and transparency should agree; wallpaper and bar must be absent.
-   Check a rotated output and a bar with a changing exclusive zone.
+2. Verify all eligible windows are laid out as non-overlapping miniatures with
+   their original aspect ratios. The current workspace and all number/name
+   labels must be absent. Wallpaper should remain visible between miniatures.
+   Check default/zero/custom rounding and decoration toggling, including a
+   rotated output and a bar with a changing exclusive zone.
 3. Add/remove workspaces; test both empty-workspace policies, few cards at maximum
    width and many cards at minimum width. Check scrollbar-free wheel navigation,
-   current-card reveal and top/bottom edge scrolling during a drag.
+   top/bottom edge scrolling during a drag, and switching a card out of the list.
 4. Click a card, then drag tiled, floating and grouped windows onto other cards.
    Test same-workspace and cross-monitor drops. Default drops must not switch
    workspaces; enabling follow must switch and focus the moved window. Test

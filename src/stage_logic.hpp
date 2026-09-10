@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <optional>
+#include "mission_layout.hpp"
 
 namespace hymission::stage {
 
@@ -9,7 +10,7 @@ namespace hymission::stage {
 // reserved area removed; desktop gaps belong to the native layout, not here.
 struct Settings {
     double minWidth = 120;
-    double maxWidth = 240;
+    double maxWidth = 0; // 0: one fifth of the output's logical width
     double padding = 12;
     double cardGap = 12;
     double desktopGap = 12;
@@ -36,7 +37,9 @@ struct Geometry {
 
 Settings normalize(Settings settings);
 Geometry layout(double width, double height, std::size_t count, Settings settings,
-                std::optional<double> frozenCardWidth = std::nullopt);
+                std::optional<double> frozenCardWidth = std::nullopt, double outputWidth = 0);
+std::vector<WindowSlot> arrangeWindows(const std::vector<WindowInput>& windows, const Geometry& geometry);
+double previewRounding(double configured, double system, double width, double height);
 
 // Keep this policy independent of compositor enum values for state tests.
 enum class CoverMode { None, Maximized, Fullscreen };
