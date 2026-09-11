@@ -60,7 +60,8 @@ moving right. Each monitor alternates independently. Disabling this mode returns
 the sidebar to the left.
 
 Both copies are clipped to the owning monitor's logical rectangle, converted
-to render pixels; live window flights use the same output limit. Neither copy is
+to render pixels; live window flights additionally inset this limit by each side's
+`general:gaps_out`. Neither copy is
 submitted to an adjacent monitor. The native work-area reservation, sidebar
 hit tests, preview coordinates, floating-window correction and drag-drop focal
 points all follow the new side. Input to the sidebar is paused during the
@@ -78,7 +79,9 @@ linear timeline `t`. Window center position follows the symmetric smoothstep `t*
 departing windows, including when a transition is retargeted. Edges are derived
 from the interpolated center and current size, so scaling does not shift the
 translation anchor. After calculating size, the center is constrained so every
-edge stays inside the owning output. Oversized floating windows are uniformly
+edge stays inside the owning output inset by the corresponding left, top, right
+and bottom `general:gaps_out`. Rendering (including decorations) uses the same
+inset clip. Swipe release and rapid retargeting share this boundary. Oversized floating windows are uniformly
 fitted first. This prevents rapid growth from overtaking center translation near
 an output edge; it does not merely hide the overflowing part with a clip.
 `stage_transition_ms` defaults to 300 ms (0 disables, maximum

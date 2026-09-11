@@ -54,6 +54,17 @@ namespace {
 using Render::GL::g_pHyprOpenGL;
 using Clock = std::chrono::steady_clock;
 
+Rect flightBounds(const PHLMONITOR& monitor) {
+    static auto gapsOut = CConfigValue<Config::IComplexConfigValue>("general:gaps_out");
+    const auto& gap = *static_cast<Config::CCssGapData*>(gapsOut.ptr());
+    const double left = std::clamp(static_cast<double>(gap.m_left), 0.0, monitor->m_size.x);
+    const double top = std::clamp(static_cast<double>(gap.m_top), 0.0, monitor->m_size.y);
+    const double right = std::clamp(static_cast<double>(gap.m_right), 0.0, monitor->m_size.x - left);
+    const double bottom = std::clamp(static_cast<double>(gap.m_bottom), 0.0, monitor->m_size.y - top);
+    return {monitor->m_position.x + left, monitor->m_position.y + top,
+            monitor->m_size.x - left - right, monitor->m_size.y - top - bottom};
+}
+
 long setting(const char* suffix, long fallback) {
     const auto value = Config::mgr()->getConfigValue(std::string("plugin:hymission:") + suffix);
     if (!value.dataptr || !value.type)
@@ -632,7 +643,7 @@ void StageController::Impl::endSwipe() {
             for (auto& flight : swipe->visual.flights) {
                 const auto box = stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
                     {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, swipe->progress,
-                    {monitor->m_position.x, monitor->m_position.y, monitor->m_size.x, monitor->m_size.y});
+                    flightBounds(monitor));
                 flight.from = {box.x, box.y, box.width, box.height};
                 flight.fromRadius += (flight.toRadius - flight.fromRadius) * stage::transitionProgress(swipe->progress, 1);
             }
@@ -1555,7 +1566,7 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
     }
     const auto interpolate = [&](const CBox& from, const CBox& to, double p) {
         const auto r = stage::transitionBoxWithin({from.x, from.y, from.w, from.h}, {to.x, to.y, to.w, to.h}, p,
-            {monitor->m_position.x, monitor->m_position.y, monitor->m_size.x, monitor->m_size.y});
+            flightBounds(monitor));
         return CBox{r.x, r.y, r.width, r.height};
     };
     const auto miniature = [&](const PHLWORKSPACE& workspace, const CBox& natural, const std::vector<Card>& cards,
@@ -1736,7 +1747,10 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
         return;
     const auto previousClip = g_pHyprRenderer->m_renderData.clipBox;
     const double p = flightProgress(screen);
-    const CBox clip{0, 0, monitor->m_size.x * monitor->m_scale, monitor->m_size.y * monitor->m_scale};
+    const auto bounds = flightBounds(monitor);
+    const CBox clip{(bounds.x - monitor->m_position.x) * monitor->m_scale,
+                    (bounds.y - monitor->m_position.y) * monitor->m_scale,
+                    bounds.width * monitor->m_scale, bounds.height * monitor->m_scale};
     for (auto& flight : screen.flights) {
         const auto window = flight.preview.window.lock();
         if (!window || !window->m_isMapped || window->isHidden() || window->m_pinned || window->m_monitor != monitor)
@@ -1745,7 +1759,7 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
             flight.to = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() : CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
         const auto box = stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
             {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, p,
-            {monitor->m_position.x, monitor->m_position.y, monitor->m_size.x, monitor->m_size.y});
+            bounds);
         drawPreview(window, monitor, CBox{box.x, box.y, box.width, box.height}, clip,
             flight.fromRadius + (flight.toRadius - flight.fromRadius) * stage::transitionProgress(p, 1));
     }

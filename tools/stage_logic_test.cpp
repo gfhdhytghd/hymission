@@ -136,6 +136,22 @@ int main() {
         }
     }
     const auto interrupted = transitionBoxWithin(rightCard, flightDesktop, 0.25, flightOutput);
+    const hymission::Rect gapBounds{flightOutput.x + 17, flightOutput.y + 23,
+        flightOutput.width - 17 - 31, flightOutput.height - 23 - 47};
+    for (int step = 0; step <= 100; ++step) {
+        for (bool incoming : {false, true}) {
+            const auto box = transitionBoxWithin(incoming ? rightCard : flightDesktop,
+                incoming ? flightDesktop : rightCard, step / 100.0, gapBounds);
+            ok &= expect(box.x >= gapBounds.x - 1e-6 && box.y >= gapBounds.y - 1e-6 &&
+                box.x + box.width <= gapBounds.x + gapBounds.width + 1e-6 &&
+                box.y + box.height <= gapBounds.y + gapBounds.height + 1e-6,
+                "both flight directions preserve asymmetric outer gaps throughout the animation");
+            const auto resumed = transitionBoxWithin(box, rightCard, 0, gapBounds);
+            ok &= expect(near(box.x, resumed.x) && near(box.y, resumed.y) &&
+                near(box.width, resumed.width) && near(box.height, resumed.height),
+                "swipe release and retarget retain the gap-constrained frame");
+        }
+    }
     const auto boundedRetarget = transitionBoxWithin(interrupted, rightCard, 0, flightOutput);
     ok &= expect(near(interrupted.x, boundedRetarget.x) && near(interrupted.y, boundedRetarget.y) &&
         near(interrupted.width, boundedRetarget.width) && near(interrupted.height, boundedRetarget.height), "retargeting preserves an edge-constrained frame");
