@@ -221,6 +221,10 @@ struct StageController::Impl {
     std::vector<Screen> screens;
     std::vector<PHLWINDOWREF> livePreviewWindows;
     std::optional<Swipe> swipe;
+    uint64_t swipeBegins = 0;
+    uint64_t swipeUpdates = 0;
+    uint64_t swipeEnds = 0;
+    uint64_t rawSwipeUpdates = 0;
     std::vector<CHyprSignalListener> listeners;
     CFunctionHook* areaHook = nullptr;
     CFunctionHook* dragHook = nullptr;
@@ -325,6 +329,7 @@ struct StageController::Impl {
             self->clearSwipe();
         self->swipeBeginOriginal(gesture);
         if (monitor && self->ownsTransition(monitor->m_activeWorkspace) && gesture->isGestureInProgress()) {
+            ++self->swipeBegins;
             self->swipe.emplace();
             self->swipe->native = gesture;
             self->swipe->monitor = monitor;
@@ -567,6 +572,7 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
 void StageController::Impl::updateSwipe(double delta) {
     if (!swipe || swipe->released)
         return;
+    ++swipeUpdates;
     const auto monitor = swipe->monitor.lock();
     if (!monitor || monitor->m_activeWorkspace != swipe->origin || !ownsTransition(monitor->m_activeWorkspace) || Desktop::focusState()->monitor() != monitor) {
         clearSwipe();
@@ -800,6 +806,9 @@ void StageController::Impl::initialize() {
     }));
     listeners.emplace_back(events.input.mouse.button.listen([this](const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) { const auto copy = event; button(copy, info); }));
     listeners.emplace_back(events.input.mouse.axis.listen([this](const IPointer::SAxisEvent& event, Event::SCallbackInfo& info) { axis(event, info); }));
+    listeners.emplace_back(events.gesture.swipe.update.listen([this](const IPointer::SSwipeUpdateEvent&, Event::SCallbackInfo&) {
+        ++rawSwipeUpdates;
+    }));
     listeners.emplace_back(events.gesture.swipe.end.listen([this](const IPointer::SSwipeEndEvent& event, Event::SCallbackInfo&) {
         if (swipe)
             swipe->cancelled = event.cancelled;
@@ -1901,7 +1910,10 @@ StageController::Impl::~Impl() {
 
 std::string StageController::Impl::stateJson() const {
     nlohmann::json result{{"enabled", enabled}, {"smartisan_mode", smartisan}, {"hooks_ready", hooksReady}, {"preview_renderer", "native_surfaces"},
-        {"refresh_interval_ms", std::clamp(setting("stage_refresh_ms", 16), 1L, 16L)}, {"error", error}, {"screens", nlohmann::json::array()}};
+        {"refresh_interval_ms", std::clamp(setting("stage_refresh_ms", 16), 1L, 16L)}, {"error", error},
+        {"swipe_begin_count", swipeBegins}, {"swipe_update_count", swipeUpdates}, {"swipe_end_count", swipeEnds},
+        {"raw_swipe_update_count", rawSwipeUpdates},
+        {"screens", nlohmann::json::array()}};
     for (const auto& screen : screens) {
         const auto monitor = screen.monitor.lock();
         if (!monitor)
@@ -1952,8 +1964,45 @@ bool StageController::endWorkspaceSwipe(void* gesture) {
     auto* self = Impl::instance;
     if (!self || !self->swipe || self->swipe->native != gesture)
         return false;
+    ++self->swipeEnds;
     self->endSwipe();
     return true;
+}
+
+bool StageController::beginTrackpadWorkspaceSwipe() {
+    auto* self = Impl::instance;
+    auto* native = g_pUnifiedWorkspaceSwipe.get();
+    if (!self || !native || (native->isGestureInProgress() && !self->swipe))
+        return false;
+    // ownsTransition excludes fullscreen, special workspaces and session lock.
+    // Initialize the native bookkeeping directly: invoking begin() here would
+    // route through an optional hook and could initialize the gesture twice.
+    return beginWorkspaceSwipe(native, +[](void* pointer) {
+        auto* gesture = static_cast<CUnifiedWorkspaceSwipeGesture*>(pointer);
+        const auto monitor = Desktop::focusState()->monitor();
+        gesture->m_workspaceBegin = monitor->m_activeWorkspace;
+        gesture->m_monitor = monitor;
+        gesture->m_delta = 0;
+        gesture->m_initialDirection = 0;
+        gesture->m_avgSpeed = 0;
+        gesture->m_speedPoints = 0;
+    });
+}
+
+void StageController::updateTrackpadWorkspaceSwipe(double delta) {
+    auto* self = Impl::instance;
+    if (!self || !self->swipe || self->swipe->released)
+        return;
+    const double signedDelta = numberSetting("gestures:workspace_swipe_invert", 1) ? -delta : delta;
+    self->updateSwipe(self->swipe->native->m_delta + signedDelta);
+}
+
+void StageController::endTrackpadWorkspaceSwipe(bool cancelled) {
+    auto* self = Impl::instance;
+    if (!self || !self->swipe)
+        return;
+    self->swipe->cancelled = cancelled;
+    endWorkspaceSwipe(self->swipe->native);
 }
 
 void StageController::setOverviewRendering(bool active) {

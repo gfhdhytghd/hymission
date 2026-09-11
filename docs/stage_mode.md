@@ -101,8 +101,11 @@ cancel flights. Flight metadata is released when the motion timer finishes or ca
 The real client geometry and pointer coordinate system remain native throughout.
 
 Workspace swipes use the same window flights and sidebar transition.
-Overview owns the native unified-swipe hooks and forwards desktop gestures to
-Stage; Stage never registers a second hook for those functions. Surface box,
+The registered workspace trackpad gesture sends begin/update/end directly to
+Stage, including the initial delta, inversion, scaling and cancellation. It does
+not depend on optional native function hooks to enter the follow-finger state.
+Overview owns the native unified-swipe hooks for other entry points and forwards
+desktop gestures to Stage; Stage never registers a second hook for those functions. Surface box,
 visible-region and UV hooks transfer to Overview before it attaches, and return
 to Stage only after Overview detaches (including failed activation rollback).
 
@@ -115,7 +118,9 @@ during the swipe, including the outgoing windows' flight into the sidebar.
 Its native workspace object is created only on commit; cancellation leaves no
 new workspace behind. Release continues from the current preview. Native swipe
 rendering is not run alongside the Stage transition. State output includes
-`swipe_active` and `swipe_progress`.
+`swipe_active` and `swipe_progress`. Cumulative `swipe_begin_count`,
+`swipe_update_count` and `swipe_end_count` expose Stage delivery;
+`raw_swipe_update_count` independently counts compositor swipe events.
 
 Only inactive workspaces appear; after a switch the new active workspace is
 removed and the old one becomes eligible. There are no numeric/name labels.

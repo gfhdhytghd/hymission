@@ -22,6 +22,10 @@ class StageController {
     static bool beginWorkspaceSwipe(void* gesture, void (*original)(void*));
     static bool updateWorkspaceSwipe(void* gesture, double delta);
     static bool endWorkspaceSwipe(void* gesture);
+    // The registered trackpad gesture routes directly, without native hooks.
+    static bool beginTrackpadWorkspaceSwipe();
+    static void updateTrackpadWorkspaceSwipe(double delta);
+    static void endTrackpadWorkspaceSwipe(bool cancelled);
     static void setOverviewRendering(bool active);
 
   private:

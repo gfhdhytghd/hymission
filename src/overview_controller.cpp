@@ -1966,6 +1966,12 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
             return;
         }
 
+        if (StageController::beginTrackpadWorkspaceSwipe()) {
+            ITrackpadGesture::begin(e);
+            m_mode = Mode::Stage;
+            StageController::updateTrackpadWorkspaceSwipe(distance(e));
+            return;
+        }
         m_nativeGesture.begin(e);
     }
 
@@ -1979,6 +1985,10 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
             return;
         }
 
+        if (m_mode == Mode::Stage) {
+            StageController::updateTrackpadWorkspaceSwipe(distance(e));
+            return;
+        }
         m_nativeGesture.update(e);
     }
 
@@ -1992,6 +2002,10 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
             return;
         }
 
+        if (m_mode == Mode::Stage) {
+            StageController::endTrackpadWorkspaceSwipe(e.swipe ? e.swipe->cancelled : true);
+            return;
+        }
         m_nativeGesture.end(e);
     }
 
@@ -2003,6 +2017,7 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
     enum class Mode {
         Native,
         Overview,
+        Stage,
         Blocked,
     };
 
