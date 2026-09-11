@@ -1,4 +1,5 @@
 #include "overview_controller.hpp"
+#include "stage_controller.hpp"
 
 #include <algorithm>
 #include <any>
@@ -4484,7 +4485,8 @@ void OverviewController::unifiedWorkspaceSwipeBeginHook(void* gestureThisptr) {
         return;
     }
 
-    m_unifiedWorkspaceSwipeBeginOriginal(gestureThisptr);
+    if (!StageController::beginWorkspaceSwipe(gestureThisptr, m_unifiedWorkspaceSwipeBeginOriginal))
+        m_unifiedWorkspaceSwipeBeginOriginal(gestureThisptr);
 }
 
 void OverviewController::unifiedWorkspaceSwipeUpdateHook(void* gestureThisptr, double delta) {
@@ -4499,7 +4501,8 @@ void OverviewController::unifiedWorkspaceSwipeUpdateHook(void* gestureThisptr, d
     if (shouldBlockWorkspaceSwitchInOverview() || allowsWorkspaceSwitchInOverview())
         return;
 
-    m_unifiedWorkspaceSwipeUpdateOriginal(gestureThisptr, delta);
+    if (!StageController::updateWorkspaceSwipe(gestureThisptr, delta))
+        m_unifiedWorkspaceSwipeUpdateOriginal(gestureThisptr, delta);
 }
 
 void OverviewController::unifiedWorkspaceSwipeEndHook(void* gestureThisptr) {
@@ -4514,7 +4517,8 @@ void OverviewController::unifiedWorkspaceSwipeEndHook(void* gestureThisptr) {
     if (shouldBlockWorkspaceSwitchInOverview() || allowsWorkspaceSwitchInOverview())
         return;
 
-    m_unifiedWorkspaceSwipeEndOriginal(gestureThisptr);
+    if (!StageController::endWorkspaceSwipe(gestureThisptr))
+        m_unifiedWorkspaceSwipeEndOriginal(gestureThisptr);
 }
 
 bool OverviewController::handleTouchDown(const ITouch::SDownEvent& event) {
@@ -7399,6 +7403,7 @@ bool OverviewController::activateHooks() {
         !m_surfaceDrawHook || !m_surfaceNeedsLiveBlurHook || !m_surfaceNeedsPrecomputeBlurHook || !m_borderDrawHook || !m_shadowDrawHook || !m_calculateUVForSurfaceHook)
         return false;
 
+    StageController::setOverviewRendering(true);
     const bool hooked = m_shouldRenderWindowHook->hook() && m_effectiveAlphaHook->hook() && m_surfaceTexBoxHook->hook() && m_surfaceBoundingBoxHook->hook() &&
         m_surfaceOpaqueRegionHook->hook() && m_surfaceVisibleRegionHook->hook() && m_surfaceDrawHook->hook() && m_surfaceNeedsLiveBlurHook->hook() &&
         m_surfaceNeedsPrecomputeBlurHook->hook() && m_borderDrawHook->hook() && m_shadowDrawHook->hook() && m_calculateUVForSurfaceHook->hook();
@@ -7428,6 +7433,7 @@ bool OverviewController::activateHooks() {
             m_shadowDrawHook->unhook();
         if (m_calculateUVForSurfaceHook)
             m_calculateUVForSurfaceHook->unhook();
+        StageController::setOverviewRendering(false);
         return false;
     }
 
@@ -7517,6 +7523,7 @@ void OverviewController::deactivateHooks() {
     m_renderLayerOriginal = nullptr;
     m_surfaceRenderDataTransformDepth = 0;
     m_hooksActive = false;
+    StageController::setOverviewRendering(false);
     g_pHyprRenderer->m_directScanoutBlocked = false;
 }
 

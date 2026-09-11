@@ -7,8 +7,8 @@
 
 namespace hymission {
 
-// Owns the persistent desktop mode. Overview only supplies a suspension predicate;
-// no overview layout, window transform or input capture is used by this controller.
+// Owns persistent desktop mode and its layout, rendering and gestures. Overview
+// supplies suspension state and coordinates ownership of overlapping native hooks.
 class StageController {
   public:
     StageController(HANDLE handle, std::function<bool()> overviewSuspended);
@@ -17,6 +17,12 @@ class StageController {
     StageController& operator=(const StageController&) = delete;
     void initialize();
     std::string stateJson() const;
+    // Overview owns the native swipe entry points; Stage consumes only its own
+    // gestures. Surface hook ownership is handed over before overview attaches.
+    static bool beginWorkspaceSwipe(void* gesture, void (*original)(void*));
+    static bool updateWorkspaceSwipe(void* gesture, double delta);
+    static bool endWorkspaceSwipe(void* gesture);
+    static void setOverviewRendering(bool active);
 
   private:
     struct Impl;

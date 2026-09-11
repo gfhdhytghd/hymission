@@ -97,8 +97,13 @@ Session lock, overview, fullscreen, output geometry changes and config reload
 cancel flights. Flight metadata is released when the motion timer finishes or cancels.
 The real client geometry and pointer coordinate system remain native throughout.
 
-Workspace swipes use the same window flights and sidebar transition. While the
-finger moves, a provisional view advances with the gesture; the actual active
+Workspace swipes use the same window flights and sidebar transition.
+Overview owns the native unified-swipe hooks and forwards desktop gestures to
+Stage; Stage never registers a second hook for those functions. Surface box,
+visible-region and UV hooks transfer to Overview before it attaches, and return
+to Stage only after Overview detaches (including failed activation rollback).
+
+While the finger moves, a provisional view advances with the gesture; the actual active
 workspace changes only after release passes the native distance/speed threshold.
 Cancellation reverses that view back to its origin without changing workspace.
 Direction locking, inversion and monitor-local workspace selection remain native

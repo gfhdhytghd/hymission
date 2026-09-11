@@ -203,6 +203,7 @@ struct StageController::Impl {
     using SwipeUpdateFn = void (*)(CUnifiedWorkspaceSwipeGesture*, double);
     using SwipeEndFn = void (*)(CUnifiedWorkspaceSwipeGesture*);
     inline static Impl* instance = nullptr;
+    inline static bool overviewRendering = false;
 
     HANDLE handle;
     std::function<bool()> overviewSuspended;
@@ -221,9 +222,7 @@ struct StageController::Impl {
     CFunctionHook* addPassHook = nullptr;
     CFunctionHook* workspaceAnimationHook = nullptr;
     CFunctionHook* changeWorkspaceHook = nullptr;
-    CFunctionHook* swipeBeginHook = nullptr;
-    CFunctionHook* swipeUpdateHook = nullptr;
-    CFunctionHook* swipeEndHook = nullptr;
+    SwipeBeginFn swipeBeginOriginal = nullptr;
     bool drawingDecoration = false;
     float decorationRadius = 0;
     CBox decorationClip;
@@ -313,29 +312,13 @@ struct StageController::Impl {
         const auto monitor = Desktop::focusState()->monitor();
         if (self->swipe)
             self->clearSwipe();
-        reinterpret_cast<SwipeBeginFn>(self->swipeBeginHook->m_original)(gesture);
+        self->swipeBeginOriginal(gesture);
         if (monitor && self->ownsTransition(monitor->m_activeWorkspace) && gesture->isGestureInProgress()) {
             self->swipe.emplace();
             self->swipe->native = gesture;
             self->swipe->monitor = monitor;
             self->swipe->origin = monitor->m_activeWorkspace;
         }
-    }
-    static void swipeUpdateThunk(CUnifiedWorkspaceSwipeGesture* gesture, double delta) {
-        auto* self = instance;
-        if (self->swipe && self->swipe->native == gesture) {
-            self->updateSwipe(delta);
-            return;
-        }
-        reinterpret_cast<SwipeUpdateFn>(self->swipeUpdateHook->m_original)(gesture, delta);
-    }
-    static void swipeEndThunk(CUnifiedWorkspaceSwipeGesture* gesture) {
-        auto* self = instance;
-        if (self->swipe && self->swipe->native == gesture) {
-            self->endSwipe();
-            return;
-        }
-        reinterpret_cast<SwipeEndFn>(self->swipeEndHook->m_original)(gesture);
     }
     static void workspaceAnimationThunk(PHLWORKSPACE workspace, Animation::Workspace::eAnimationType type, bool left, bool instant,
                                         std::optional<std::string> style) {
@@ -713,7 +696,14 @@ bool StageController::Impl::installHooks() {
             if (match.demangled.find(qualified) != std::string::npos)
                 return match.address;
         }
+        error = std::string("stage disabled: missing symbol ") + qualified;
         return nullptr;
+    };
+    const auto attach = [&](CFunctionHook* hook, const char* name) {
+        if (hook && hook->hook())
+            return true;
+        error = std::string("stage disabled: failed to attach ") + name;
+        return false;
     };
     const auto area = find("recheckWorkArea", "Layout::CSpace::recheckWorkArea()");
     const auto drag = find("dragEnd", "Layout::Supplementary::CDragStateController::dragEnd()");
@@ -725,12 +715,9 @@ bool StageController::Impl::installHooks() {
     const auto addPass = find("addPassElement", "IHyprRenderer::addPassElement(");
     const auto workspaceAnimation = find("startAnimation", "Animation::Workspace::startAnimation(");
     const auto changeWorkspace = find("changeWorkspace", "Monitor::CMonitor::changeWorkspace(Hyprutils::Memory::CSharedPointer<CWorkspace> const&");
-    const auto swipeBegin = find("begin", "CUnifiedWorkspaceSwipeGesture::begin()");
-    const auto swipeUpdate = find("update", "CUnifiedWorkspaceSwipeGesture::update(double)");
-    const auto swipeEnd = find("end", "CUnifiedWorkspaceSwipeGesture::end()");
     renderWindow = reinterpret_cast<RenderWindowFn>(find("renderWindow", "IHyprRenderer::renderWindow("));
     shouldBlur = reinterpret_cast<ShouldBlurFn>(find("shouldBlur", "IHyprRenderer::shouldBlur(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>)"));
-    if (area && drag && hit && rounding && surfaceBox && surfaceVisible && surfaceUV && addPass && workspaceAnimation && changeWorkspace && swipeBegin && swipeUpdate && swipeEnd && renderWindow && shouldBlur && g_pHyprOpenGL) {
+    if (area && drag && hit && rounding && surfaceBox && surfaceVisible && surfaceUV && addPass && workspaceAnimation && changeWorkspace && renderWindow && shouldBlur && g_pHyprOpenGL) {
         areaHook = HyprlandAPI::createFunctionHook(handle, area, reinterpret_cast<void*>(&recheckThunk));
         dragHook = HyprlandAPI::createFunctionHook(handle, drag, reinterpret_cast<void*>(&dragThunk));
         hitHook = HyprlandAPI::createFunctionHook(handle, hit, reinterpret_cast<void*>(&windowAtThunk));
@@ -742,20 +729,18 @@ bool StageController::Impl::installHooks() {
         addPassHook = HyprlandAPI::createFunctionHook(handle, addPass, reinterpret_cast<void*>(&addPassThunk));
         workspaceAnimationHook = HyprlandAPI::createFunctionHook(handle, workspaceAnimation, reinterpret_cast<void*>(&workspaceAnimationThunk));
         changeWorkspaceHook = HyprlandAPI::createFunctionHook(handle, changeWorkspace, reinterpret_cast<void*>(&changeWorkspaceThunk));
-        swipeBeginHook = HyprlandAPI::createFunctionHook(handle, swipeBegin, reinterpret_cast<void*>(&swipeBeginThunk));
-        swipeUpdateHook = HyprlandAPI::createFunctionHook(handle, swipeUpdate, reinterpret_cast<void*>(&swipeUpdateThunk));
-        swipeEndHook = HyprlandAPI::createFunctionHook(handle, swipeEnd, reinterpret_cast<void*>(&swipeEndThunk));
-        hooksReady = areaHook && dragHook && hitHook && roundingHook && renderWindowHook && surfaceBoxHook && surfaceVisibleHook && surfaceUVHook && addPassHook && workspaceAnimationHook && changeWorkspaceHook && swipeBeginHook && swipeUpdateHook && swipeEndHook &&
-            areaHook->hook() && dragHook->hook() && hitHook->hook() && roundingHook->hook() && renderWindowHook->hook() &&
-            surfaceBoxHook->hook() && surfaceVisibleHook->hook() && surfaceUVHook->hook() && addPassHook->hook() && workspaceAnimationHook->hook() && changeWorkspaceHook->hook() &&
-            swipeBeginHook->hook() && swipeUpdateHook->hook() && swipeEndHook->hook();
+        hooksReady = attach(areaHook, "work area") && attach(dragHook, "drag end") && attach(hitHook, "window hit test") &&
+            attach(roundingHook, "rounding") && attach(renderWindowHook, "window rendering") &&
+            (overviewRendering || (attach(surfaceBoxHook, "surface box") && attach(surfaceVisibleHook, "surface visible region") && attach(surfaceUVHook, "surface UV"))) &&
+            attach(addPassHook, "decoration pass") && attach(workspaceAnimationHook, "workspace animation") && attach(changeWorkspaceHook, "workspace change");
         if (hooksReady)
             renderWindow = reinterpret_cast<RenderWindowFn>(renderWindowHook->m_original);
     }
     if (!hooksReady) {
         releaseHooks();
         hookFailure = true;
-        error = "stage disabled: work-area / native-drag / hit-test / rounding / window-render hook or OpenGL renderer unavailable";
+        if (error.empty())
+            error = "stage disabled: OpenGL renderer unavailable";
         Log::logger->log(Log::ERR, "[hymission] {}", error);
         HyprlandAPI::addNotification(handle, "[hymission] " + error, CHyprColor(1.0, 0.3, 0.2, 1.0), 8000);
     }
@@ -764,7 +749,7 @@ bool StageController::Impl::installHooks() {
 
 void StageController::Impl::releaseHooks() {
     for (auto** hook : {&areaHook, &dragHook, &hitHook, &roundingHook, &renderWindowHook, &surfaceBoxHook, &surfaceVisibleHook, &surfaceUVHook, &addPassHook,
-                        &workspaceAnimationHook, &changeWorkspaceHook, &swipeBeginHook, &swipeUpdateHook, &swipeEndHook}) {
+                        &workspaceAnimationHook, &changeWorkspaceHook}) {
         if (!*hook)
             continue;
         (*hook)->unhook();
@@ -1928,5 +1913,52 @@ StageController::StageController(HANDLE handle, std::function<bool()> suspended)
 StageController::~StageController() = default;
 void StageController::initialize() { m_impl->initialize(); }
 std::string StageController::stateJson() const { return m_impl->stateJson(); }
+
+bool StageController::beginWorkspaceSwipe(void* gesture, void (*original)(void*)) {
+    auto* self = Impl::instance;
+    const auto monitor = Desktop::focusState()->monitor();
+    if (!self || !original || !monitor || !self->ownsTransition(monitor->m_activeWorkspace))
+        return false;
+    self->swipeBeginOriginal = reinterpret_cast<Impl::SwipeBeginFn>(original);
+    Impl::swipeBeginThunk(static_cast<CUnifiedWorkspaceSwipeGesture*>(gesture));
+    return true;
+}
+
+bool StageController::updateWorkspaceSwipe(void* gesture, double delta) {
+    auto* self = Impl::instance;
+    if (!self || !self->swipe || self->swipe->native != gesture)
+        return false;
+    self->updateSwipe(delta);
+    return true;
+}
+
+bool StageController::endWorkspaceSwipe(void* gesture) {
+    auto* self = Impl::instance;
+    if (!self || !self->swipe || self->swipe->native != gesture)
+        return false;
+    self->endSwipe();
+    return true;
+}
+
+void StageController::setOverviewRendering(bool active) {
+    if (Impl::overviewRendering == active)
+        return;
+    Impl::overviewRendering = active;
+    auto* self = Impl::instance;
+    if (!self || !self->hooksReady)
+        return;
+    for (auto* hook : {self->surfaceBoxHook, self->surfaceVisibleHook, self->surfaceUVHook}) {
+        if (active) {
+            if (hook)
+                hook->unhook();
+        } else if (!hook || !hook->hook()) {
+            self->error = "stage disabled: native surface hook reattach failed after overview";
+            self->hookFailure = true;
+            self->releaseHooks();
+            self->request();
+            break;
+        }
+    }
+}
 
 } // namespace hymission
