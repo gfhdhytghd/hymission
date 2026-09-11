@@ -123,6 +123,31 @@ int main() {
     ok &= expect(near(growing.width / growing.height, full.width / full.height) && near(shrinking.width / shrinking.height, full.width / full.height), "flight preserves aspect ratio");
     const auto retargeted = transitionBox(growing, miniature, 0);
     ok &= expect(near(retargeted.x, growing.x) && near(retargeted.width, growing.width), "interrupted transition resumes from its current box without a jump");
+    const hymission::Rect flightOutput{-3072, 0, 3072, 1728};
+    const hymission::Rect rightCard{-360, 500, 340, 210}, flightDesktop{-3060, 60, 2670, 1650};
+    const auto overflowing = transitionBox(rightCard, flightDesktop, 0.25);
+    ok &= expect(overflowing.x + overflowing.width > 0, "fixture reproduces fast growth overtaking center translation at the output edge");
+    for (int step = 0; step <= 100; ++step) {
+        for (bool incoming : {false, true}) {
+            const auto bounded = transitionBoxWithin(incoming ? rightCard : flightDesktop, incoming ? flightDesktop : rightCard, step / 100.0, flightOutput);
+            ok &= expect(bounded.x >= flightOutput.x - 1e-6 && bounded.y >= flightOutput.y - 1e-6 &&
+                bounded.x + bounded.width <= flightOutput.x + flightOutput.width + 1e-6 &&
+                bounded.y + bounded.height <= flightOutput.y + flightOutput.height + 1e-6, "incoming and outgoing edges stay inside their monitor throughout the flight");
+        }
+    }
+    const auto interrupted = transitionBoxWithin(rightCard, flightDesktop, 0.25, flightOutput);
+    const auto boundedRetarget = transitionBoxWithin(interrupted, rightCard, 0, flightOutput);
+    ok &= expect(near(interrupted.x, boundedRetarget.x) && near(interrupted.y, boundedRetarget.y) &&
+        near(interrupted.width, boundedRetarget.width) && near(interrupted.height, boundedRetarget.height), "retargeting preserves an edge-constrained frame");
+    const auto leftCard = hymission::Rect{flightOutput.x + 20, 500, 340, 210};
+    const auto rightFlightDesktop = hymission::Rect{-2682, 60, 2670, 1650};
+    for (int step = 0; step <= 100; ++step) {
+        const auto bounded = transitionBoxWithin(leftCard, rightFlightDesktop, step / 100.0, flightOutput);
+        ok &= expect(bounded.x >= flightOutput.x - 1e-6 && bounded.x + bounded.width <= 1e-6,
+            "mirrored incoming flight also stays inside the left and right output edges");
+    }
+    const auto oversized = transitionBoxWithin({-4000, -1000, 6000, 4000}, flightDesktop, 0, flightOutput);
+    ok &= expect(near(oversized.width / oversized.height, 1.5), "oversized floating flight fits the output without distortion");
     const hymission::Rect dropCard{-1900, 180, 200, 100}, dropDesktop{-1650, 40, 1600, 800};
     const auto drop = mapDropPoint(dropCard, dropDesktop, -1850, 255);
     ok &= expect(near(drop.first, -1250) && near(drop.second, 640), "drop focal point maps both axes across monitor offsets and reserved areas");

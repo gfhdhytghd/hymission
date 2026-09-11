@@ -365,7 +365,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("stage_show_empty", 1);
     INT_CONF("stage_drop_follow", 0);
     INT_CONF("stage_maximize_cover_strip", 0);
-    INT_CONF("stage_refresh_ms", 500);
+    INT_CONF("stage_refresh_ms", 16);
     INT_CONF("workspace_strip_gap", 24);
     INT_CONF("workspace_strip_refresh_ms", 500);
     INT_CONF("workspace_strip_force_show", 0);

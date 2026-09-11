@@ -126,6 +126,20 @@ Rect transitionBox(const Rect& from, const Rect& to, double p) {
     const double centerY = from.y + from.height / 2 + (to.y + to.height / 2 - from.y - from.height / 2) * position;
     return {centerX - width / 2, centerY - height / 2, width, height};
 }
+Rect transitionBoxWithin(const Rect& from, const Rect& to, double progress, const Rect& bounds) {
+    auto box = transitionBox(from, to, progress);
+    if (bounds.width <= 0 || bounds.height <= 0)
+        return {bounds.x, bounds.y, 0, 0};
+    const double fit = std::min({1.0, bounds.width / std::max(1.0, box.width), bounds.height / std::max(1.0, box.height)});
+    const double centerX = box.centerX();
+    const double centerY = box.centerY();
+    box.width *= fit;
+    box.height *= fit;
+    box.x = std::clamp(centerX - box.width / 2, bounds.x, bounds.x + bounds.width - box.width);
+    box.y = std::clamp(centerY - box.height / 2, bounds.y, bounds.y + bounds.height - box.height);
+    return box;
+}
+
 std::pair<double, double> mapDropPoint(const Rect& card, const Rect& desktop, double x, double y) {
     const double u = card.width > 0 ? std::clamp((x - card.x) / card.width, 0.0, 1.0) : 0.5;
     const double v = card.height > 0 ? std::clamp((y - card.y) / card.height, 0.0, 1.0) : 0.5;

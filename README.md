@@ -587,6 +587,9 @@ the native layout resizes the actual desktop to the remaining area. Applications
 keep their normal rendering scale and input coordinates. The sidebar lists only
 that monitor's **inactive workspaces**. Each card preserves the windows' original
 positions, relative sizes and overlap using one workspace-wide scale.
+Previews draw live window surfaces and receive native frame callbacks, with a
+16 ms repaint schedule. Window switches use Stage's animation for clicks, keys
+and swipes; incoming and outgoing window edges remain within the owning output.
 There are no number/name labels or card/sidebar background fills: the real wallpaper
 shows through the gaps. Card aspect ratios match the reduced desktop
 after the monitor's existing reserved areas have been subtracted.
@@ -622,10 +625,10 @@ hl.config({
 | `stage_desktop_gap` | `-1` | No additional gap beyond native spacing; nonnegative values add explicit spacing before the desktop. |
 | `stage_transition_ms` | `300` | Workspace window flights; `0` disables. Shared timeline, symmetric ease-in-out translation and ease-out scale. Incoming desktop stays above departing windows. Respects `animations:enabled`. |
 | `stage_smartisan_mode` | `0` | Swap sidebar and desktop sides on every ordinary workspace switch. The sidebar exits its current edge and enters from the opposite edge; the selected workspace expands while the old desktop shrinks into its matching card. Each monitor alternates independently. |
-| `stage_show_empty` | `1` | Keep inactive empty workspaces as transparent empty slots; `0` hides them. Hover outlines indicate their click/drop area. No synthetic workspaces or plus card. |
+| `stage_show_empty` | `1` | Keep inactive empty workspaces as transparent empty slots; `0` hides them. Slots remain clickable and accept drops without a hover outline. No synthetic workspaces or plus card. |
 | `stage_drop_follow` | `0` | After dropping a window, stay on the current workspace; `1` follows the moved window. |
 | `stage_maximize_cover_strip` | `0` | Maximization fills the right desktop; `1` lets maximization also cover the sidebar. True fullscreen always covers the output. |
-| `stage_refresh_ms` | `500` | Thumbnail refresh interval; interaction changes refresh immediately. Values below `16` use `16` ms. Hidden sidebars do not capture thumbnails. |
+| `stage_refresh_ms` | `16` | Live preview repaint scheduling interval, clamped to `1`–`16` ms. Each repaint reads current window surfaces and sends native frame feedback; hidden sidebars stop repainting. Actual frame rate depends on output refresh, client updates and rendering load. |
 
 Cards automatically grow or shrink within the configured bounds to fit the
 available height. Scroll the sidebar if they cannot fit at minimum width.

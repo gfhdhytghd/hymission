@@ -60,9 +60,9 @@ moving right. Each monitor alternates independently. Disabling this mode returns
 the sidebar to the left.
 
 Both copies are clipped to the owning monitor's logical rectangle, converted
-to render pixels; flight textures use the same output limit. Neither copy is
+to render pixels; live window flights use the same output limit. Neither copy is
 submitted to an adjacent monitor. The native work-area reservation, sidebar
-hit tests, snapshot coordinates, floating-window correction and drag-drop focal
+hit tests, preview coordinates, floating-window correction and drag-drop focal
 points all follow the new side. Input to the sidebar is paused during the
 edge transition. Zero duration or disabled animations changes sides immediately.
 Fullscreen/overview/session lock and output reconfiguration cancel the visual
@@ -77,19 +77,34 @@ linear timeline `t`. Window center position follows the symmetric smoothstep `t*
 `1-(1-t)^3` (fast then slow). Incoming desktop windows are drawn last, above all
 departing windows, including when a transition is retargeted. Edges are derived
 from the interpolated center and current size, so scaling does not shift the
-translation anchor.
+translation anchor. After calculating size, the center is constrained so every
+edge stays inside the owning output. Oversized floating windows are uniformly
+fitted first. This prevents rapid growth from overtaking center translation near
+an output edge; it does not merely hide the overflowing part with a clip.
 `stage_transition_ms` defaults to 300 ms (0 disables, maximum
 2000 ms), and disabling Hyprland animations also disables these flights.
 Rapid switches retarget from the currently displayed boxes and rounding.
 
-Flights temporarily hold desktop-resolution window snapshots, with live blur
-against the backdrop; client content inside the snapshot is fixed for the short
-transition. Native window rendering is suppressed only for captured participants,
-and native workspace slide/fade is stopped to avoid two simultaneous animations.
-Capture failure leaves native rendering available. Pinned windows never fly.
+Flights render current native window surfaces, with live blur against the
+backdrop. Native window rendering is suppressed only for flight participants.
+The workspace animation hook resolves the native slide/fade immediately, and
+the workspace-change hook prepares Stage's flight before returning to the
+dispatcher. This applies to sidebar clicks and ordinary keyboard dispatchers.
+Native layout supplies final positions and sizes; its animation values are
+resolved once after saving source boxes, so there is no second layout animation
+after the Stage flight. Pinned windows never fly.
 Session lock, overview, fullscreen, output geometry changes and config reload
-cancel flights. Textures are released when the motion timer finishes or cancels.
+cancel flights. Flight metadata is released when the motion timer finishes or cancels.
 The real client geometry and pointer coordinate system remain native throughout.
+
+Workspace swipes use the same window flights and sidebar transition. While the
+finger moves, a provisional view advances with the gesture; the actual active
+workspace changes only after release passes the native distance/speed threshold.
+Cancellation reverses that view back to its origin without changing workspace.
+Direction locking, inversion and monitor-local workspace selection remain native
+policies. Creating a previously nonexistent workspace is deferred until release,
+then uses the ordinary Stage switch. Native swipe rendering is not run alongside
+the Stage transition. State output includes `swipe_active` and `swipe_progress`.
 
 Only inactive workspaces appear; after a switch the new active workspace is
 removed and the old one becomes eligible. There are no numeric/name labels.
@@ -97,23 +112,27 @@ Empty-workspace slots are transparent. Hovering does not draw a frame.
 Retained cards animate vertical position changes using the transition duration;
 hit testing and drop mapping follow their displayed positions throughout.
 
-Offscreen capture runs outside a compositor render pass. Mapped, non-hidden
+Mapped, non-hidden
 non-pinned windows belonging to each target workspace
 retain their original positions, relative sizes, overlap and stacking order.
 A single transform maps the reduced desktop into the card; windows extending
 outside that desktop are clipped, not rearranged. Live client geometry is unchanged.
 
-Each window is rendered directly into a miniature-sized transparent framebuffer
-using render-pass translation/scaling. Miniatures are cached separately and
-composed during the sidebar's live render pass. Windows that Hyprland considers
+Each window's current surface tree is rendered through `CSurfacePassElement`
+during the sidebar's live render pass. There are no cached miniature framebuffers
+or fake render begin/end calls. Surface boxes and visible regions use the same
+uniform transform, and UV calculation uses the committed viewport size so preview
+scaling cannot be mistaken for client resizing and crop the texture. Native
+surface drawing retains buffer synchronization and presentation/frame feedback.
+Windows that Hyprland considers
 blur-enabled blur the wallpaper and lower previews behind them at their displayed
-size, respecting global blur and window no-blur rules. No wallpaper/layer surfaces
-are captured, and the sidebar and
+size, respecting global blur and window no-blur rules. The sidebar and
 cards have no background fill, leaving the actual wallpaper visible between
 windows. Window main surfaces are previewed; transient popups are not separate
 miniatures. Compositor decorations default off (`stage_window_decorations = 0`);
 application-drawn titlebars remain client content. Enabling decorations includes
-their extents in each window's capture footprint.
+their extents in each window's preview footprint. Native decoration passes draw
+inside the current pass with the preview transform and output/card clip.
 
 On plugin exit the pending render pass is cleared before controller destruction
 and again before returning to the loader. Hyprland retains pass elements until
@@ -125,16 +144,19 @@ from a safe context: the new exit code cannot repair the old loaded version's ex
 
 `stage_window_rounding` sets the radius at the miniature's displayed logical
 size, independently of the real window. Its default `-1` follows half the system
-`decoration:rounding`; `0` disables rounding. The native corner mask is suppressed
-during stage capture only, and the desired radius is applied when composing each
-miniature. Temporary workspace visibility, opacity and render offset overrides
-are restored before returning to the event loop; capture never changes the real
-active workspace.
+`decoration:rounding`; `0` disables rounding. Surface render data receives the
+displayed radius directly. Decoration radius overrides and all preview render
+state are scoped to each draw. Preview refresh never changes workspace visibility,
+opacity, offsets, renderer framebuffer size or projection.
 
-Only visible cards are captured; dirty offscreen cards refresh when scrolled
-into view. Per-window temporary textures are released after card composition;
-only small card textures persist. Removing outputs/cards releases their
-resources. Suspended/covered sidebars skip capture.
+Visible cards schedule repaint every 16 ms by default (`stage_refresh_ms`, clamped
+to 1–16 ms). Their clients are temporarily unsuspended so frame callbacks can
+produce fresh content; windows leaving the visible preview set regain native
+suspension policy. Hidden/covered sidebars stop repainting and sending preview
+frame callbacks. Output refresh, client update rate and GPU load determine the
+actual frame rate. `preview_render_fps` reports the measured composition rate over
+one-second samples; this counts rendered frames, not unique client buffers.
+`preview_renderer` reports `native_surfaces`, and cards expose `previews_ready`.
 
 The sidebar is a render-pass element above windows. It intercepts input only in
 its own band; native window hit testing excludes windows behind that band. Mouse
@@ -192,7 +214,14 @@ They do not substitute for the following compositor acceptance checks:
    Check that focus does not remain attached to a moved, hidden window.
 6. Check session lock/unlock, output hotplug, config reload and disabling the
    feature. Work areas and native hit tests must restore. Confirm a static
-   desktop does not repeatedly relayout and hidden sidebars stop capturing.
+   desktop does not repeatedly relayout and hidden sidebars stop repainting.
+7. Run animated content in visible sidebar windows and verify at least 30 fps
+   with `preview_render_fps`, as well as fresh client content. Inspect Discord/QQ/
+   WeChat/Telegram main surfaces and subsurfaces for clipping or distortion.
+8. Switch with a key binding and with short/long/reversed/cancelled swipes. Check
+   follow-through, cancellation, optional new workspaces and both sidebar sides.
+   Sample early/middle/late flight frames: window edges, borders and shadows must
+   stay within their owning output, with no second native animation at handoff.
 
 Use `hyprctl hymission-stage-state` for computed card/desktop geometry and state,
 `hyprctl -j clients` for real application geometry, and `hyprctl configerrors`
