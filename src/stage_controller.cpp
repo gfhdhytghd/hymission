@@ -488,7 +488,7 @@ void StageController::Impl::clearSwipe() {
 }
 
 void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
-    if (!swipe || !target)
+    if (!swipe || (!target && swipe->requestedTarget == WORKSPACE_INVALID))
         return;
     const auto monitor = swipe->monitor.lock();
     const auto origin = swipe->origin.lock();
@@ -501,7 +501,9 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
         return;
     auto& visual = swipe->visual;
     visual = *source;
-    visual.active = target->m_id;
+    // A new workspace has no native object until the gesture commits. Build
+    // its empty desktop now so outgoing windows still follow the finger.
+    visual.active = target ? target->m_id : swipe->requestedTarget;
     visual.right = smartisan ? !source->right : source->right;
     visual.cards.clear();
     for (const auto& workspace : State::workspaceState()->workspaces()) {
@@ -600,8 +602,8 @@ void StageController::Impl::updateSwipe(double delta) {
     }
     swipe->requestedTarget = id;
     const auto target = State::workspaceState()->query().id(id).run();
-    if (target && target->m_monitor == monitor) {
-        if (swipe->target != target)
+    if ((target && target->m_monitor == monitor) || (!target && create)) {
+        if (!swipe->prepared || swipe->target != target || swipe->visual.active != id)
             prepareSwipe(target);
         swipe->progress = std::clamp(std::abs(native->m_delta) / distance, 0.0, 1.0);
         g_pHyprRenderer->damageMonitor(monitor);

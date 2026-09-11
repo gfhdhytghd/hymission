@@ -110,9 +110,12 @@ While the finger moves, a provisional view advances with the gesture; the actual
 workspace changes only after release passes the native distance/speed threshold.
 Cancellation reverses that view back to its origin without changing workspace.
 Direction locking, inversion and monitor-local workspace selection remain native
-policies. Creating a previously nonexistent workspace is deferred until release,
-then uses the ordinary Stage switch. Native swipe rendering is not run alongside
-the Stage transition. State output includes `swipe_active` and `swipe_progress`.
+policies. A previously nonexistent destination is previewed as an empty desktop
+during the swipe, including the outgoing windows' flight into the sidebar.
+Its native workspace object is created only on commit; cancellation leaves no
+new workspace behind. Release continues from the current preview. Native swipe
+rendering is not run alongside the Stage transition. State output includes
+`swipe_active` and `swipe_progress`.
 
 Only inactive workspaces appear; after a switch the new active workspace is
 removed and the old one becomes eligible. There are no numeric/name labels.
