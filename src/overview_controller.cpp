@@ -1969,7 +1969,11 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
         if (StageController::beginTrackpadWorkspaceSwipe()) {
             ITrackpadGesture::begin(e);
             m_mode = Mode::Stage;
-            StageController::updateTrackpadWorkspaceSwipe(distance(e));
+            // Hyprland delivers this same event to update() immediately after
+            // begin(). Its begin direction is UP/DOWN, whereas update uses the
+            // configured VERTICAL axis. distance(UP) reverses the sign, so
+            // consuming it here would double-count and lock a fast upward
+            // swipe in the opposite direction before the signed update arrives.
             return;
         }
         m_nativeGesture.begin(e);

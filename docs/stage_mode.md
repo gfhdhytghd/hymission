@@ -102,7 +102,9 @@ The real client geometry and pointer coordinate system remain native throughout.
 
 Workspace swipes use the same window flights and sidebar transition.
 The registered workspace trackpad gesture sends begin/update/end directly to
-Stage, including the initial delta, inversion, scaling and cancellation. It does
+Stage, including inversion, scaling and cancellation. Begin only initializes;
+Hyprland immediately sends the first displacement through update, where it is
+consumed once with the configured axis sign. It does
 not depend on optional native function hooks to enter the follow-finger state.
 Overview owns the native unified-swipe hooks for other entry points and forwards
 desktop gestures to Stage; Stage never registers a second hook for those functions. Surface box,
