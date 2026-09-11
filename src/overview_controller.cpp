@@ -5148,6 +5148,10 @@ bool OverviewController::debugLogsEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:debug_logs", 0) != 0;
 }
 
+bool OverviewController::gestureCloseRestoresFocus() const {
+    return getConfigInt(m_handle, "plugin:hymission:gesture_close_restores_focus", 1) != 0;
+}
+
 bool OverviewController::debugSurfaceLogsEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:debug_surface_logs", 0) != 0;
 }
@@ -11135,7 +11139,15 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
     }
 
     const double fromVisual = fromVisualOverride.value_or(visualProgress());
-    m_state.pendingExitFocus = resolveExitFocus(mode);
+    // A committed close gesture (swipe) is a dismiss: return to the window that was focused
+    // before overview opened instead of activating whichever preview the pointer happens to
+    // hover. Click and Return still activate through CloseMode::ActivateSelection.
+    // deferFullscreenMutations is only ever set by the two trackpad gesture commit sites.
+    const bool gestureDismiss = mode == CloseMode::Normal && deferFullscreenMutations && gestureCloseRestoresFocus() && m_state.focusBeforeOpen &&
+        m_state.focusBeforeOpen->m_isMapped;
+    m_state.pendingExitFocus = gestureDismiss ? m_state.focusBeforeOpen : resolveExitFocus(mode);
+    if (gestureDismiss && debugLogsEnabled())
+        debugLog("[hymission] gesture close restores pre-overview focus");
     m_state.closeMode = mode;
     m_state.settleStableFrames = 0;
     m_state.settleHasSample = false;

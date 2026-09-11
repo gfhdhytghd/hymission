@@ -393,6 +393,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     COLOR_CONF("close_button_hover_color", 0xf2f24d47LL);
     COLOR_CONF("close_button_glyph_color", 0xfaffffffLL);
     INT_CONF("debug_logs", 0);
+    INT_CONF("gesture_close_restores_focus", 1);
     INT_CONF("debug_surface_logs", 0);
     STRING_CONF("layout_engine", "grid");
     STRING_CONF("layout_engine_forceall", "");
