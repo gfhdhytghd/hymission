@@ -215,6 +215,12 @@ drag separately from a native desktop-window drag.
 
 Overview/raw capture/input suppression, special workspaces and session locking
 suspend stage drawing/input. They do not remove the native reservation.
+Opening Overview captures Stage's displayed window rectangles before suspension.
+Sidebar windows expand from their current card previews (including scroll and
+flight offsets), while active desktop windows retain their desktop origins.
+Timed and gesture opening share these origins; refreshing the Overview layout
+during opening preserves them. Native geometry remains separate from these
+animation-only origins.
 Fullscreen coverage is per output; composing an in-progress slide clears only
 that output's solitary-client shortcut, without taking ownership of the global
 direct-scanout flag used by overview.

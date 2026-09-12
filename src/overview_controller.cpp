@@ -9509,13 +9509,13 @@ Rect OverviewController::currentPreviewRect(const ManagedWindow& window) const {
 
     if (m_gestureSession.active) {
         if (m_gestureSession.opening)
-            return lerpRect(window.naturalGlobal, window.targetGlobal, visualProgress());
+            return lerpRect(window.stageOpeningGlobal.value_or(window.naturalGlobal), window.targetGlobal, visualProgress());
         return lerpRect(window.exitGlobal, window.targetGlobal, visualProgress());
     }
 
     switch (m_state.phase) {
         case Phase::Opening:
-            return lerpRect(window.naturalGlobal, window.targetGlobal, visualProgress());
+            return lerpRect(window.stageOpeningGlobal.value_or(window.naturalGlobal), window.targetGlobal, visualProgress());
         case Phase::Active:
             if (m_state.relayoutActive)
                 return lerpRect(window.relayoutFromGlobal, window.targetGlobal, relayoutVisualProgress());
@@ -10972,6 +10972,10 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
         return;
     }
 
+    if (!wasVisible)
+        for (auto& window : next.windows)
+            window.stageOpeningGlobal = StageController::overviewOrigin(window.window);
+
     if (previousFocusBeforeOpen)
         next.focusBeforeOpen = previousFocusBeforeOpen;
     for (const auto& override : workspaceOverrides) {
@@ -12084,6 +12088,9 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
 
     const bool sameWindowSet = next.windows.size() == m_state.windows.size() &&
         std::ranges::all_of(next.windows, [&](const ManagedWindow& managed) { return managed.window && previousManagedForItem(managed) != nullptr; });
+    for (auto& window : next.windows)
+        if (const auto* previous = previousManagedForItem(window))
+            window.stageOpeningGlobal = previous->stageOpeningGlobal;
     const bool sameMonitorSet = next.participatingMonitors.size() == m_state.participatingMonitors.size() &&
         std::ranges::all_of(next.participatingMonitors, [&](const PHLMONITOR& monitor) { return containsHandle(m_state.participatingMonitors, monitor); });
     const bool sameRowGroups = sameWindowSet &&

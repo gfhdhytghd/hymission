@@ -2,6 +2,8 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
+#include "mission_layout.hpp"
 #include <string>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
@@ -27,6 +29,7 @@ class StageController {
     static void updateTrackpadWorkspaceSwipe(double delta);
     static void endTrackpadWorkspaceSwipe(bool cancelled);
     static void setOverviewRendering(bool active);
+    static std::optional<Rect> overviewOrigin(const PHLWINDOW& window);
 
   private:
     struct Impl;

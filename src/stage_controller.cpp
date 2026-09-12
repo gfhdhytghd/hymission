@@ -2210,6 +2210,48 @@ StageController::~StageController() = default;
 void StageController::initialize() { m_impl->initialize(); }
 std::string StageController::stateJson() const { return m_impl->stateJson(); }
 
+std::optional<Rect> StageController::overviewOrigin(const PHLWINDOW& window) {
+    auto* self = Impl::instance;
+    if (!self || !self->enabled || self->blocked() || !window || window->m_pinned)
+        return std::nullopt;
+    const auto monitor = window->m_monitor.lock();
+    auto* screen = self->visualScreenFor(monitor);
+    if (!monitor || !screen || !screen->geometry.enabled() || screen->covered || screen->suspended)
+        return std::nullopt;
+    if (self->dragHover && self->dragHover->window == window) {
+        const auto box = self->dragHoverBox();
+        return Rect{box.x, box.y, box.w, box.h};
+    }
+    for (const auto& flight : screen->flights)
+        if (flight.preview.window == window)
+            return stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
+                {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, self->flightProgress(*screen), flightBounds(monitor));
+    if (window->m_workspace == monitor->m_activeWorkspace)
+        return std::nullopt; // Desktop windows already have the correct natural origin.
+    for (std::size_t i = 0; i < screen->cards.size(); ++i) {
+        const auto& card = screen->cards[i];
+        if (card.workspace != window->m_workspace)
+            continue;
+        for (const auto& preview : card.previews) {
+            if (preview.window != window)
+                continue;
+            double offset = 0;
+            if (screen->paneTransition) {
+                const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - screen->paneStart).count();
+                const double t = self->swipe && &self->swipe->visual == screen ? self->swipe->progress :
+                    screen->paneDuration > 0 ? std::clamp(elapsed / screen->paneDuration, 0.0, 1.0) : 1;
+                const double travel = screen->right ? monitor->m_position.x + monitor->m_size.x - (screen->base.x + screen->base.w) + screen->geometry.bandWidth :
+                    screen->base.x - monitor->m_position.x + screen->geometry.bandWidth;
+                offset = (screen->right ? 1 : -1) * travel * (1 - t * t * (3 - 2 * t));
+            } else
+                offset = (screen->right ? 1 : -1) * (1 - screen->shown) * screen->geometry.bandWidth;
+            return Rect{self->sidebar(*screen).x + screen->geometry.padding + offset + preview.target.x,
+                screen->base.y + self->cardTop(*screen, i) + preview.target.y, preview.target.w, preview.target.h};
+        }
+    }
+    return std::nullopt;
+}
+
 bool StageController::beginWorkspaceSwipe(void* gesture, void (*original)(void*)) {
     auto* self = Impl::instance;
     const auto monitor = Desktop::focusState()->monitor();

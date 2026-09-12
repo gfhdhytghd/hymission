@@ -188,6 +188,7 @@ class OverviewController {
         PHLMONITOR   targetMonitor;
         std::string  title;
         Rect         naturalGlobal;
+        std::optional<Rect> stageOpeningGlobal;
         Rect         exitGlobal;
         Rect         relayoutFromGlobal;
         Rect         targetGlobal;
