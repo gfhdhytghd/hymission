@@ -191,6 +191,13 @@ floating targets retain their grab offset at the mapped point. Dropping on the c
 issue a second move. Escape cancels sidebar delivery; no resize or application
 data drag is interpreted as a window move.
 
+With the default `stage_drop_follow = 0`, a successful drop shrinks the live
+window from its release position into its destination preview, using
+`stage_transition_ms` and the normal flight boundary/rounding rules. The card
+copy is suppressed until the flight completes. The destination follows card
+motion during the animation. Disabled animations apply the drop immediately;
+follow mode uses the normal workspace-switch animation instead.
+
 Overview/raw capture/input suppression, special workspaces and session locking
 suspend stage drawing/input. They do not remove the native reservation.
 Fullscreen coverage is per output; composing an in-progress slide clears only

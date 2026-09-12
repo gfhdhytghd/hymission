@@ -138,6 +138,7 @@ struct StageController::Impl {
         CBox to;
         float fromRadius = 0;
         float toRadius = 0;
+        bool dropToCard = false;
     };
     struct Card {
         PHLWORKSPACEREF workspace;
@@ -1343,6 +1344,8 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
     PHLWINDOW window;
     Vector2D dropPoint;
     Vector2D grabOffset;
+    CBox dropOrigin;
+    float dropRadius = 0;
     // Keybind handling clears the native threshold flag after starting a drag.
     // With a zero threshold, motion never sets it again: dragging is immediate.
     const bool thresholdReached = numberSetting("binds:drag_threshold", 0) <= 0 || drag->dragThresholdReached();
@@ -1359,8 +1362,12 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
                 {band.x + geometry.padding, screen->base.y + cardTop(*screen, *index), geometry.cardWidth, geometry.cardHeight},
                 {area.x, area.y, area.w, area.h}, pointer.x, pointer.y);
             dropPoint = {mapped.first, mapped.second};
-            if (window)
+            if (window) {
                 grabOffset = pointer - window->positionAnimation()->value();
+                dropOrigin = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() :
+                    CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
+                dropRadius = window->rounding();
+            }
         }
     }
     reinterpret_cast<DragEndFn>(dragHook->m_original)(drag);
@@ -1392,6 +1399,42 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
             if (!focus || focus == window || focus->m_workspace != current)
                 focus = current ? current->getFirstWindow() : nullptr;
             Desktop::focusState()->fullWindowFocus(focus, Desktop::FOCUS_REASON_WORKSPACE_CHANGE);
+        }
+        const double duration = std::clamp(setting("stage_transition_ms", 300), 0L, 2000L);
+        if (!setting("stage_drop_follow", 0) && !destination->isVisible() && duration > 0 && numberSetting("animations:enabled", 1) && !blocked()) {
+            // Resolve the destination layout and sidebar before constructing the
+            // flight. The source was saved before native dragEnd restored tiling.
+            lastDragged.reset();
+            forceRefresh = true;
+            sync();
+            if (auto* screen = screenFor(monitor); screen && interactive(*screen)) {
+                const auto card = std::ranges::find_if(screen->cards, [&](const auto& c) { return c.workspace == destination; });
+                if (card != screen->cards.end()) {
+                    window->positionAnimation()->warp();
+                    window->sizeAnimation()->warp();
+                    updatePreviews(*screen, *card);
+                    const auto preview = std::ranges::find_if(card->previews, [&](const auto& p) { return p.window == window; });
+                    if (preview != card->previews.end()) {
+                        const double p = flightProgress(*screen);
+                        for (auto& flight : screen->flights) {
+                            const auto box = stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
+                                {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, p, flightBounds(monitor));
+                            flight.from = {box.x, box.y, box.width, box.height};
+                            flight.fromRadius += (flight.toRadius - flight.fromRadius) * stage::transitionProgress(p, 1);
+                        }
+                        std::erase_if(screen->flights, [&](const auto& f) { return f.preview.window == window; });
+                        const auto target = preview->target.copy().translate(Vector2D{sidebar(*screen).x + screen->geometry.padding,
+                            screen->base.y + cardTop(*screen, std::distance(screen->cards.begin(), card))});
+                        screen->flights.push_back({*preview, dropOrigin, target, dropRadius, static_cast<float>(stage::previewRounding(
+                            numberSetting("plugin:hymission:stage_window_rounding", -1), numberSetting("decoration:rounding", 0), target.w, target.h)), true});
+                        screen->flightStart = Clock::now();
+                        screen->flightDuration = duration;
+                        updatePreviewLiveness();
+                        damage(*screen);
+                        armMotion();
+                    }
+                }
+            }
         }
     }
     lastDragged.reset();
@@ -1771,6 +1814,15 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
             continue;
         if ((!swipe || &swipe->visual != &screen) && window->m_workspace == monitor->m_activeWorkspace)
             flight.to = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() : CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
+        else if (flight.dropToCard) {
+            const auto card = std::ranges::find_if(screen.cards, [&](const auto& c) { return c.workspace == window->m_workspace; });
+            if (card != screen.cards.end()) {
+                const auto preview = std::ranges::find_if(card->previews, [&](const auto& p) { return p.window == window; });
+                if (preview != card->previews.end())
+                    flight.to = preview->target.copy().translate(Vector2D{sidebar(screen).x + screen.geometry.padding,
+                        screen.base.y + cardTop(screen, std::distance(screen.cards.begin(), card))});
+            }
+        }
         const auto box = stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
             {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, p,
             bounds);
