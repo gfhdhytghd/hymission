@@ -180,6 +180,8 @@ its own band; native window hit testing excludes windows behind that band. Mouse
 press/release ownership is paired across mode transitions. A press begun outside
 the sidebar keeps its release, so application file/text drags are not consumed.
 Native move drags are observed through the compositor drag controller; the
+zero `binds:drag_threshold` setting accepts immediate drags without requiring
+the native threshold flag, while positive thresholds must be reached. The
 normal drag end restores floating/tiling and ends the grab before the native
 workspace-move path commits the drop. This path also preserves native group
 movement and cross-monitor behavior. The release point is mapped from the animated

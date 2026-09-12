@@ -1343,7 +1343,10 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
     PHLWINDOW window;
     Vector2D dropPoint;
     Vector2D grabOffset;
-    if (enabled && !cancelDrop && drag->mode() == MBIND_MOVE && drag->dragThresholdReached() && drag->target()) {
+    // Keybind handling clears the native threshold flag after starting a drag.
+    // With a zero threshold, motion never sets it again: dragging is immediate.
+    const bool thresholdReached = numberSetting("binds:drag_threshold", 0) <= 0 || drag->dragThresholdReached();
+    if (enabled && !cancelDrop && drag->mode() == MBIND_MOVE && thresholdReached && drag->target()) {
         const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal());
         if (screen && index) {
             destination = screen->cards[*index].workspace.lock();
