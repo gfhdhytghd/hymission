@@ -45,6 +45,28 @@ bool expectReservation(const WorkspaceStripReservation& actual, const WorkspaceS
 int main() {
     using namespace hymission;
 
+    // Different workspaces and scrolling positions make choosing the hovered
+    // target for prediction but the original target for commit visibly wrong.
+    struct WindowFixture { int workspace; int scrollingX; };
+    WindowFixture original{2, 0}, hovered{5, 1200};
+    WindowFixture* missing = nullptr;
+    bool gestureFocusOk = true;
+    const auto restored = resolveGestureExitFocus(&original, &hovered, true, true);
+    gestureFocusOk &= expect(restored == &original && restored->workspace == 2 && restored->scrollingX == 0,
+                             "gesture exit geometry and focus must target the original workspace and scrolling position");
+    gestureFocusOk &= expect(resolveGestureExitFocus(&original, &hovered, false, true) == &hovered,
+                             "disabled restoration must preserve the hovered target");
+    gestureFocusOk &= expect(resolveGestureExitFocus(&original, &hovered, true, false) == &hovered,
+                             "unmapped original must fall back to the preferred target");
+    gestureFocusOk &= expect(resolveGestureExitFocus(missing, &hovered, true, false) == &hovered,
+                             "missing original must fall back to the preferred target");
+    gestureFocusOk &= expect(resolveGestureExitFocus(&original, missing, false, true) == &original,
+                             "missing preferred target must retain the normal original fallback");
+    gestureFocusOk &= expect(resolveGestureExitFocus(missing, missing, true, false) == nullptr,
+                             "empty overview must have no exit target");
+    if (!gestureFocusOk)
+        return EXIT_FAILURE;
+
     const std::vector<Rect> rects = {
         {0, 0, 100, 100},
         {140, 0, 100, 100},

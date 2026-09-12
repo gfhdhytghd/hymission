@@ -11,6 +11,15 @@
 
 namespace hymission {
 
+// Shared by gesture geometry prediction and the committed close. Window may be
+// a compositor handle or a lightweight handle in the logic tests.
+template <typename Window>
+[[nodiscard]] Window resolveGestureExitFocus(const Window& original, const Window& preferred, bool restoresFocus, bool originalMapped) {
+    if (restoresFocus && original && originalMapped)
+        return original;
+    return preferred ? preferred : original;
+}
+
 enum class Direction {
     Left,
     Right,

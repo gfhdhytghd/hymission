@@ -8359,7 +8359,7 @@ void OverviewController::applyOffscreenExitAnimationEndpoints(State& state, cons
 }
 
 void OverviewController::prepareGestureCloseExitGeometry() {
-    const auto predictedExitFocus = resolveExitFocus(CloseMode::Normal);
+    const auto predictedExitFocus = resolveGestureCloseFocus();
     const auto predictedExitWorkspace = predictedExitFocus ? predictedExitFocus->m_workspace : PHLWORKSPACE{};
     const auto predictedExitMonitor =
         predictedExitWorkspace && predictedExitWorkspace->m_monitor.lock() ? predictedExitWorkspace->m_monitor.lock() :
@@ -9783,6 +9783,11 @@ bool OverviewController::updateNativeRelayoutAnimation() {
     return true;
 }
 
+PHLWINDOW OverviewController::resolveGestureCloseFocus() const {
+    return resolveGestureExitFocus(m_state.focusBeforeOpen, preferredOverviewExitFocus(), gestureCloseRestoresFocus(),
+                                   m_state.focusBeforeOpen && m_state.focusBeforeOpen->m_isMapped);
+}
+
 PHLWINDOW OverviewController::resolveExitFocus(CloseMode mode) const {
     if (mode == CloseMode::Abort)
         return {};
@@ -11165,15 +11170,10 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
     }
 
     const double fromVisual = fromVisualOverride.value_or(visualProgress());
-    // A committed close gesture (swipe) is a dismiss: return to the window that was focused
-    // before overview opened instead of activating whichever preview the pointer happens to
-    // hover. Click and Return still activate through CloseMode::ActivateSelection.
+    // Predict and commit the same gesture target, including the legacy fallback.
     // deferFullscreenMutations is only ever set by the two trackpad gesture commit sites.
-    const bool gestureDismiss = mode == CloseMode::Normal && deferFullscreenMutations && gestureCloseRestoresFocus() && m_state.focusBeforeOpen &&
-        m_state.focusBeforeOpen->m_isMapped;
-    m_state.pendingExitFocus = gestureDismiss ? m_state.focusBeforeOpen : resolveExitFocus(mode);
-    if (gestureDismiss && debugLogsEnabled())
-        debugLog("[hymission] gesture close restores pre-overview focus");
+    const bool gestureClose = mode == CloseMode::Normal && deferFullscreenMutations;
+    m_state.pendingExitFocus = gestureClose ? resolveGestureCloseFocus() : resolveExitFocus(mode);
     m_state.closeMode = mode;
     m_state.settleStableFrames = 0;
     m_state.settleHasSample = false;

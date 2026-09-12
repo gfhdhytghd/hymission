@@ -736,6 +736,7 @@ class OverviewController {
     [[nodiscard]] bool         transformBoxForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, CBox& box, bool scaled) const;
     [[nodiscard]] CRegion      transformRegionForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, const CRegion& region, bool scaled) const;
     [[nodiscard]] PHLWINDOW    resolveExitFocus(CloseMode mode) const;
+    [[nodiscard]] PHLWINDOW    resolveGestureCloseFocus() const;
     [[nodiscard]] bool         exitFocusChangedWorkspace(const PHLWINDOW& window) const;
     [[nodiscard]] bool         shouldPreferGoalExitGeometry(const PHLWINDOW& window) const;
     [[nodiscard]] std::optional<Vector2D> visiblePointForWindowOnMonitor(const PHLWINDOW& window, const PHLMONITOR& monitor, bool preferGoal = false) const;
