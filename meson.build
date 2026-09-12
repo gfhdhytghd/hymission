@@ -1,5 +1,5 @@
 project('hymission', 'cpp',
-  version: '0.7.1',
+  version: '0.8.0',
   default_options: ['buildtype=release'],
 )
 
