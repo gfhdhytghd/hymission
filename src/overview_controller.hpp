@@ -553,6 +553,7 @@ class OverviewController {
     [[nodiscard]] double       niriWorkspaceScale() const;
     [[nodiscard]] double       niriScrollingPreviewGap() const;
     [[nodiscard]] bool         debugLogsEnabled() const;
+    [[nodiscard]] bool         gestureCloseRestoresFocus() const;
     [[nodiscard]] bool         debugSurfaceLogsEnabled() const;
     [[nodiscard]] PHLWORKSPACE activeLayoutWorkspace() const;
     [[nodiscard]] bool         isScrollingWorkspace(const PHLWORKSPACE& workspace) const;
