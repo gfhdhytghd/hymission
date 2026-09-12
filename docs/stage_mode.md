@@ -73,17 +73,16 @@ transition safely. Mode/side/transition state is exposed in `hymission-stage-sta
 
 Workspace switches animate outgoing windows into their sidebar card and incoming
 windows from their previous card into the desktop. Both directions share one
-linear timeline `t`. Window center position follows the symmetric smoothstep `t*t*(3-2*t)`
-(slow, fast, slow); width, height and rounding follow cubic ease-out
-`1-(1-t)^3` (fast then slow). Incoming desktop windows are drawn last, above all
-departing windows, including when a transition is retargeted. Edges are derived
-from the interpolated center and current size, so scaling does not shift the
-translation anchor. After calculating size, the center is constrained so every
-edge stays inside the owning output inset by the corresponding left, top, right
-and bottom `general:gaps_out`. Rendering (including decorations) uses the same
-inset clip. Swipe release and rapid retargeting share this boundary. Oversized floating windows are uniformly
-fitted first. This prevents rapid growth from overtaking center translation near
-an output edge; it does not merely hide the overflowing part with a clip.
+linear timeline `t`. Growing windows move each corner along a straight segment
+from its starting corner to its destination corner, with shared cubic ease-out
+`1-(1-t)^3` for position and size. Shrinking windows retain smoothstep center
+translation `t*t*(3-2*t)` and cubic ease-out size. Rounding uses cubic ease-out.
+Incoming desktop windows are drawn last, above departing windows.
+Growing endpoints are fitted inside the output inset by each side's
+`general:gaps_out` before interpolation, keeping the entire straight path inside
+that boundary. Shrinking frames are constrained individually. Oversized windows
+are fitted uniformly. Decorations use the same inset clip. Swipe release and
+rapid retargeting share these rules.
 `stage_transition_ms` defaults to 300 ms (0 disables, maximum
 2000 ms), and disabling Hyprland animations also disables these flights.
 Rapid switches retarget from the currently displayed boxes and rounding.

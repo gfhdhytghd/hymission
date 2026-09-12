@@ -109,14 +109,20 @@ int main() {
     const auto shrinking = transitionBox(full, miniature, p);
     const auto cx = [](const hymission::Rect& r) { return r.x + r.width / 2; };
     const auto cy = [](const hymission::Rect& r) { return r.y + r.height / 2; };
-    ok &= expect(near((cx(growing) - cx(miniature)) / (cx(full) - cx(miniature)), 0.5) &&
-                 near((cy(shrinking) - cy(full)) / (cy(miniature) - cy(full)), 0.5), "both window centers reach midpoint on the shared timeline");
+    ok &= expect(near((cx(growing) - cx(miniature)) / (cx(full) - cx(miniature)), 0.875) &&
+                 near((cy(shrinking) - cy(full)) / (cy(miniature) - cy(full)), 0.5), "growing translation shares scale easing while shrinking retains smoothstep");
     ok &= expect(near((growing.width - miniature.width) / (full.width - miniature.width), 0.875) &&
                  near((shrinking.height - full.height) / (miniature.height - full.height), 0.875), "both scales ease out independently of translation");
-    const auto early = transitionBox(miniature, full, 0.25);
-    const auto late = transitionBox(miniature, full, 0.75);
-    ok &= expect(near(cx(early) - cx(miniature), cx(full) - cx(late)), "center translation is symmetric about the timeline midpoint");
-    ok &= expect(cx(early) - cx(miniature) < cx(growing) - cx(early), "center translation accelerates before the midpoint");
+    for (int step = 0; step <= 100; ++step) {
+        const auto box = transitionBox(miniature, full, step / 100.0);
+        for (int x : {0, 1}) for (int y : {0, 1}) {
+            const double dx = full.x + x * full.width - miniature.x - x * miniature.width;
+            const double dy = full.y + y * full.height - miniature.y - y * miniature.height;
+            const double px = box.x + x * box.width - miniature.x - x * miniature.width;
+            const double py = box.y + y * box.height - miniature.y - y * miniature.height;
+            ok &= expect(std::abs(px * dy - py * dx) < 1e-6, "every growing corner stays on its straight start-to-end segment");
+        }
+    }
     const hymission::Rect centeredSmall{450, 350, 100, 100}, centeredLarge{0, 0, 1000, 800};
     const auto centered = transitionBox(centeredSmall, centeredLarge, 0.3);
     ok &= expect(near(cx(centered), 500) && near(cy(centered), 400), "scaling about a stationary center does not introduce translation");
@@ -126,7 +132,7 @@ int main() {
     const hymission::Rect flightOutput{-3072, 0, 3072, 1728};
     const hymission::Rect rightCard{-360, 500, 340, 210}, flightDesktop{-3060, 60, 2670, 1650};
     const auto overflowing = transitionBox(rightCard, flightDesktop, 0.25);
-    ok &= expect(overflowing.x + overflowing.width > 0, "fixture reproduces fast growth overtaking center translation at the output edge");
+    ok &= expect(overflowing.x + overflowing.width <= 0, "straight corner growth no longer overtakes the output edge");
     for (int step = 0; step <= 100; ++step) {
         for (bool incoming : {false, true}) {
             const auto bounded = transitionBoxWithin(incoming ? rightCard : flightDesktop, incoming ? flightDesktop : rightCard, step / 100.0, flightOutput);

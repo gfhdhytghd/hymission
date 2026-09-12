@@ -116,10 +116,11 @@ double transitionProgress(double elapsed, double duration) {
 
 Rect transitionBox(const Rect& from, const Rect& to, double p) {
     p = std::clamp(sane(p, 1), 0.0, 1.0);
-    // A shared linear timeline drives separate curves: symmetric smoothstep
-    // for translation, cubic ease-out for both growing and shrinking.
-    const double position = p * p * (3 - 2 * p);
     const double scale = transitionProgress(p, 1);
+    // Growing windows move all four corners along straight segments. Use the
+    // same easing for position and size; retain the outgoing shrink curve.
+    const bool growing = to.width > from.width || to.height > from.height;
+    const double position = growing ? scale : p * p * (3 - 2 * p);
     const double width = from.width + (to.width - from.width) * scale;
     const double height = from.height + (to.height - from.height) * scale;
     const double centerX = from.x + from.width / 2 + (to.x + to.width / 2 - from.x - from.width / 2) * position;
@@ -127,17 +128,27 @@ Rect transitionBox(const Rect& from, const Rect& to, double p) {
     return {centerX - width / 2, centerY - height / 2, width, height};
 }
 Rect transitionBoxWithin(const Rect& from, const Rect& to, double progress, const Rect& bounds) {
-    auto box = transitionBox(from, to, progress);
     if (bounds.width <= 0 || bounds.height <= 0)
         return {bounds.x, bounds.y, 0, 0};
-    const double fit = std::min({1.0, bounds.width / std::max(1.0, box.width), bounds.height / std::max(1.0, box.height)});
-    const double centerX = box.centerX();
-    const double centerY = box.centerY();
-    box.width *= fit;
-    box.height *= fit;
-    box.x = std::clamp(centerX - box.width / 2, bounds.x, bounds.x + bounds.width - box.width);
-    box.y = std::clamp(centerY - box.height / 2, bounds.y, bounds.y + bounds.height - box.height);
-    return box;
+    const auto fitWithin = [&](Rect box) {
+        const double fit = std::min({1.0, bounds.width / std::max(1.0, box.width), bounds.height / std::max(1.0, box.height)});
+        const double centerX = box.centerX();
+        const double centerY = box.centerY();
+        box.width *= fit;
+        box.height *= fit;
+        box.x = std::clamp(centerX - box.width / 2, bounds.x, bounds.x + bounds.width - box.width);
+        box.y = std::clamp(centerY - box.height / 2, bounds.y, bounds.y + bounds.height - box.height);
+        return box;
+    };
+    if (to.width > from.width || to.height > from.height) {
+        // Constrain endpoints first, avoiding a bent path from per-frame clamps.
+        const auto start = fitWithin(from);
+        const auto end = fitWithin(to);
+        const double p = transitionProgress(progress, 1);
+        return {start.x + (end.x - start.x) * p, start.y + (end.y - start.y) * p,
+                start.width + (end.width - start.width) * p, start.height + (end.height - start.height) * p};
+    }
+    return fitWithin(transitionBox(from, to, progress));
 }
 
 std::pair<double, double> mapDropPoint(const Rect& card, const Rect& desktop, double x, double y) {
