@@ -191,12 +191,16 @@ floating targets retain their grab offset at the mapped point. Dropping on the c
 issue a second move. Escape cancels sidebar delivery; no resize or application
 data drag is interpreted as a window move.
 
-With the default `stage_drop_follow = 0`, a successful drop shrinks the live
-window from its release position into its destination preview, using
-`stage_transition_ms` and the normal flight boundary/rounding rules. The card
-copy is suppressed until the flight completes. The destination follows card
-motion during the animation. Disabled animations apply the drop immediately;
-follow mode uses the normal workspace-switch animation instead.
+Dragging a window over a destination card immediately shrinks its live visual
+into a preview under the pointer, using `stage_transition_ms` and the normal
+flight boundary/rounding rules. The native drag and workspace remain unchanged
+until release. Leaving the card restores the normal dragged window; moving to
+another card retargets from the current preview. Escape cancels the preview/drop.
+With the default `stage_drop_follow = 0`, release continues from that preview
+into the window's actual destination slot, suppressing the card copy until the
+flight completes. Disabled animations update immediately; follow mode uses the
+normal workspace-switch animation after release. `drag_hover_active` exposes
+the hover-preview state.
 
 Overview/raw capture/input suppression, special workspaces and session locking
 suspend stage drawing/input. They do not remove the native reservation.

@@ -140,6 +140,14 @@ struct StageController::Impl {
         float toRadius = 0;
         bool dropToCard = false;
     };
+    struct DragHover {
+        PHLWINDOWREF window;
+        PHLMONITORREF monitor;
+        PHLWORKSPACEREF workspace;
+        CBox from;
+        CBox to;
+        Clock::time_point start;
+    };
     struct Card {
         PHLWORKSPACEREF workspace;
         std::vector<Preview> previews;
@@ -222,6 +230,7 @@ struct StageController::Impl {
     std::vector<Screen> screens;
     std::vector<PHLWINDOWREF> livePreviewWindows;
     std::optional<Swipe> swipe;
+    std::optional<DragHover> dragHover;
     uint64_t swipeBegins = 0;
     uint64_t swipeUpdates = 0;
     uint64_t swipeEnds = 0;
@@ -306,6 +315,9 @@ struct StageController::Impl {
     Screen* screenFor(const PHLMONITOR& monitor);
     std::pair<Screen*, std::optional<std::size_t>> hit(const Vector2D& point);
     void pointer();
+    void updateDragHover();
+    CBox dragHoverBox() const;
+    void clearDragHover();
     void button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info);
     void axis(const IPointer::SAxisEvent& event, Event::SCallbackInfo& info);
     void activate(const PHLWORKSPACE& workspace);
@@ -406,7 +418,8 @@ struct StageController::Impl {
         auto* self = instance;
         const auto* screen = self->visualScreenFor(monitor);
         if (!standalone && !ignorePosition && !self->rendering && !renderer->m_bRenderingSnapshot && self->enabled && !self->blocked() && screen && !screen->covered &&
-            !monitor->m_activeSpecialWorkspace && self->flying(*screen, window))
+            !monitor->m_activeSpecialWorkspace && (self->flying(*screen, window) ||
+                (self->dragHover && self->dragHover->window == window)))
             return;
         reinterpret_cast<RenderWindowFn>(self->renderWindowHook->m_original)(renderer, window, monitor, time, decorate, mode, ignorePosition, standalone);
     }
@@ -1222,6 +1235,8 @@ void StageController::Impl::motion() {
             again = true;
         }
     }
+    updateDragHover();
+    again |= dragHover.has_value();
     if (again)
         armMotion();
 }
@@ -1273,6 +1288,70 @@ void StageController::Impl::pointer() {
         if (hoveredScreen)
             armMotion();
     }
+    updateDragHover();
+}
+
+CBox StageController::Impl::dragHoverBox() const {
+    if (!dragHover)
+        return {};
+    const auto monitor = dragHover->monitor.lock();
+    if (!monitor)
+        return {};
+    const double duration = numberSetting("animations:enabled", 1) ? std::clamp(setting("stage_transition_ms", 300), 0L, 2000L) : 0;
+    const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - dragHover->start).count();
+    const auto box = stage::transitionBoxWithin({dragHover->from.x, dragHover->from.y, dragHover->from.w, dragHover->from.h},
+        {dragHover->to.x, dragHover->to.y, dragHover->to.w, dragHover->to.h}, duration > 0 ? elapsed / duration : 1,
+        flightBounds(monitor));
+    return {box.x, box.y, box.width, box.height};
+}
+
+void StageController::Impl::clearDragHover() {
+    if (!dragHover)
+        return;
+    if (const auto monitor = dragHover->monitor.lock())
+        g_pHyprRenderer->damageMonitor(monitor);
+    if (const auto window = dragHover->window.lock(); window && window->m_monitor)
+        g_pHyprRenderer->damageMonitor(window->m_monitor.lock());
+    dragHover.reset();
+}
+
+void StageController::Impl::updateDragHover() {
+    const auto* drag = g_layoutManager->dragController().get();
+    const auto window = drag && drag->mode() == MBIND_MOVE && drag->target() ? drag->target()->window() : nullptr;
+    const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal());
+    if (!enabled || blocked() || cancelDrop || !window || window->m_pinned || !screen || !index ||
+        screen->cards[*index].workspace == window->m_workspace) {
+        clearDragHover();
+        return;
+    }
+    const auto monitor = screen->monitor.lock();
+    if (!monitor) {
+        clearDragHover();
+        return;
+    }
+    const auto workspace = screen->cards[*index].workspace;
+    const CBox native = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() :
+        CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
+    // Preview placement follows the pointer inside the card, without moving the
+    // real window or changing its workspace while the native drag is held.
+    const double scale = screen->geometry.cardWidth / screen->geometry.desktopWidth;
+    const CBox card{sidebar(*screen).x + screen->geometry.padding, screen->base.y + cardTop(*screen, *index),
+        screen->geometry.cardWidth, screen->geometry.cardHeight};
+    const double fit = std::min({scale, card.w / std::max(1.0, native.w), card.h / std::max(1.0, native.h)});
+    const Vector2D size = native.size() * fit;
+    const auto pointer = g_pInputManager->getMouseCoordsInternal();
+    const CBox target{std::clamp(pointer.x - size.x / 2, card.x, card.x + card.w - size.x),
+        std::clamp(pointer.y - size.y / 2, card.y, card.y + card.h - size.y), size.x, size.y};
+    if (!dragHover || dragHover->window != window || dragHover->workspace != workspace || dragHover->monitor != monitor) {
+        const CBox from = dragHover && dragHover->window == window ? dragHoverBox() : native;
+        clearDragHover();
+        dragHover = DragHover{window, monitor, workspace, from, target, Clock::now()};
+    } else
+        dragHover->to = target;
+    g_pHyprRenderer->damageMonitor(monitor);
+    if (window->m_monitor != monitor)
+        g_pHyprRenderer->damageMonitor(window->m_monitor.lock());
+    armMotion();
 }
 
 void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
@@ -1367,9 +1446,15 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
                 dropOrigin = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() :
                     CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
                 dropRadius = window->rounding();
+                if (dragHover && dragHover->window == window) {
+                    dropOrigin = dragHoverBox();
+                    dropRadius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
+                        numberSetting("decoration:rounding", 0), dropOrigin.w, dropOrigin.h);
+                }
             }
         }
     }
+    clearDragHover();
     reinterpret_cast<DragEndFn>(dragHook->m_original)(drag);
     // Use the compositor's normal move path after its drag controller has
     // restored tiling/floating and completed the pointer grab.
@@ -1473,7 +1558,7 @@ void StageController::Impl::renderStage(eRenderStage stage) {
         g_pHyprRenderer->m_renderPass.add(makeUnique<StagePassElement>([this, ref] {
             if (const auto mon = ref.lock())
                 draw(mon);
-        }, screen->flights.empty() && !screen->paneTransition ? sidebar(*screen).translate(-monitor->m_position)
+        }, screen->flights.empty() && !screen->paneTransition && !dragHover ? sidebar(*screen).translate(-monitor->m_position)
                                   : CBox{{}, monitor->m_size}));
     }
 }
@@ -1553,6 +1638,16 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
     }
     g_pHyprRenderer->m_renderData.clipBox = previousClip;
     drawFlights(*screen, monitor);
+    if (dragHover && dragHover->monitor == monitor) {
+        if (const auto window = dragHover->window.lock()) {
+            const auto box = dragHoverBox();
+            const auto bounds = flightBounds(monitor);
+            const auto clip = physical(CBox{bounds.x, bounds.y, bounds.width, bounds.height});
+            const double radius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
+                numberSetting("decoration:rounding", 0), box.w, box.h);
+            drawPreview(window, monitor, box, clip, radius);
+        }
+    }
 }
 
 CBox StageController::Impl::sidebar(const Screen& screen) const {
@@ -1968,6 +2063,7 @@ std::string StageController::Impl::stateJson() const {
         {"refresh_interval_ms", std::clamp(setting("stage_refresh_ms", 16), 1L, 16L)}, {"error", error},
         {"swipe_begin_count", swipeBegins}, {"swipe_update_count", swipeUpdates}, {"swipe_end_count", swipeEnds},
         {"raw_swipe_update_count", rawSwipeUpdates},
+        {"drag_hover_active", dragHover.has_value()},
         {"screens", nlohmann::json::array()}};
     for (const auto& screen : screens) {
         const auto monitor = screen.monitor.lock();
