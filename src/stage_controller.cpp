@@ -231,6 +231,7 @@ struct StageController::Impl {
     std::vector<PHLWINDOWREF> livePreviewWindows;
     std::optional<Swipe> swipe;
     std::optional<DragHover> dragHover;
+    PHLWINDOWREF thumbnailDrag;
     uint64_t swipeBegins = 0;
     uint64_t swipeUpdates = 0;
     uint64_t swipeEnds = 0;
@@ -318,6 +319,10 @@ struct StageController::Impl {
     void updateDragHover();
     CBox dragHoverBox() const;
     void clearDragHover();
+    void finishDrop(const PHLWORKSPACE& destination, const PHLWINDOW& window, const CBox& dropOrigin,
+                    float dropRadius, const Vector2D& dropPoint, const Vector2D& grabOffset,
+                    std::optional<Vector2D> floatingCenter);
+    void finishThumbnailDrag();
     void button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info);
     void axis(const IPointer::SAxisEvent& event, Event::SCallbackInfo& info);
     void activate(const PHLWORKSPACE& workspace);
@@ -829,6 +834,10 @@ void StageController::Impl::initialize() {
     }));
     listeners.emplace_back(events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo&) {
         const auto* drag = g_layoutManager->dragController().get();
+        if (event.keycode == KEY_ESC && event.state == WL_KEYBOARD_KEY_STATE_PRESSED && thumbnailDrag) {
+            thumbnailDrag.reset();
+            clearDragHover();
+        }
         if (event.keycode == KEY_ESC && event.state == WL_KEYBOARD_KEY_STATE_PRESSED && drag && drag->mode() == MBIND_MOVE && drag->target()) {
             cancelDrop = true;
             lastDragged = drag->target()->window();
@@ -1180,7 +1189,7 @@ void StageController::Impl::motion() {
         }
     }
     auto* drag = g_layoutManager->dragController().get();
-    const bool dragging = drag && drag->mode() == MBIND_MOVE && drag->target();
+    const bool dragging = thumbnailDrag || (drag && drag->mode() == MBIND_MOVE && drag->target());
     const auto point = g_pInputManager->getMouseCoordsInternal();
     for (auto& screen : screens) {
         if (screen.paneTransition) {
@@ -1317,11 +1326,26 @@ void StageController::Impl::clearDragHover() {
 
 void StageController::Impl::updateDragHover() {
     const auto* drag = g_layoutManager->dragController().get();
-    const auto window = drag && drag->mode() == MBIND_MOVE && drag->target() ? drag->target()->window() : nullptr;
-    const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal());
-    if (!enabled || blocked() || cancelDrop || !window || window->m_pinned || !screen || !index ||
-        screen->cards[*index].workspace == window->m_workspace) {
+    const auto window = thumbnailDrag ? thumbnailDrag.lock() : drag && drag->mode() == MBIND_MOVE && drag->target() ? drag->target()->window() : nullptr;
+    const auto pointer = g_pInputManager->getMouseCoordsInternal();
+    auto [screen, index] = hit(pointer);
+    bool onDesktop = false;
+    if (thumbnailDrag && !screen) {
+        for (auto& candidate : screens) {
+            const auto area = desktop(candidate);
+            if (interactive(candidate) && area.containsPoint(pointer)) {
+                screen = &candidate;
+                onDesktop = true;
+                break;
+            }
+        }
+    }
+    const bool inGap = thumbnailDrag && screen && !index && !onDesktop;
+    if (!enabled || blocked() || cancelDrop || !window || !window->m_isMapped || window->m_pinned || !screen || (!index && !onDesktop && !inGap) ||
+        (!thumbnailDrag && screen->cards[*index].workspace == window->m_workspace)) {
         clearDragHover();
+        if (!enabled || blocked() || !window || !window->m_isMapped)
+            thumbnailDrag.reset();
         return;
     }
     const auto monitor = screen->monitor.lock();
@@ -1329,17 +1353,16 @@ void StageController::Impl::updateDragHover() {
         clearDragHover();
         return;
     }
-    const auto workspace = screen->cards[*index].workspace;
+    const PHLWORKSPACEREF workspace = onDesktop ? monitor->m_activeWorkspace : inGap ? PHLWORKSPACEREF{} : screen->cards[*index].workspace;
     const CBox native = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() :
         CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
     // Preview placement follows the pointer inside the card, without moving the
     // real window or changing its workspace while the native drag is held.
-    const double scale = screen->geometry.cardWidth / screen->geometry.desktopWidth;
-    const CBox card{sidebar(*screen).x + screen->geometry.padding, screen->base.y + cardTop(*screen, *index),
+    const double scale = onDesktop ? 1 : screen->geometry.cardWidth / screen->geometry.desktopWidth;
+    const CBox card = onDesktop ? desktop(*screen) : inGap ? sidebar(*screen) : CBox{sidebar(*screen).x + screen->geometry.padding, screen->base.y + cardTop(*screen, *index),
         screen->geometry.cardWidth, screen->geometry.cardHeight};
     const double fit = std::min({scale, card.w / std::max(1.0, native.w), card.h / std::max(1.0, native.h)});
     const Vector2D size = native.size() * fit;
-    const auto pointer = g_pInputManager->getMouseCoordsInternal();
     const CBox target{std::clamp(pointer.x - size.x / 2, card.x, card.x + card.w - size.x),
         std::clamp(pointer.y - size.y / 2, card.y, card.y + card.h - size.y), size.x, size.y};
     if (!dragHover || dragHover->window != window || dragHover->workspace != workspace || dragHover->monitor != monitor) {
@@ -1357,6 +1380,13 @@ void StageController::Impl::updateDragHover() {
 void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
     if (rendering)
         return;
+    if (thumbnailDrag && event.button == BTN_LEFT && event.state == WL_POINTER_BUTTON_STATE_RELEASED) {
+        swallowedButtons.erase(event.button);
+        pressed.reset();
+        info.cancelled = true;
+        finishThumbnailDrag();
+        return;
+    }
     // A consumed press owns its release even if a reload/overview/fullscreen
     // transition happened in between. Never send an unmatched release to a client.
     if (event.state == WL_POINTER_BUTTON_STATE_RELEASED && swallowedButtons.erase(event.button)) {
@@ -1382,6 +1412,26 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
     info.cancelled = true;
     swallowedButtons.insert(event.button);
     if (event.button == BTN_LEFT && event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        if (index && (g_pInputManager->getModsFromAllKBs() & 64)) {
+            const auto& card = screen->cards[*index];
+            const Vector2D origin{sidebar(*screen).x + screen->geometry.padding, screen->base.y + cardTop(*screen, *index)};
+            for (auto it = card.previews.rbegin(); it != card.previews.rend(); ++it) {
+                const auto window = it->window.lock();
+                const auto box = it->target.copy().translate(origin);
+                if (!window || !window->m_isMapped || window->isHidden() || window->m_pinned || !box.containsPoint(g_pInputManager->getMouseCoordsInternal()))
+                    continue;
+                thumbnailDrag = window;
+                pressed.reset();
+                cancelDrop = false;
+                clearDragHover();
+                dragHover = DragHover{window, screen->monitor, card.workspace, box, box, Clock::now()};
+                g_pSeatManager->setPointerFocus(nullptr, {});
+                armMotion();
+                damage(*screen);
+                return;
+            }
+            return; // Win+click on empty card space does not switch workspace.
+        }
         pressed = index ? screen->cards[*index].workspace : PHLWORKSPACEREF{};
     }
 }
@@ -1405,6 +1455,48 @@ void StageController::Impl::axis(const IPointer::SAxisEvent& event, Event::SCall
     pointer();
     damage(*screen);
     request(false);
+}
+
+void StageController::Impl::finishThumbnailDrag() {
+    updateDragHover();
+    const auto window = thumbnailDrag.lock();
+    const auto destination = dragHover ? dragHover->workspace.lock() : nullptr;
+    const auto monitor = dragHover ? dragHover->monitor.lock() : nullptr;
+    const CBox from = dragHoverBox();
+    Vector2D center = from.middle();
+    if (const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal()); screen && index) {
+        const auto area = desktop(*screen);
+        const auto mapped = stage::mapPreviewCenter(
+            {sidebar(*screen).x + screen->geometry.padding, screen->base.y + cardTop(*screen, *index),
+                screen->geometry.cardWidth, screen->geometry.cardHeight},
+            {area.x, area.y, area.w, area.h}, center.x, center.y);
+        center = {mapped.first, mapped.second};
+    }
+    thumbnailDrag.reset();
+    clearDragHover();
+    if (!window || !destination || !monitor || blocked() || cancelDrop)
+        return;
+    const bool toDesktop = destination->isVisible();
+    finishDrop(destination, window, from, stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
+        numberSetting("decoration:rounding", 0), from.w, from.h), center, {}, center);
+    if (!toDesktop || window->m_workspace != destination)
+        return;
+    forceRefresh = true;
+    sync();
+    Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_WORKSPACE_CHANGE);
+    if (auto* screen = screenFor(monitor); screen && interactive(*screen) && numberSetting("animations:enabled", 1) && setting("stage_transition_ms", 300) > 0) {
+        window->positionAnimation()->warp();
+        window->sizeAnimation()->warp();
+        const CBox target = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() :
+            CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
+        screen->flights.push_back({Preview{window, target, target}, from, target,
+            static_cast<float>(stage::previewRounding(-1, numberSetting("decoration:rounding", 0), from.w, from.h)), window->rounding()});
+        screen->flightStart = Clock::now();
+        screen->flightDuration = std::clamp(setting("stage_transition_ms", 300), 0L, 2000L);
+        updatePreviewLiveness();
+        damage(*screen);
+        armMotion();
+    }
 }
 
 void StageController::Impl::activate(const PHLWORKSPACE& workspace) {
@@ -1461,6 +1553,12 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
     }
     clearDragHover();
     reinterpret_cast<DragEndFn>(dragHook->m_original)(drag);
+    finishDrop(destination, window, dropOrigin, dropRadius, dropPoint, grabOffset, floatingCenter);
+}
+
+void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PHLWINDOW& window, const CBox& dropOrigin,
+                                     float dropRadius, const Vector2D& dropPoint, const Vector2D& grabOffset,
+                                     std::optional<Vector2D> floatingCenter) {
     // Use the compositor's normal move path after its drag controller has
     // restored tiling/floating and completed the pointer grab.
     if (destination && window && window->m_isMapped && window->m_workspace != destination &&
@@ -1627,7 +1725,7 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
             g_pHyprRenderer->m_renderData.clipBox = cardClip;
             for (const auto& preview : card.previews) {
                 const auto window = preview.window.lock();
-                if (!window || !window->m_isMapped || window->isHidden() || window->m_pinned || window->m_workspace != workspace || flying(*screen, window))
+                if (!window || !window->m_isMapped || window->isHidden() || window->m_pinned || window->m_workspace != workspace || flying(*screen, window) || thumbnailDrag == window)
                     continue;
                 const auto radius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
                     numberSetting("decoration:rounding", 0), preview.target.w, preview.target.h);
@@ -2082,6 +2180,7 @@ std::string StageController::Impl::stateJson() const {
         {"swipe_begin_count", swipeBegins}, {"swipe_update_count", swipeUpdates}, {"swipe_end_count", swipeEnds},
         {"raw_swipe_update_count", rawSwipeUpdates},
         {"drag_hover_active", dragHover.has_value()},
+        {"thumbnail_drag_active", !!thumbnailDrag},
         {"screens", nlohmann::json::array()}};
     for (const auto& screen : screens) {
         const auto monitor = screen.monitor.lock();

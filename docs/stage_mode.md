@@ -204,6 +204,15 @@ flight completes. Disabled animations update immediately; follow mode uses the
 normal workspace-switch animation after release. `drag_hover_active` exposes
 the hover-preview state.
 
+Win/Super + left-drag on a window inside a sidebar card picks the topmost
+preview under the pointer. Dragging into the current desktop enlarges it;
+dragging onto another workspace card keeps it miniature. The original window
+stays in its workspace until release. Dropping on the desktop or a different
+card commits through the normal workspace move/layout path. Dropping in empty
+sidebar space, on the original card, or pressing Escape cancels the move.
+Plain card clicks still switch workspace. `thumbnail_drag_active` reports this
+drag separately from a native desktop-window drag.
+
 Overview/raw capture/input suppression, special workspaces and session locking
 suspend stage drawing/input. They do not remove the native reservation.
 Fullscreen coverage is per output; composing an in-progress slide clears only
