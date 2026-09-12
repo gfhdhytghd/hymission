@@ -8366,19 +8366,9 @@ void OverviewController::prepareGestureCloseExitGeometry() {
         (predictedExitFocus ? predictedExitFocus->m_monitor.lock() : PHLMONITOR{});
     const auto currentWorkspaceOnTargetMonitor = predictedExitMonitor ? predictedExitMonitor->m_activeWorkspace : PHLWORKSPACE{};
     const auto scrollingTranslation = predictedScrollingExitTranslation(predictedExitFocus);
-    const bool preferGoalGeometry = isScrollingWorkspace(predictedExitWorkspace);
     const bool workspaceSwitchOnExit =
         predictedExitWorkspace && predictedExitMonitor && !predictedExitWorkspace->m_isSpecialWorkspace && currentWorkspaceOnTargetMonitor &&
         predictedExitWorkspace != currentWorkspaceOnTargetMonitor;
-
-    Vector2D incomingWorkspaceOffset;
-    Vector2D outgoingWorkspaceOffset;
-    if (workspaceSwitchOnExit) {
-        const bool animToLeft =
-            shouldWrapWorkspaceIds(predictedExitWorkspace->m_id, currentWorkspaceOnTargetMonitor->m_id) ^ (predictedExitWorkspace->m_id > currentWorkspaceOnTargetMonitor->m_id);
-        incomingWorkspaceOffset = predictedWorkspaceAnimationOffset(m_handle, predictedExitMonitor, predictedExitWorkspace, animToLeft, true);
-        outgoingWorkspaceOffset = predictedWorkspaceAnimationOffset(m_handle, predictedExitMonitor, currentWorkspaceOnTargetMonitor, animToLeft, false);
-    }
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
@@ -8397,7 +8387,7 @@ void OverviewController::prepareGestureCloseExitGeometry() {
         else
             out << " scrollingDelta=<none>";
         if (workspaceSwitchOnExit)
-            out << " incomingWsDelta=" << vectorToString(incomingWorkspaceOffset) << " outgoingWsDelta=" << vectorToString(outgoingWorkspaceOffset);
+            out << " incomingWsDelta=0,0 (settled endpoint)";
         debugLog(out.str());
     }
 
@@ -8407,14 +8397,7 @@ void OverviewController::prepareGestureCloseExitGeometry() {
         if (workspaceSwitchOnExit && managed.window && managed.window->m_workspace) {
             if (managed.window->m_workspace == predictedExitWorkspace) {
                 const auto currentOffset = managed.window->m_workspace->m_renderOffset->value();
-                const auto targetOffset = preferGoalGeometry ? Vector2D{} : incomingWorkspaceOffset;
-                managed.exitGlobal = translateRect(managed.exitGlobal, targetOffset.x - currentOffset.x, targetOffset.y - currentOffset.y);
-            } else if (managed.window->m_workspace == currentWorkspaceOnTargetMonitor) {
-                if (preferGoalGeometry) {
-                    const auto currentOffset = managed.window->m_workspace->m_renderOffset->value();
-                    managed.exitGlobal =
-                        translateRect(managed.exitGlobal, outgoingWorkspaceOffset.x - currentOffset.x, outgoingWorkspaceOffset.y - currentOffset.y);
-                }
+                managed.exitGlobal = gestureIncomingWorkspaceEndpoint(managed.exitGlobal, currentOffset.x, currentOffset.y);
             }
         }
 

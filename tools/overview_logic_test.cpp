@@ -67,6 +67,20 @@ int main() {
     if (!gestureFocusOk)
         return EXIT_FAILURE;
 
+    // Regression: ws4 -> ws5 on a 1728px-high monitor used to place the
+    // incoming window below the screen until gesture release snapped it back.
+    const Rect desktop{391, 60, 2669, 1656};
+    bool gestureGeometryOk = expectRect(gestureIncomingWorkspaceEndpoint(desktop, 0, 0), desktop,
+                                       "cross-workspace gesture must end on-screen without an incoming slide offset");
+    gestureGeometryOk &= expectRect(gestureIncomingWorkspaceEndpoint({391, 1788, 2669, 1656}, 0, 1728), desktop,
+                                    "downward native workspace animation must be removed from the gesture endpoint");
+    gestureGeometryOk &= expectRect(gestureIncomingWorkspaceEndpoint({391, -1668, 2669, 1656}, 0, -1728), desktop,
+                                    "upward native workspace animation must be removed from the gesture endpoint");
+    gestureGeometryOk &= expectRect(gestureIncomingWorkspaceEndpoint({3463, 60, 2669, 1656}, 3072, 0), desktop,
+                                    "horizontal workspace animation must also end at the settled desktop");
+    if (!gestureGeometryOk)
+        return EXIT_FAILURE;
+
     const std::vector<Rect> rects = {
         {0, 0, 100, 100},
         {140, 0, 100, 100},

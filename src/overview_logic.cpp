@@ -693,6 +693,12 @@ std::optional<std::string> legacyFullscreenDispatcherArguments(std::string_view 
     return std::string{legacyMode} + " " + legacyAction;
 }
 
+Rect gestureIncomingWorkspaceEndpoint(const Rect& live, double renderOffsetX, double renderOffsetY) {
+    // The gesture reaches the settled desktop, not the start of a second
+    // workspace animation. Remove any in-flight native workspace translation.
+    return {live.x - renderOffsetX, live.y - renderOffsetY, live.width, live.height};
+}
+
 Rect lerpRect(const Rect& from, const Rect& to, double t) {
     const double clamped = clampUnit(t);
     return {

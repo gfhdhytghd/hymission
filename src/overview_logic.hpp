@@ -171,6 +171,7 @@ struct WindowExpansionTarget {
 [[nodiscard]] std::optional<ToggleArguments> parseToggleArguments(std::string_view value);
 [[nodiscard]] std::optional<std::string>     legacyFullscreenDispatcherArguments(std::string_view mode, std::string_view action);
 [[nodiscard]] Rect                       lerpRect(const Rect& from, const Rect& to, double t);
+[[nodiscard]] Rect                       gestureIncomingWorkspaceEndpoint(const Rect& live, double renderOffsetX, double renderOffsetY);
 [[nodiscard]] double                     easeOutCubic(double t);
 [[nodiscard]] double                     easeInCubic(double t);
 [[nodiscard]] double                     easeInOutCubic(double t);
