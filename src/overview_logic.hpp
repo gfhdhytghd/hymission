@@ -11,6 +11,15 @@
 
 namespace hymission {
 
+// An explicit click/Enter confirmation must not be replaced by a stale hover
+// target, including when the user selects the window focused before opening.
+template <typename Window>
+[[nodiscard]] Window resolveConfirmedExitFocus(const Window& selected, const Window& preferred, const Window& original, bool activateSelection) {
+    if (activateSelection && selected)
+        return selected;
+    return preferred ? preferred : original;
+}
+
 // Shared by gesture geometry prediction and the committed close. Window may be
 // a compositor handle or a lightweight handle in the logic tests.
 template <typename Window>

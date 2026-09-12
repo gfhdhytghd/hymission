@@ -9775,10 +9775,7 @@ PHLWINDOW OverviewController::resolveExitFocus(CloseMode mode) const {
     if (mode == CloseMode::Abort)
         return {};
 
-    if (const auto target = preferredOverviewExitFocus(); target)
-        return target;
-
-    return m_state.focusBeforeOpen;
+    return resolveConfirmedExitFocus(selectedWindow(), preferredOverviewExitFocus(), m_state.focusBeforeOpen, mode == CloseMode::ActivateSelection);
 }
 
 bool OverviewController::exitFocusChangedWorkspace(const PHLWINDOW& window) const {
@@ -9925,6 +9922,15 @@ void OverviewController::commitOverviewExitFocus(const PHLWINDOW& window) {
 
     if (!alreadyFocused || activatedWorkspace)
         focusWindowCompat(window, false, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+
+    // fullWindowFocus can refuse focus (for example while an exclusive layer
+    // still owns the keyboard). Do not record success or move another column
+    // under the old focus. Deactivation retries after overview teardown.
+    if (Desktop::focusState()->window() != window) {
+        if (debugLogsEnabled())
+            debugLog("[hymission] commit exit focus not accepted target=" + debugWindowLabel(window));
+        return;
+    }
 
     if (window->m_isFloating)
         Desktop::windowState()->raise(window);
@@ -11354,8 +11360,6 @@ void OverviewController::deactivate() {
     const bool shouldPreserveExitFocus = desiredFocus && m_inputFollowMouseOverridden && m_inputFollowMouseBackup != 0;
     const bool preferGoalVisiblePoint = shouldPreserveExitFocus && shouldPreferGoalExitGeometry(desiredFocus);
     const auto focusMonitor = desiredFocus ? (previewMonitorForWindow(desiredFocus) ? previewMonitorForWindow(desiredFocus) : desiredFocus->m_monitor.lock()) : PHLMONITOR{};
-    const auto visiblePoint = shouldPreserveExitFocus ? visiblePointForWindowOnMonitor(desiredFocus, focusMonitor, preferGoalVisiblePoint) : std::nullopt;
-    const bool shouldWarpCursorForExitFocus = visiblePoint && desiredFocus != m_state.focusBeforeOpen;
     clearToggleSwitchSession();
     m_primaryButtonPressed = false;
     m_hoverSelectionAnchorValid = false;
@@ -11397,7 +11401,6 @@ void OverviewController::deactivate() {
         out << " exitFullscreenReapplied=" << (m_state.exitFullscreenReapplied ? 1 : 0);
         out << " shouldPreserveFocus=" << (shouldPreserveExitFocus ? 1 : 0);
         out << " preferGoalVisiblePoint=" << (preferGoalVisiblePoint ? 1 : 0);
-        out << " shouldWarpCursor=" << (shouldWarpCursorForExitFocus ? 1 : 0);
         if (desiredFocus) {
             out << " desiredLive=" << rectToString(liveGlobalRectForWindow(desiredFocus));
             out << " desiredGoal=" << rectToString(goalGlobalRectForWindow(desiredFocus));
@@ -11435,6 +11438,15 @@ void OverviewController::deactivate() {
     setScrollingFollowFocusOverride(false);
     g_pHyprRenderer->m_directScanoutBlocked = false;
 
+    // Recommit after restoring native render/input hooks. The initial close
+    // focus may have been refused or superseded during the closing animation.
+    // Also fit the scrolling column again when the window is already focused;
+    // in that case no focus event will repair a changed viewport for us.
+    if (desiredFocus)
+        commitOverviewExitFocus(desiredFocus);
+    const auto visiblePoint = shouldPreserveExitFocus ? visiblePointForWindowOnMonitor(desiredFocus, focusMonitor, preferGoalVisiblePoint) : std::nullopt;
+    const bool shouldWarpCursorForExitFocus = visiblePoint && desiredFocus != m_state.focusBeforeOpen;
+
     if (shouldPreserveExitFocus) {
         g_pInputManager->m_forcedFocus = desiredFocus;
         m_postCloseForcedFocus = desiredFocus;
@@ -11455,8 +11467,6 @@ void OverviewController::deactivate() {
     } else {
         m_restoreInputFollowMouseAfterPostClose = true;
     }
-    if (desiredFocus && Desktop::focusState()->window() != desiredFocus)
-        focusWindowCompat(desiredFocus);
     if (desiredFocus && desiredFocus->m_workspace)
         emitWorkspaceActiveEvents(desiredFocus->m_workspace);
     if (!m_state.exitFullscreenReapplied && desiredFocus && desiredFocus == originalFullscreenWindow && originalFullscreenMode != FSMODE_NONE && desiredFocus->m_isMapped) {
