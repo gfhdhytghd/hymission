@@ -172,6 +172,16 @@ int main() {
     ok &= expect(near(oversized.width / oversized.height, 1.5), "oversized floating flight fits the output without distortion");
     const hymission::Rect dropCard{-1900, 180, 200, 100}, dropDesktop{-1650, 40, 1600, 800};
     const auto drop = mapDropPoint(dropCard, dropDesktop, -1850, 255);
+    for (const auto& card : {dropCard, hymission::Rect{-1900, 180, 200, 150}}) {
+        const double scale = std::min(card.width / dropDesktop.width, card.height / dropDesktop.height);
+        for (const auto& center : {std::pair{-1850.0, 255.0}, std::pair{-1920.0, 165.0}}) {
+            const auto mapped = mapPreviewCenter(card, dropDesktop, center.first, center.second);
+            const auto x = card.x + (card.width - dropDesktop.width * scale) / 2 + (mapped.first - dropDesktop.x) * scale;
+            const auto y = card.y + (card.height - dropDesktop.height * scale) / 2 + (mapped.second - dropDesktop.y) * scale;
+            ok &= expect(near(x, center.first) && near(y, center.second),
+                "floating drop preserves preview center including letterboxing and early release outside card");
+        }
+    }
     ok &= expect(near(drop.first, -1250) && near(drop.second, 640), "drop focal point maps both axes across monitor offsets and reserved areas");
     const auto shiftedDrop = mapDropPoint({-1900, 150, 200, 100}, dropDesktop, -1850, 225);
     ok &= expect(near(drop.first, shiftedDrop.first) && near(drop.second, shiftedDrop.second), "animated or scrolled card position does not change the relative drop location");

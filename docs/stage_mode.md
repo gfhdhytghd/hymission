@@ -187,7 +187,9 @@ workspace-move path commits the drop. This path also preserves native group
 movement and cross-monitor behavior. The release point is mapped from the animated
 card's rectangle into the destination desktop's global logical coordinates.
 Tiled targets are reinserted using the native algorithm's focal-point API;
-floating targets retain their grab offset at the mapped point. Dropping on the current workspace does not
+floating targets map the pre-release preview center back into the destination
+desktop and place the window around that center, avoiding a jump from the
+original mouse grab offset. Dropping on the current workspace does not
 issue a second move. Escape cancels sidebar delivery; no resize or application
 data drag is interpreted as a window move.
 

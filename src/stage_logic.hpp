@@ -51,6 +51,8 @@ double transitionProgress(double elapsed, double duration);
 Rect transitionBox(const Rect& from, const Rect& to, double progress);
 Rect transitionBoxWithin(const Rect& from, const Rect& to, double progress, const Rect& bounds);
 std::pair<double, double> mapDropPoint(const Rect& card, const Rect& desktop, double x, double y);
+// Inverse of arrangeWindows' uniform preview transform, without pointer clamping.
+std::pair<double, double> mapPreviewCenter(const Rect& card, const Rect& desktop, double x, double y);
 Rect sidebarArea(const Rect& base, const Geometry& geometry, bool right);
 Rect desktopArea(const Rect& base, const Geometry& geometry, bool right);
 

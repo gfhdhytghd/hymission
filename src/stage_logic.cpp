@@ -156,6 +156,13 @@ std::pair<double, double> mapDropPoint(const Rect& card, const Rect& desktop, do
     const double v = card.height > 0 ? std::clamp((y - card.y) / card.height, 0.0, 1.0) : 0.5;
     return {desktop.x + u * desktop.width, desktop.y + v * desktop.height};
 }
+std::pair<double, double> mapPreviewCenter(const Rect& card, const Rect& desktop, double x, double y) {
+    if (card.width <= 0 || card.height <= 0 || desktop.width <= 0 || desktop.height <= 0)
+        return {desktop.centerX(), desktop.centerY()};
+    const double scale = std::min(card.width / desktop.width, card.height / desktop.height);
+    return {desktop.x + (x - card.x - (card.width - desktop.width * scale) / 2) / scale,
+            desktop.y + (y - card.y - (card.height - desktop.height * scale) / 2) / scale};
+}
 Rect sidebarArea(const Rect& base, const Geometry& geometry, bool right) {
     return {right ? base.x + base.width - geometry.bandWidth : base.x, base.y, geometry.bandWidth, base.height};
 }

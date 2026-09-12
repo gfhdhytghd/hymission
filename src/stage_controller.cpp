@@ -1423,6 +1423,7 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
     PHLWINDOW window;
     Vector2D dropPoint;
     Vector2D grabOffset;
+    std::optional<Vector2D> floatingCenter;
     CBox dropOrigin;
     float dropRadius = 0;
     // Keybind handling clears the native threshold flag after starting a drag.
@@ -1451,6 +1452,10 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
                     dropRadius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
                         numberSetting("decoration:rounding", 0), dropOrigin.w, dropOrigin.h);
                 }
+                const auto center = stage::mapPreviewCenter(
+                    {band.x + geometry.padding, screen->base.y + cardTop(*screen, *index), geometry.cardWidth, geometry.cardHeight},
+                    {area.x, area.y, area.w, area.h}, dropOrigin.middle().x, dropOrigin.middle().y);
+                floatingCenter = Vector2D{center.first, center.second};
             }
         }
     }
@@ -1464,7 +1469,8 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
         Desktop::globalWindowController()->moveWindowToWorkspace(window, destination);
         if (const auto target = window->layoutTarget(); target && target->space() == destination->m_space) {
             if (target->floating()) {
-                target->setPositionGlobal(CBox{dropPoint - grabOffset, target->position().size()});
+                const auto size = target->position().size();
+                target->setPositionGlobal(CBox{floatingCenter ? *floatingCenter - size / 2 : dropPoint - grabOffset, size});
             } else {
                 // Reinsert through the destination algorithm with a global
                 // focal point; never warp the real cursor into a hidden desktop.
@@ -1495,6 +1501,18 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
             if (auto* screen = screenFor(monitor); screen && interactive(*screen)) {
                 const auto card = std::ranges::find_if(screen->cards, [&](const auto& c) { return c.workspace == destination; });
                 if (card != screen->cards.end()) {
+                    if (const auto target = window->layoutTarget(); target && target->floating()) {
+                        // Recompute after releasing frozen drag geometry: card
+                        // size/position may have changed during the sync above.
+                        const auto area = desktop(*screen);
+                        const auto center = stage::mapPreviewCenter(
+                            {sidebar(*screen).x + screen->geometry.padding,
+                             screen->base.y + cardTop(*screen, std::distance(screen->cards.begin(), card)),
+                             screen->geometry.cardWidth, screen->geometry.cardHeight},
+                            {area.x, area.y, area.w, area.h}, dropOrigin.middle().x, dropOrigin.middle().y);
+                        target->setPositionGlobal(CBox{Vector2D{center.first, center.second} - target->position().size() / 2,
+                            target->position().size()});
+                    }
                     window->positionAnimation()->warp();
                     window->sizeAnimation()->warp();
                     updatePreviews(*screen, *card);
