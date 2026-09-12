@@ -45,6 +45,27 @@ bool expectReservation(const WorkspaceStripReservation& actual, const WorkspaceS
 int main() {
     using namespace hymission;
 
+    // Explicit confirmation must override stale hover focus.
+    struct WindowFixture { int workspace; int scrollingX; };
+    WindowFixture original{2, 0}, hovered{5, 1200};
+    WindowFixture* missing = nullptr;
+    WindowFixture selected{2, 2400};
+    bool confirmedFocusOk = true;
+    confirmedFocusOk &= expect(resolveConfirmedExitFocus(&selected, &hovered, &original, true) == &selected,
+                               "explicit activation must use the selected offscreen window, not stale hover focus");
+    confirmedFocusOk &= expect(resolveConfirmedExitFocus(&original, &hovered, &original, true) == &original,
+                               "explicitly selecting the original window must override a different hover target");
+    confirmedFocusOk &= expect(resolveConfirmedExitFocus(&selected, &hovered, &original, false) == &hovered,
+                               "normal close must retain preferred hover focus");
+    confirmedFocusOk &= expect(resolveConfirmedExitFocus(missing, &hovered, &original, true) == &hovered,
+                               "missing selection must fall back to preferred focus");
+    confirmedFocusOk &= expect(resolveConfirmedExitFocus(missing, missing, &original, true) == &original,
+                               "missing selection and hover must fall back to original focus");
+    confirmedFocusOk &= expect(resolveConfirmedExitFocus(missing, missing, missing, true) == nullptr,
+                               "empty overview must not invent an activation target");
+    if (!confirmedFocusOk)
+        return EXIT_FAILURE;
+
     const std::vector<Rect> rects = {
         {0, 0, 100, 100},
         {140, 0, 100, 100},
