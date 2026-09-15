@@ -4000,6 +4000,17 @@ bool OverviewController::shouldRenderWindowHook(const PHLWINDOW& window, const P
     if (!m_shouldRenderWindowOriginal)
         return false;
 
+    // Native visibility also admits workspaces whose animations are still
+    // settling. They were forced visible for all-workspace previews, but must
+    // not reappear at desktop coordinates during the teardown handoff.
+    const auto workspace = window ? window->m_workspace : PHLWORKSPACE{};
+    const auto workspaceMonitor = workspace ? workspace->m_monitor.lock() : PHLMONITOR{};
+    const bool activeWorkspace = workspaceMonitor &&
+        (workspaceMonitor->m_activeWorkspace == workspace || workspaceMonitor->m_activeSpecialWorkspace == workspace);
+    if (shouldSuppressOverviewExitWindow(m_deactivatePending, rawWindowRenderActive(), window && window->m_pinned,
+                                        static_cast<bool>(workspace), activeWorkspace))
+        return false;
+
     if (nativeWindowRenderActive())
         return m_shouldRenderWindowOriginal(g_pHyprRenderer.get(), window, monitor);
 
@@ -7063,8 +7074,9 @@ void OverviewController::restoreOverviewRenderState() {
         backup.workspace->m_forceRendering = activeOnMonitor ? backup.forceRendering : false;
         backup.workspace->m_renderOffset->setValueAndWarp(Vector2D{});
         *backup.workspace->m_renderOffset = Vector2D{};
-        backup.workspace->m_alpha->setValueAndWarp(1.F);
-        *backup.workspace->m_alpha = 1.F;
+        // Hidden workspaces must stay transparent even if native rendering
+        // briefly admits them through its animation/force-rendering paths.
+        backup.workspace->m_alpha->setValueAndWarp(activeOnMonitor ? 1.F : 0.F);
     }
 
     m_overviewRenderStateBackups.clear();

@@ -45,6 +45,16 @@ bool expectReservation(const WorkspaceStripReservation& actual, const WorkspaceS
 int main() {
     using namespace hymission;
 
+    // Repro #44: an inactive workspace preview must not be admitted by native
+    // animation visibility after the preview transform has been removed.
+    if (!expect(shouldSuppressOverviewExitWindow(true, false, false, true, false), "hide inactive workspace during exit handoff") ||
+        !expect(!shouldSuppressOverviewExitWindow(true, false, false, true, true), "keep active workspace, including on another monitor") ||
+        !expect(!shouldSuppressOverviewExitWindow(true, false, true, true, false), "keep pinned windows") ||
+        !expect(!shouldSuppressOverviewExitWindow(false, false, false, true, false), "keep other workspace previews while overview is open") ||
+        !expect(!shouldSuppressOverviewExitWindow(true, true, false, true, false), "keep explicit raw captures independent of teardown") ||
+        !expect(!shouldSuppressOverviewExitWindow(true, false, false, false, false), "delegate windows without a workspace to native rendering"))
+        return EXIT_FAILURE;
+
     // Different workspaces and scrolling positions make choosing the hovered
     // target for prediction but the original target for commit visibly wrong.
     struct WindowFixture { int workspace; int scrollingX; };

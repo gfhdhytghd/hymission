@@ -11,6 +11,13 @@
 
 namespace hymission {
 
+// The teardown handoff must not inherit native workspace-animation visibility.
+// Pinned windows and active workspaces on every monitor remain eligible.
+[[nodiscard]] inline bool shouldSuppressOverviewExitWindow(bool handingOff, bool rawCapture, bool pinned, bool hasWorkspace, bool activeWorkspace) {
+    return handingOff && !rawCapture && !pinned && hasWorkspace && !activeWorkspace;
+}
+
+
 // An explicit click/Enter confirmation must not be replaced by a stale hover
 // target, including when the user selects the window focused before opening.
 template <typename Window>
