@@ -72,6 +72,12 @@ class OverviewController {
 
     bool initialize();
 
+    // Renders the monitor's background and bottom layer surfaces into
+    // targetFramebuffer (monitor-transformed size). Used by the persistent
+    // stage sidebar to give empty workspace slots a wallpaper backdrop.
+    // Returns empty on success, a failure reason otherwise.
+    static std::string renderBackgroundIntoFramebuffer(const PHLMONITOR& monitor, const SP<Render::IFramebuffer>& targetFramebuffer);
+
     [[nodiscard]] SDispatchResult open(const std::string& args = {});
     [[nodiscard]] SDispatchResult close();
     [[nodiscard]] SDispatchResult toggle(const std::string& args = {});

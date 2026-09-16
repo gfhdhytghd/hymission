@@ -18,6 +18,7 @@ struct Settings {
     double paddingTop = -1;
     double paddingRight = -1;
     double paddingBottom = -1;
+    bool evenSpacing = false; // stretch vertical gaps so the card stack spans the sidebar
 };
 
 struct Geometry {
