@@ -363,6 +363,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("stage_transition_ms", 300);
     INT_CONF("stage_smartisan_mode", 0);
     INT_CONF("stage_show_empty", 1);
+    INT_CONF("stage_show_active", 0);
+    INT_CONF("stage_empty_slots", 0);
+    INT_CONF("stage_backdrop", 0);
+    INT_CONF("stage_active_glow", 1);
+    INT_CONF("stage_even_spacing", 0);
     INT_CONF("stage_drop_follow", 0);
     INT_CONF("stage_maximize_cover_strip", 0);
     INT_CONF("stage_refresh_ms", 16);

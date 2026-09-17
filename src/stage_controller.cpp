@@ -45,6 +45,7 @@
 #define private public
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
+#include "overview_controller.hpp"
 #undef private
 
 #include "vendor/nlohmann/json.hpp"
@@ -145,6 +146,7 @@ struct StageController::Impl {
         PHLWINDOWREF window;
         PHLMONITORREF monitor;
         PHLWORKSPACEREF workspace;
+        WORKSPACEID syntheticId = 0;
         CBox from;
         CBox to;
         Clock::time_point start;
@@ -156,6 +158,7 @@ struct StageController::Impl {
         bool previewsReady = false;
         double shift = 0;
         Clock::time_point shiftStart;
+        WORKSPACEID syntheticId = 0; // > 0: transparent empty slot for a workspace that does not exist yet
     };
     struct Screen {
         PHLMONITORREF monitor;
@@ -167,6 +170,10 @@ struct StageController::Impl {
         int transform = 0;
         WORKSPACEID active = WORKSPACE_INVALID;
         std::optional<double> frozenWidth;
+        SP<Render::IFramebuffer> background;
+        std::string backgroundError;
+        Clock::time_point backgroundRendered{};
+        std::optional<std::size_t> reorderHover;
         bool covered = false;
         bool suspended = false;
         bool revealFromBottom = false;
@@ -280,9 +287,41 @@ struct StageController::Impl {
     bool smartisan = false;
     stage::Settings settings;
     PHLWORKSPACEREF pressed;
+    WORKSPACEID pressedSyntheticId = 0;
+    Vector2D pressPoint;
+    PHLMONITORREF pressMonitor;
+    std::size_t pressCard = 0;
+    bool reorderArmed = false;
     std::unordered_set<uint32_t> swallowedButtons;
     PHLWINDOWREF lastDragged;
     std::string error;
+
+    static WORKSPACEID cardID(const Card& card) {
+        if (const auto workspace = card.workspace.lock())
+            return workspace->m_id;
+        return card.syntheticId;
+    }
+
+    static PHLWORKSPACE ensureWorkspace(const PHLMONITOR& monitor, WORKSPACEID id) {
+        if (!monitor || id <= 0)
+            return nullptr;
+        if (const auto existing = State::workspaceState()->query().id(id).run())
+            return existing;
+        return State::workspaceState()->create(id, monitor->m_id, "", true);
+    }
+
+    // Nearest card to a sidebar point, gaps included: stretched spacing would
+    // otherwise leave dead zones where a reorder drop is ignored.
+    std::optional<std::size_t> reorderTargetIndex(const Screen& screen, const Vector2D& point) const {
+        const auto& g = screen.geometry;
+        const auto local = point - sidebar(screen).pos();
+        if (local.x < g.padding || local.x >= g.padding + g.cardWidth || local.y < g.paddingTop || local.y >= screen.base.h - g.paddingBottom)
+            return std::nullopt;
+        const double step = g.cardHeight + g.cardGap;
+        const double t = (local.y - g.paddingTop - g.cardHeight / 2) / (step > 0 ? step : 1);
+        const std::size_t index = static_cast<std::size_t>(std::clamp(std::round(t), 0.0, static_cast<double>(screen.cards.size() - 1)));
+        return screen.cards.empty() ? std::nullopt : std::optional<std::size_t>(index);
+    }
 
     Impl(HANDLE h, std::function<bool()> suspended) : handle(h), overviewSuspended(std::move(suspended)) { instance = this; }
     ~Impl();
@@ -305,6 +344,7 @@ struct StageController::Impl {
     bool flying(const Screen& screen, const PHLWINDOW& window) const;
     double flightProgress(const Screen& screen) const;
     void refreshPreviews();
+    void ensureBackground(Screen& screen, const PHLMONITOR& monitor);
     void updatePreviewLiveness();
     bool updatePreviews(Screen& screen, Card& card);
     bool updatePreviews(Screen& screen, Card& card, const Vector2D& tiledOffset);
@@ -330,6 +370,7 @@ struct StageController::Impl {
     void button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info);
     void axis(const IPointer::SAxisEvent& event, Event::SCallbackInfo& info);
     void activate(const PHLWORKSPACE& workspace);
+    void swapWorkspaces(const PHLWORKSPACE& a, const PHLWORKSPACE& b);
     void correctFloating(const PHLMONITOR& monitor, const CBox& desktop);
     void damage(const Screen& screen);
     double cardTop(const Screen& screen, std::size_t index) const;
@@ -491,6 +532,7 @@ StageController::Impl::Screen* StageController::Impl::visualScreenFor(const PHLM
 
 stage::Settings StageController::Impl::settingsForSide(bool right) const {
     auto result = settings;
+    result.evenSpacing = setting("stage_even_spacing", 0) != 0;
     if (right && setting("stage_padding", -1) < 0) {
         static auto gapsIn = CConfigValue<Config::IComplexConfigValue>("general:gaps_in");
         static auto gapsOut = CConfigValue<Config::IComplexConfigValue>("general:gaps_out");
@@ -550,16 +592,26 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
     visual.right = smartisan ? !source->right : source->right;
     visual.cards.clear();
     for (const auto& workspace : State::workspaceState()->workspaces()) {
-        if (workspace->m_isSpecialWorkspace || workspace->m_monitor != monitor || workspace == target ||
+        if (workspace->m_isSpecialWorkspace || workspace->m_monitor != monitor ||
+            (setting("stage_show_active", 0) == 0 && workspace == target) ||
             (!setting("stage_show_empty", 1) && workspace->getWindowCount(std::nullopt, false) == 0))
             continue;
         const auto old = std::ranges::find_if(source->cards, [&](const auto& card) { return card.workspace == workspace; });
         visual.cards.push_back(old == source->cards.end() ? Card{.workspace = workspace} : *old);
     }
+    for (const auto& card : source->cards) {
+        if (card.syntheticId == 0)
+            continue;
+        const auto id = cardID(card);
+        if (std::ranges::find_if(visual.cards, [&](const Card& c) { return cardID(c) == id; }) == visual.cards.end())
+            visual.cards.push_back(card);
+    }
     std::ranges::sort(visual.cards, [](const Card& a, const Card& b) {
-        if ((a.workspace->m_id > 0) != (b.workspace->m_id > 0))
-            return a.workspace->m_id > 0;
-        return a.workspace->m_id > 0 ? a.workspace->m_id < b.workspace->m_id : a.workspace->m_name < b.workspace->m_name;
+        const auto ida = cardID(a), idb = cardID(b);
+        if ((ida > 0) != (idb > 0))
+            return ida > 0;
+        return ida > 0 ? ida < idb :
+            (a.workspace.lock() && b.workspace.lock() && a.workspace.lock()->m_name < b.workspace.lock()->m_name);
     });
     visual.geometry = stage::layout(visual.base.w, visual.base.h, visual.cards.size(), settingsForSide(visual.right), std::nullopt, monitor->m_size.x);
     visual.scroll = visual.geometry.clampScroll(visual.scroll);
@@ -1075,37 +1127,59 @@ void StageController::Impl::sync() {
         screen->scale = monitor->m_scale;
         screen->transform = static_cast<int>(monitor->m_transform);
 
-        std::vector<PHLWORKSPACE> targets;
+        std::vector<Card> targets;
         for (const auto& workspace : workspaces) {
             if (workspace->m_isSpecialWorkspace || workspace->m_monitor != monitor)
                 continue;
-            if (workspace == monitor->m_activeWorkspace)
+            if (setting("stage_show_active", 0) == 0 && workspace == monitor->m_activeWorkspace)
                 continue;
             if (!showEmpty && workspace->getWindowCount(std::nullopt, false) == 0)
                 continue;
-            targets.emplace_back(workspace);
+            targets.emplace_back(Card{.workspace = workspace});
         }
-        std::ranges::sort(targets, [](const auto& a, const auto& b) {
-            if ((a->m_id > 0) != (b->m_id > 0))
-                return a->m_id > 0;
-            return a->m_id > 0 ? a->m_id < b->m_id : a->m_name < b->m_name;
+        if (const long emptySlots = setting("stage_empty_slots", 0); emptySlots > 0) {
+            WORKSPACEID highest = 0;
+            for (const auto& card : targets) {
+                if (card.workspace.lock() && cardID(card) > highest)
+                    highest = cardID(card);
+            }
+            const WORKSPACEID last = std::max<WORKSPACEID>(highest, static_cast<WORKSPACEID>(emptySlots));
+            for (WORKSPACEID id = 1; id <= last; ++id) {
+                if (std::ranges::any_of(targets, [&](const Card& card) { return cardID(card) == id; }))
+                    continue;
+                // Never synthesize a slot for an id owned by another monitor.
+                if (std::ranges::any_of(workspaces, [&](const auto& workspace) {
+                        return workspace && !workspace->m_isSpecialWorkspace && workspace->m_id == id && workspace->m_monitor != monitor;
+                    }))
+                    continue;
+                targets.emplace_back(Card{.syntheticId = id});
+            }
+        }
+        std::ranges::sort(targets, [](const Card& a, const Card& b) {
+            const auto ida = cardID(a), idb = cardID(b);
+            if ((ida > 0) != (idb > 0))
+                return ida > 0;
+            return ida > 0 ? ida < idb :
+                (a.workspace.lock() && b.workspace.lock() && a.workspace.lock()->m_name < b.workspace.lock()->m_name);
         });
         bool changedCards = targets.size() != screen->cards.size();
         if (!changedCards) {
             for (std::size_t i = 0; i < targets.size(); ++i)
-                changedCards |= screen->cards[i].workspace != targets[i];
+                changedCards |= screen->cards[i].workspace != targets[i].workspace || cardID(screen->cards[i]) != cardID(targets[i]);
         }
-        std::vector<std::pair<PHLWORKSPACEREF, double>> oldTops;
+        std::vector<std::pair<WORKSPACEID, double>> oldTops;
         for (std::size_t i = 0; i < screen->cards.size(); ++i)
-            oldTops.emplace_back(screen->cards[i].workspace, cardTop(*screen, i) + screen->scroll);
+            oldTops.emplace_back(cardID(screen->cards[i]), cardTop(*screen, i) + screen->scroll);
         if (changedCards) {
             std::vector<Card> cards;
-            for (const auto& workspace : targets) {
-                auto it = std::ranges::find_if(screen->cards, [&](const auto& card) { return card.workspace == workspace; });
-                if (it != screen->cards.end())
+            for (const auto& target : targets) {
+                auto it = std::ranges::find_if(screen->cards, [&](const auto& card) { return cardID(card) == cardID(target); });
+                // Never reuse a synthetic slot for a workspace that now exists
+                // (or vice versa): the card's rendering path differs.
+                if (it != screen->cards.end() && (it->workspace.lock() ? !target.syntheticId : !!target.syntheticId))
                     cards.emplace_back(std::move(*it));
                 else
-                    cards.push_back(Card{.workspace = workspace});
+                    cards.push_back(target);
             }
             screen->cards = std::move(cards);
         }
@@ -1115,6 +1189,7 @@ void StageController::Impl::sync() {
             screen->frozenWidth.reset();
         auto screenSettings = settingsForSide(screen->right);
         screen->geometry = stage::layout(base.w, base.h, targets.size(), screenSettings, screen->frozenWidth, monitor->m_size.x);
+        ensureBackground(*screen, monitor);
         const bool changedGeometry = changedSide || changedOutput || oldGeometry.reservation != screen->geometry.reservation || oldGeometry.cardHeight != screen->geometry.cardHeight ||
             oldGeometry.padding != screen->geometry.padding || oldGeometry.paddingTop != screen->geometry.paddingTop ||
             oldGeometry.paddingBottom != screen->geometry.paddingBottom || oldGeometry.cardGap != screen->geometry.cardGap;
@@ -1122,7 +1197,7 @@ void StageController::Impl::sync() {
         if (changedCards || changedGeometry) {
             for (std::size_t i = 0; i < screen->cards.size(); ++i) {
                 auto& card = screen->cards[i];
-                const auto old = std::ranges::find_if(oldTops, [&](const auto& entry) { return entry.first == card.workspace; });
+                const auto old = std::ranges::find_if(oldTops, [&](const auto& entry) { return entry.first == cardID(card); });
                 card.shift = !changedOutput && numberSetting("animations:enabled", 1) && setting("stage_transition_ms", 300) > 0 && old != oldTops.end() ?
                     old->second - screen->geometry.cardTop(i, 0) : 0;
                 card.shiftStart = Clock::now();
@@ -1339,11 +1414,22 @@ std::pair<StageController::Impl::Screen*, std::optional<std::size_t>> StageContr
 void StageController::Impl::pointer() {
     if (!enabled || rendering)
         return;
-    const auto [hoveredScreen, index] = hit(g_pInputManager->getMouseCoordsInternal());
+    const auto point = g_pInputManager->getMouseCoordsInternal();
+    const auto [hoveredScreen, index] = hit(point);
+    // Reorder gesture: pressed on a card and moved onto a different one.
+    if ((pressed.lock() || pressedSyntheticId > 0) && pressMonitor.lock() && (point.distanceSq(pressPoint) > 100.0 || reorderArmed))
+        reorderArmed = true;
     for (auto& screen : screens) {
         const auto hovered = &screen == hoveredScreen ? index : std::nullopt;
         if (screen.hovered != hovered) {
             screen.hovered = hovered;
+            damage(screen);
+        }
+        std::optional<std::size_t> reorderTarget;
+        if (reorderArmed && screen.monitor.lock() == pressMonitor.lock() && !screen.cards.empty())
+            reorderTarget = reorderTargetIndex(screen, point);
+        if (screen.reorderHover != reorderTarget) {
+            screen.reorderHover = reorderTarget;
             damage(screen);
         }
     }
@@ -1412,6 +1498,7 @@ void StageController::Impl::updateDragHover() {
         return;
     }
     const PHLWORKSPACEREF workspace = onDesktop ? monitor->m_activeWorkspace : inGap ? PHLWORKSPACEREF{} : screen->cards[*index].workspace;
+    const WORKSPACEID syntheticId = !onDesktop && !inGap ? screen->cards[*index].syntheticId : 0;
     const CBox native = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() :
         CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
     // Preview placement follows the pointer inside the card, without moving the
@@ -1423,10 +1510,10 @@ void StageController::Impl::updateDragHover() {
     const Vector2D size = native.size() * fit;
     const CBox target{std::clamp(pointer.x - size.x / 2, card.x, card.x + card.w - size.x),
         std::clamp(pointer.y - size.y / 2, card.y, card.y + card.h - size.y), size.x, size.y};
-    if (!dragHover || dragHover->window != window || dragHover->workspace != workspace || dragHover->monitor != monitor) {
+    if (!dragHover || dragHover->window != window || dragHover->workspace != workspace || dragHover->syntheticId != syntheticId || dragHover->monitor != monitor) {
         const CBox from = dragHover && dragHover->window == window ? dragHoverBox() : native;
         clearDragHover();
-        dragHover = DragHover{window, monitor, workspace, from, target, Clock::now()};
+        dragHover = DragHover{window, monitor, workspace, syntheticId, from, target, Clock::now()};
     } else
         dragHover->to = target;
     g_pHyprRenderer->damageMonitor(monitor);
@@ -1441,6 +1528,8 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
     if (thumbnailDrag && event.button == BTN_LEFT && event.state == WL_POINTER_BUTTON_STATE_RELEASED) {
         swallowedButtons.erase(event.button);
         pressed.reset();
+        pressedSyntheticId = 0;
+        reorderArmed = false;
         info.cancelled = true;
         finishThumbnailDrag();
         return;
@@ -1449,12 +1538,41 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
     // transition happened in between. Never send an unmatched release to a client.
     if (event.state == WL_POINTER_BUTTON_STATE_RELEASED && swallowedButtons.erase(event.button)) {
         const auto workspace = pressed.lock();
+        const auto pressedSynthetic = std::exchange(pressedSyntheticId, 0);
         if (event.button == BTN_LEFT)
             pressed.reset();
-        const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal());
+        const auto [screen, indexRaw] = hit(g_pInputManager->getMouseCoordsInternal());
         info.cancelled = true;
-        if (event.button == BTN_LEFT && workspace && screen && index && screen->cards[*index].workspace == workspace)
-            activate(workspace);
+        std::optional<std::size_t> index = indexRaw;
+        if (event.button == BTN_LEFT && screen && !index && reorderArmed && screen->monitor.lock() == pressMonitor.lock() && !screen->cards.empty())
+            index = reorderTargetIndex(*screen, g_pInputManager->getMouseCoordsInternal());
+        if (event.button == BTN_LEFT && screen && index) {
+            const auto& card = screen->cards[*index];
+            if (reorderArmed && pressMonitor.lock() == screen->monitor.lock() && pressCard != *index) {
+                // Rearrange: swap the contents of the pressed and hovered cards.
+                const auto monitor = screen->monitor.lock();
+                auto dragged = pressed.lock();
+                if (!dragged && pressedSynthetic > 0)
+                    dragged = ensureWorkspace(monitor, pressedSynthetic);
+                auto destination = card.workspace.lock();
+                if (!destination && card.syntheticId > 0)
+                    destination = ensureWorkspace(monitor, card.syntheticId);
+                if (dragged && destination && dragged != destination)
+                    swapWorkspaces(dragged, destination);
+            } else if (workspace && card.workspace == workspace)
+                activate(workspace);
+            else if (pressedSynthetic && card.syntheticId == pressedSynthetic && !card.workspace.lock()) {
+                if (const auto monitor = screen->monitor.lock())
+                    activate(ensureWorkspace(monitor, pressedSynthetic));
+            }
+        }
+        for (auto& s : screens) {
+            if (s.reorderHover) {
+                s.reorderHover.reset();
+                damage(s);
+            }
+        }
+        reorderArmed = false;
         return;
     }
     // Releases belonging to a press outside the strip (including application
@@ -1480,9 +1598,10 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
                     continue;
                 thumbnailDrag = window;
                 pressed.reset();
+                pressedSyntheticId = 0;
                 cancelDrop = false;
                 clearDragHover();
-                dragHover = DragHover{window, screen->monitor, card.workspace, box, box, Clock::now()};
+                dragHover = DragHover{window, screen->monitor, card.workspace, card.syntheticId, box, box, Clock::now()};
                 g_pSeatManager->setPointerFocus(nullptr, {});
                 armMotion();
                 damage(*screen);
@@ -1491,6 +1610,11 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
             return; // Win+click on empty card space does not switch workspace.
         }
         pressed = index ? screen->cards[*index].workspace : PHLWORKSPACEREF{};
+        pressedSyntheticId = index ? screen->cards[*index].syntheticId : 0;
+        pressPoint = g_pInputManager->getMouseCoordsInternal();
+        pressMonitor = screen->monitor;
+        pressCard = index.value_or(static_cast<std::size_t>(-1));
+        reorderArmed = false;
     }
 }
 
@@ -1518,8 +1642,11 @@ void StageController::Impl::axis(const IPointer::SAxisEvent& event, Event::SCall
 void StageController::Impl::finishThumbnailDrag() {
     updateDragHover();
     const auto window = thumbnailDrag.lock();
-    const auto destination = dragHover ? dragHover->workspace.lock() : nullptr;
+    auto destination = dragHover ? dragHover->workspace.lock() : nullptr;
+    const auto syntheticId = dragHover ? dragHover->syntheticId : 0;
     const auto monitor = dragHover ? dragHover->monitor.lock() : nullptr;
+    if (!destination && syntheticId > 0)
+        destination = ensureWorkspace(monitor, syntheticId);
     const CBox from = dragHoverBox();
     Vector2D center = from.middle();
     if (const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal()); screen && index) {
@@ -1568,6 +1695,40 @@ void StageController::Impl::activate(const PHLWORKSPACE& workspace) {
     request();
 }
 
+// Rearrange: exchange the contents of two workspaces. Both destinations are
+// pinned persistent for the duration of the swap: moving a's last window out
+// would otherwise leave a empty, and Hyprland destroys empty workspaces, so
+// the second loop could target a workspace that no longer exists. Persistence
+// is restored afterwards; an endpoint that ends empty is then reaped exactly
+// as Hyprland reaps it on its own.
+void StageController::Impl::swapWorkspaces(const PHLWORKSPACE& a, const PHLWORKSPACE& b) {
+    if (!a || !b || a == b)
+        return;
+    std::vector<PHLWINDOW> aWindows, bWindows;
+    for (const auto& window : Desktop::windowState()->windows()) {
+        if (!window->m_isMapped || window->isHidden() || window->m_pinned || window->onSpecialWorkspace())
+            continue;
+        if (window->m_workspace == a)
+            aWindows.push_back(window);
+        else if (window->m_workspace == b)
+            bWindows.push_back(window);
+    }
+    if (aWindows.empty() && bWindows.empty())
+        return;
+    const bool aWasPersistent = a->isPersistent();
+    const bool bWasPersistent = b->isPersistent();
+    a->setPersistent(true);
+    b->setPersistent(true);
+    for (const auto& window : aWindows)
+        Desktop::globalWindowController()->moveWindowToWorkspace(window, b);
+    for (const auto& window : bWindows)
+        Desktop::globalWindowController()->moveWindowToWorkspace(window, a);
+    a->setPersistent(aWasPersistent);
+    b->setPersistent(bWasPersistent);
+    forceRefresh = true;
+    request();
+}
+
 void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController* drag) {
     PHLWORKSPACE destination;
     PHLWINDOW window;
@@ -1583,6 +1744,10 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
         const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal());
         if (screen && index) {
             destination = screen->cards[*index].workspace.lock();
+            if (!destination && screen->cards[*index].syntheticId > 0) {
+                if (const auto cardMonitor = screen->monitor.lock())
+                    destination = ensureWorkspace(cardMonitor, screen->cards[*index].syntheticId);
+            }
             window = drag->target()->window();
             const auto pointer = g_pInputManager->getMouseCoordsInternal();
             const auto& geometry = screen->geometry;
@@ -1783,14 +1948,32 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
         if (stripClip.w <= 0 || stripClip.h <= 0)
             continue;
         const auto workspace = card.workspace.lock();
-        if (!workspace)
-            continue;
         const CBox box{area.x + geometry.padding + cardOffset, screen->base.y + top, geometry.cardWidth, geometry.cardHeight};
+        const auto cardClip = physical(box).intersection(stripClip);
+        if (cardClip.w <= 0 || cardClip.h <= 0)
+            continue;
+        g_pHyprRenderer->m_renderData.clipBox = cardClip;
+        // Backdrop: the desktop region of the cached background framebuffer
+        // (wallpaper and background-layer content like desktop dashboards),
+        // aligned so every card — occupied, active or synthetic empty — shows
+        // the same desk content the desktop itself does. The clip trims the
+        // off-desktop part of the framebuffer.
+        if (screen->background && screen->background->getTexture()) {
+            const auto deskRect = desktop(*screen);
+            if (deskRect.w > 0 && deskRect.h > 0) {
+                const double sx = box.w / deskRect.w;
+                const double sy = box.h / deskRect.h;
+                const CBox backdropBox{box.x - (deskRect.x - monitor->m_position.x) * sx,
+                                       box.y - (deskRect.y - monitor->m_position.y) * sy,
+                                       monitor->m_size.x * sx, monitor->m_size.y * sy};
+                g_pHyprOpenGL->renderTexture(screen->background->getTexture(), physical(backdropBox), {.a = 1.0F});
+            }
+        }
+        if (!workspace) {
+            g_pHyprRenderer->m_renderData.clipBox = stripClip;
+            continue;
+        }
         if (card.previewsReady) {
-            const auto cardClip = physical(box).intersection(stripClip);
-            if (cardClip.w <= 0 || cardClip.h <= 0)
-                continue;
-            g_pHyprRenderer->m_renderData.clipBox = cardClip;
             for (const auto& preview : card.previews) {
                 const auto window = preview.window.lock();
                 if (!window || !window->m_isMapped || window->isHidden() || window->m_pinned || window->m_workspace != workspace || flying(*screen, window) || thumbnailDrag == window)
@@ -1798,6 +1981,34 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
                 const auto radius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
                     numberSetting("decoration:rounding", 0), preview.target.w, preview.target.h);
                 drawPreview(window, monitor, preview.target.copy().translate(box.pos()), cardClip, radius);
+            }
+            // The glow is centered on the card edges and clipped only by the
+            // output: the sidebar clip would cut the desktop-facing edge.
+            if (setting("stage_active_glow", 1) != 0 && monitor->m_activeWorkspace && workspace == monitor->m_activeWorkspace) {
+                const auto glow = CHyprColor(static_cast<uint64_t>(setting("focus_selected_color", 0xF23DC7FF)));
+                const double glowRound = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
+                    numberSetting("decoration:rounding", 0), box.w, box.h);
+                const int ringRound = static_cast<int>(std::lround(glowRound * monitor->m_scale));
+                const auto ringBox = physical(CBox{box.x - 2, box.y - 2, box.w + 4, box.h + 4});
+                const auto haloBox = physical(CBox{box.x - 7, box.y - 7, box.w + 14, box.h + 14});
+                g_pHyprRenderer->m_renderData.clipBox = outputClip;
+                g_pHyprOpenGL->renderBorder(haloBox, Config::CGradientValueData{glow.modifyA(static_cast<float>(glow.a * 0.30))},
+                    {.round = ringRound + 5, .roundingPower = 2.0F, .borderSize = 5, .a = 0.5F, .outerRound = -1});
+                g_pHyprOpenGL->renderBorder(ringBox, Config::CGradientValueData{glow},
+                    {.round = ringRound + 1, .roundingPower = 2.0F, .borderSize = 2, .a = 1.0F, .outerRound = -1});
+                g_pHyprRenderer->m_renderData.clipBox = stripClip;
+            }
+            // Reorder target marker while dragging a card onto another one.
+            if (screen->reorderHover == i) {
+                const auto accent = CHyprColor(static_cast<uint64_t>(setting("focus_selected_color", 0xF23DC7FF)));
+                const double hoverRound = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
+                    numberSetting("decoration:rounding", 0), box.w, box.h);
+                const int hoverRingRound = static_cast<int>(std::lround(hoverRound * monitor->m_scale));
+                g_pHyprRenderer->m_renderData.clipBox = outputClip;
+                g_pHyprOpenGL->renderRect(physical(box), accent.modifyA(0.18F), {});
+                g_pHyprOpenGL->renderBorder(physical(box), Config::CGradientValueData{accent},
+                    {.round = hoverRingRound, .roundingPower = 2.0F, .borderSize = 2, .a = 0.9F, .outerRound = -1});
+                g_pHyprRenderer->m_renderData.clipBox = stripClip;
             }
             g_pHyprRenderer->m_renderData.clipBox = stripClip;
         }
@@ -2135,12 +2346,49 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
     g_pHyprRenderer->m_renderData.clipBox = previousClip;
 }
 
+void StageController::Impl::ensureBackground(Screen& screen, const PHLMONITOR& monitor) {
+    if (!g_pHyprRenderer || !g_pHyprOpenGL || !monitor)
+        return;
+    if (setting("stage_backdrop", 0) == 0) {
+        screen.background.reset();
+        screen.backgroundError.clear();
+        return;
+    }
+    if (g_pHyprRenderer->m_renderData.pMonitor)
+        return; // never render offscreen inside a live pass
+    const auto size = monitor->m_transformedSize;
+    // Re-render periodically so live background-layer content (dashboards)
+    // stays honest in the previews; size changes force it immediately.
+    if (screen.background && screen.background->isAllocated() && screen.background->m_size == size &&
+        Clock::now() - screen.backgroundRendered < std::chrono::seconds(2))
+        return;
+    auto framebuffer = g_pHyprRenderer->createFB("hymission stage background");
+    if (!framebuffer || !framebuffer->alloc(std::max(1, static_cast<int>(std::lround(size.x))), std::max(1, static_cast<int>(std::lround(size.y))))) {
+        screen.backgroundError = "framebuffer alloc failed";
+        return;
+    }
+    framebuffer->setImageDescription(monitor->workBufferImageDescription());
+    g_pHyprOpenGL->makeEGLCurrent();
+    const auto previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
+    g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
+    const auto failure = OverviewController::renderBackgroundIntoFramebuffer(monitor, framebuffer);
+    g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+    if (!failure.empty()) {
+        screen.backgroundError = failure;
+        return;
+    }
+    screen.background = std::move(framebuffer);
+    screen.backgroundRendered = Clock::now();
+    screen.backgroundError.clear();
+}
+
 void StageController::Impl::refreshPreviews() {
     if (!enabled || blocked() || rendering || g_pHyprRenderer->m_renderData.pMonitor)
         return;
     for (auto& screen : screens) {
         if (!interactive(screen))
             continue;
+        ensureBackground(screen, screen.monitor.lock());
         bool changed = false;
         for (std::size_t i = 0; i < screen.cards.size(); ++i) {
             auto& card = screen.cards[i];
@@ -2283,9 +2531,14 @@ std::string StageController::Impl::stateJson() const {
         for (const auto& card : screen.cards) {
             if (const auto workspace = card.workspace.lock())
                 cards.push_back({{"workspace", workspace->m_id}, {"name", workspace->m_name}, {"previews_ready", card.previewsReady}});
+            else if (card.syntheticId > 0)
+                cards.push_back({{"workspace", card.syntheticId}, {"name", "empty:" + std::to_string(card.syntheticId)}, {"synthetic", true},
+                    {"previews_ready", true}});
         }
         result["screens"].push_back({{"monitor", monitor->m_name}, {"card_width", screen.geometry.cardWidth}, {"card_height", screen.geometry.cardHeight},
                                      {"preview_render_fps", Clock::now() - rendered.lastFrame < std::chrono::seconds(1) ? rendered.previewRenderFPS : 0},
+                                     {"background_ready", !!(screen.background && screen.background->isAllocated())},
+                                     {"background_error", screen.backgroundError},
                                      {"sidebar_side", screen.right ? "right" : "left"}, {"sidebar_transition", screen.paneTransition},
                                      {"swipe_active", swipe && swipe->monitor == monitor},
                                      {"swipe_progress", swipe && swipe->monitor == monitor ? swipe->progress : 0},

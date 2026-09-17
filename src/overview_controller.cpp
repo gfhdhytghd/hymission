@@ -13829,6 +13829,54 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     entry.snapshot = std::move(snapshot);
 }
 
+std::string OverviewController::renderBackgroundIntoFramebuffer(const PHLMONITOR& monitor, const SP<Render::IFramebuffer>& targetFramebuffer) {
+    if (!g_controller)
+        return "overview controller missing";
+    // The renderLayer hook activates with the overview; activate it on demand
+    // so the persistent stage sidebar can render wallpapers before that.
+    if (!g_controller->m_renderLayerOriginal) {
+        if (!g_controller->m_renderLayerHook || !g_controller->m_renderLayerHook->hook())
+            return "renderLayer hook unavailable";
+        g_controller->m_renderLayerOriginal = reinterpret_cast<RenderLayerFn>(g_controller->m_renderLayerHook->m_original);
+    }
+    if (!targetFramebuffer)
+        return "no target framebuffer";
+    if (!g_pHyprRenderer || !g_pHyprOpenGL || !monitor)
+        return "renderer unavailable";
+    const auto renderLayer = g_controller->m_renderLayerOriginal;
+    const int width  = std::max(1, static_cast<int>(std::lround(monitor->m_transformedSize.x)));
+    const int height = std::max(1, static_cast<int>(std::lround(monitor->m_transformedSize.y)));
+    targetFramebuffer->setImageDescription(monitor->workBufferImageDescription());
+    setFramebufferLinearFiltering(*targetFramebuffer);
+    const bool previousBlockScreenShader = g_pHyprRenderer->m_renderData.blockScreenShader;
+    CRegion fakeDamage{0, 0, width, height};
+    if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, targetFramebuffer)) {
+        g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockScreenShader;
+        return "beginFullFakeRender failed";
+    }
+    g_pHyprRenderer->setViewport(0, 0, static_cast<int>(std::lround(targetFramebuffer->m_size.x)),
+                                 static_cast<int>(std::lround(targetFramebuffer->m_size.y)));
+    g_pHyprRenderer->m_renderData.blockScreenShader = true;
+    g_pHyprRenderer->m_renderData.fbSize = targetFramebuffer->m_size;
+    g_pHyprRenderer->m_renderData.transformDamage = false;
+    g_pHyprRenderer->setProjectionType(Render::RPT_EXPORT);
+    g_pHyprRenderer->draw(CClearPassElement::SClearData{.color = CHyprColor{0.05, 0.06, 0.08, 1.0}}, fakeDamage);
+    const auto now = Time::steadyNow();
+    for (const auto layerKind : {ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM}) {
+        for (const auto& layer : Desktop::viewState()->layers()) {
+            if (!layer || !layer->m_mapped || layer->m_noProcess)
+                continue;
+            const auto layerMonitor = layer->m_monitor.lock();
+            if (!layerMonitor || layerMonitor != monitor || layer->m_layer != static_cast<int>(layerKind))
+                continue;
+            renderLayer(g_pHyprRenderer.get(), layer, monitor, now, false, false);
+        }
+    }
+    g_pHyprRenderer->endRender();
+    g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockScreenShader;
+    return "";
+}
+
 void OverviewController::refreshWorkspaceStripSnapshots() {
     cancelAndClearTimer(m_stripRefreshTimer);
     if (!workspaceStripEnabled(m_state) || m_state.stripEntries.empty()) {

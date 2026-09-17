@@ -49,6 +49,15 @@ Geometry layout(double width, double height, std::size_t count, Settings setting
     result.paddingTop = s.paddingTop;
     result.paddingBottom = s.paddingBottom;
     result.cardGap = s.cardGap;
+    // Cards capped below the fit width leave the column short. With even
+    // spacing, distribute the full leftover height into the gaps so the stack
+    // spans the sidebar evenly instead of clustering at the top.
+    if (s.evenSpacing && count > 1) {
+        const double used = static_cast<double>(count) * result.cardHeight;
+        const double leftover = height - s.paddingTop - s.paddingBottom - used;
+        if (leftover > 0)
+            result.cardGap = std::max(s.cardGap, leftover / static_cast<double>(count - 1));
+    }
     result.count = count;
     result.maxScroll = std::max(0.0, static_cast<double>(count) * result.cardHeight + static_cast<double>(count - 1) * s.cardGap + s.paddingTop + s.paddingBottom - height);
     return result;
