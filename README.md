@@ -609,7 +609,7 @@ hl.config({
             stage_show_empty = 1,
             stage_show_active = 0,
             stage_empty_slots = 0,
-            stage_backdrop = 1,
+            stage_backdrop = 0,
             stage_active_glow = 1,
             stage_even_spacing = 0,
             stage_drop_follow = 0,
@@ -634,7 +634,7 @@ hl.config({
 | `stage_show_empty` | `1` | Keep inactive empty workspaces as transparent empty slots; `0` hides them. Slots remain clickable and accept drops without a hover outline. No synthetic workspaces or plus card. |
 | `stage_show_active` | `0` | Keep the active workspace in the sidebar instead of swapping it out for the previously active one; every workspace stays listed, including empty ones. The active card keeps live previews and is outlined with a soft glow in the `focus_selected_color` unless `stage_active_glow` is `0`. Clicking the active card is a no-op. |
 | `stage_empty_slots` | `0` | Always list numbered workspace slots `1..N` on each monitor, synthesizing empty cards for workspaces that do not exist yet (Hyprland destroys empty workspaces on switch). Slots are clickable and accept window drops; using one creates the workspace. Ids owned by other monitors are skipped. `0` keeps the existing behavior of listing only real workspaces. |
-| `stage_backdrop` | `1` | Draw every card over the desktop region of the monitor's background and bottom layer surfaces (wallpaper and background-layer dashboards), so previews match what the desktop shows; `0` keeps cards transparent. Refreshes every two seconds while visible. |
+| `stage_backdrop` | `0` | When enabled (`1`), draw every card over the desktop region of the monitor's background and bottom layer surfaces (wallpaper and background-layer dashboards), so previews match what the desktop shows; `0` (default) keeps cards transparent. Refreshes every two seconds while visible. |
 | `stage_active_glow` | `1` | Outline the active workspace card with a soft glow in the `focus_selected_color`; `0` disables the outline. Only meaningful with `stage_show_active = 1`. |
 | `stage_even_spacing` | `0` | Stretch the vertical card gaps so the stack spans the full sidebar height evenly instead of clustering at the top; `0` clusters cards at the top. Only meaningful with `stage_empty_slots > 0`. |
 | `stage_drop_follow` | `0` | After dropping a window, stay on the current workspace; `1` follows the moved window. |

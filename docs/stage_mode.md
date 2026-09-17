@@ -145,9 +145,10 @@ active workspace stays in the sidebar alongside every other workspace and its
 card keeps live previews with a soft glow outline in `focus_selected_color`;
 clicking it is a no-op; `stage_active_glow` disables the outline. With `stage_empty_slots` set, missing numbered
 workspaces up to that id are listed as synthetic empty slots that
-create the workspace on click or drop; every card draws the monitor's
-background and bottom layer surfaces (the desktop region) as a backdrop unless
-`stage_backdrop` is disabled, and `stage_even_spacing` stretches
+create the workspace on click or drop; when `stage_backdrop` is enabled,
+every card draws the monitor's background and bottom layer surfaces (the
+desktop region) as a backdrop (cards are transparent by default), and
+`stage_even_spacing` stretches
 the vertical gaps so the stack spans the sidebar evenly. There are no numeric/name labels.
 Empty-workspace slots are transparent. Hovering does not draw a frame.
 Retained cards animate vertical position changes using the transition duration;

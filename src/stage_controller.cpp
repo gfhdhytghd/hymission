@@ -1695,9 +1695,12 @@ void StageController::Impl::activate(const PHLWORKSPACE& workspace) {
     request();
 }
 
-// Rearrange: exchange the contents of two workspaces. Collecting both window
-// lists first keeps neither workspace empty mid-swap, so Hyprland cannot
-// destroy either one under us.
+// Rearrange: exchange the contents of two workspaces. Both destinations are
+// pinned persistent for the duration of the swap: moving a's last window out
+// would otherwise leave a empty, and Hyprland destroys empty workspaces, so
+// the second loop could target a workspace that no longer exists. Persistence
+// is restored afterwards; an endpoint that ends empty is then reaped exactly
+// as Hyprland reaps it on its own.
 void StageController::Impl::swapWorkspaces(const PHLWORKSPACE& a, const PHLWORKSPACE& b) {
     if (!a || !b || a == b)
         return;
@@ -1712,10 +1715,16 @@ void StageController::Impl::swapWorkspaces(const PHLWORKSPACE& a, const PHLWORKS
     }
     if (aWindows.empty() && bWindows.empty())
         return;
+    const bool aWasPersistent = a->isPersistent();
+    const bool bWasPersistent = b->isPersistent();
+    a->setPersistent(true);
+    b->setPersistent(true);
     for (const auto& window : aWindows)
         Desktop::globalWindowController()->moveWindowToWorkspace(window, b);
     for (const auto& window : bWindows)
         Desktop::globalWindowController()->moveWindowToWorkspace(window, a);
+    a->setPersistent(aWasPersistent);
+    b->setPersistent(bWasPersistent);
     forceRefresh = true;
     request();
 }
@@ -2340,7 +2349,7 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
 void StageController::Impl::ensureBackground(Screen& screen, const PHLMONITOR& monitor) {
     if (!g_pHyprRenderer || !g_pHyprOpenGL || !monitor)
         return;
-    if (setting("stage_backdrop", 1) == 0) {
+    if (setting("stage_backdrop", 0) == 0) {
         screen.background.reset();
         screen.backgroundError.clear();
         return;
