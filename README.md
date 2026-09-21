@@ -7,7 +7,6 @@
 
 > [!WARNING]
 > Hyprland plugins run inside the compositor process. Install plugins only from sources you trust.
-> `hymission` may not work correctly on NVIDIA GPUs/drivers.
 
 > [!WARNING]
 > This software is 99% vibe coded with OpenAI CodeX, but have been manual audited, warn in case you mind it.
