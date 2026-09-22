@@ -1906,7 +1906,10 @@ void StageController::Impl::renderStage(eRenderStage stage) {
     auto* screen = visualScreenFor(monitor);
     if (!screen || !screen->geometry.enabled() || monitor->m_activeSpecialWorkspace || screen->shown <= 0)
         return;
-    if (stage == RENDER_POST_WINDOWS) {
+    // During overview, compose the sliding sidebar below its window previews
+    // and workspace strip. On the desktop it stays above native windows.
+    const auto drawStage = progress ? RENDER_PRE_WINDOWS : RENDER_POST_WINDOWS;
+    if (stage == drawStage) {
         const PHLMONITORREF ref = monitor;
         g_pHyprRenderer->m_renderPass.add(makeUnique<StagePassElement>([this, ref] {
             if (const auto mon = ref.lock())
