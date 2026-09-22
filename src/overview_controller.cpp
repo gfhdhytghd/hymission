@@ -2873,7 +2873,7 @@ bool OverviewController::rawWindowRenderActive() const {
 bool OverviewController::nativeWindowRenderActive() const {
     // Hooks remain installed until the render pass has finished. Once closing
     // reaches desktop geometry, every hook must agree to use native rendering.
-    return rawWindowRenderActive() || m_deactivatePending;
+    return rawWindowRenderActive() || m_deactivatePending || StageController::renderingPreview();
 }
 
 std::string OverviewController::handleCaptureInputCommand(const std::string& args) {
@@ -4352,6 +4352,14 @@ void OverviewController::calculateUVForSurfaceHook(const PHLWINDOW& window, SP<C
     if (!m_calculateUVForSurfaceOriginal)
         return;
 
+    if (StageController::renderingPreview() && surface && monitor) {
+        const auto logical = surface->m_current.viewport.hasDestination ? surface->m_current.viewport.destination :
+            surface->m_current.viewport.hasSource ? surface->m_current.viewport.source.size() : surface->m_current.size;
+        m_calculateUVForSurfaceOriginal(g_pHyprRenderer.get(), window, std::move(surface), monitor, main,
+                                       (logical * monitor->m_scale).round(), logical, false);
+        return;
+    }
+
     if (nativeWindowRenderActive()) {
         m_calculateUVForSurfaceOriginal(g_pHyprRenderer.get(), window, std::move(surface), monitor, main, projSize, projSizeUnscaled, fixMisalignedFSV1);
         return;
@@ -4754,6 +4762,9 @@ CBox OverviewController::surfaceTexBoxHook(void* surfacePassThisptr) {
     if (!m_surfaceTexBoxOriginal)
         return {};
 
+    if (StageController::renderingPreview())
+        return StageController::transformPreviewBox(m_surfaceTexBoxOriginal(surfacePassThisptr));
+
     if (nativeWindowRenderActive())
         return m_surfaceTexBoxOriginal(surfacePassThisptr);
 
@@ -4831,6 +4842,15 @@ CRegion OverviewController::surfaceOpaqueRegionHook(void* surfacePassThisptr) {
 CRegion OverviewController::surfaceVisibleRegionHook(void* surfacePassThisptr, bool& cancel) {
     if (!m_surfaceVisibleRegionOriginal)
         return {};
+
+    if (StageController::renderingPreview()) {
+        auto* data = surfaceRenderDataMutable(surfacePassThisptr);
+        const auto monitor = data ? data->pMonitor.lock() : PHLMONITOR{};
+        if (monitor) {
+            cancel = false;
+            return CRegion{surfaceTexBoxHook(surfacePassThisptr).scale(monitor->m_scale).round()};
+        }
+    }
 
     if (nativeWindowRenderActive() || m_surfaceRenderDataTransformDepth > 0)
         return m_surfaceVisibleRegionOriginal(surfacePassThisptr, cancel);
@@ -9694,6 +9714,12 @@ void OverviewController::requestCloseHoveredWindow() {
             return;
         window->sendClose();
     }
+}
+
+std::optional<double> OverviewController::stageOverviewProgress(const PHLMONITOR& monitor) const {
+    if (!isVisible() || m_stripSnapshotRenderDepth > 0 || rawWindowRenderActive() || captureInputSuppressed())
+        return std::nullopt;
+    return ownsMonitor(monitor) ? visualProgress() : 0.0;
 }
 
 double OverviewController::visualProgress() const {

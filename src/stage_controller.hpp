@@ -13,7 +13,8 @@ namespace hymission {
 // supplies suspension state and coordinates ownership of overlapping native hooks.
 class StageController {
   public:
-    StageController(HANDLE handle, std::function<bool()> overviewSuspended);
+    StageController(HANDLE handle, std::function<bool()> overviewSuspended,
+                    std::function<std::optional<double>(const PHLMONITOR&)> overviewProgress);
     ~StageController();
     StageController(const StageController&) = delete;
     StageController& operator=(const StageController&) = delete;
@@ -29,6 +30,9 @@ class StageController {
     static void updateTrackpadWorkspaceSwipe(double delta);
     static void endTrackpadWorkspaceSwipe(bool cancelled);
     static void setOverviewRendering(bool active);
+    // Overview owns the shared hooks while Stage draws its sliding previews.
+    static bool renderingPreview();
+    static CBox transformPreviewBox(CBox box);
     static std::optional<Rect> overviewOrigin(const PHLWINDOW& window);
 
   private:
