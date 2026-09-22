@@ -43,6 +43,10 @@ enum class Direction {
     Down,
 };
 
+// Scale around the reserved bar, excluding transparent popup space. The strip
+// translation is applied separately so shrinkage cannot cancel its motion.
+[[nodiscard]] Rect scaleBarProxyRect(const Rect& proxy, const Rect& layer, std::optional<Direction> edge, double exclusive, double scale);
+
 enum class OverviewWorkspaceChangeAction {
     Ignore,
     Rebuild,

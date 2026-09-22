@@ -12,6 +12,25 @@
 
 namespace hymission {
 
+Rect scaleBarProxyRect(const Rect& proxy, const Rect& layer, std::optional<Direction> edge, double exclusive, double scale) {
+    Rect bar = layer;
+    if (edge && exclusive > 0.0) {
+        if (*edge == Direction::Up || *edge == Direction::Down) {
+            bar.height = std::min(layer.height, exclusive);
+            if (*edge == Direction::Down)
+                bar.y += layer.height - bar.height;
+        } else {
+            bar.width = std::min(layer.width, exclusive);
+            if (*edge == Direction::Right)
+                bar.x += layer.width - bar.width;
+        }
+    }
+    const double centerX = bar.x + bar.width * 0.5;
+    const double centerY = bar.y + bar.height * 0.5;
+    return {centerX + (proxy.x - centerX) * scale, centerY + (proxy.y - centerY) * scale,
+            proxy.width * scale, proxy.height * scale};
+}
+
 namespace {
 
 double clampUnit(double value) {

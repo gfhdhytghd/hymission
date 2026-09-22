@@ -45,6 +45,33 @@ bool expectReservation(const WorkspaceStripReservation& actual, const WorkspaceS
 int main() {
     using namespace hymission;
 
+    // Quickshell reserves 58px but keeps an 820px layer for popups. The
+    // visible bar center must stay fixed under scaling, leaving the full
+    // +/-128px strip translation intact instead of cancelling it on a 6K screen.
+    for (const auto edge : {Direction::Up, Direction::Down, Direction::Left, Direction::Right}) {
+        const bool horizontal = edge == Direction::Up || edge == Direction::Down;
+        const Rect layer{3072, 390, horizontal ? 3072.0 : 820.0, horizontal ? 820.0 : 1728.0};
+        const Rect proxy{layer.x - 24, layer.y - 24, layer.width + 48, layer.height + 48};
+        const double cx = horizontal ? layer.x + layer.width / 2 : layer.x + (edge == Direction::Left ? 29 : layer.width - 29);
+        const double cy = !horizontal ? layer.y + layer.height / 2 : layer.y + (edge == Direction::Up ? 29 : layer.height - 29);
+        for (const double progress : {0.0, 0.25, 0.5, 1.0}) {
+            const double scale = 1.0 - (1.0 - 1.0 / 1.1) * progress;
+            const auto result = scaleBarProxyRect(proxy, layer, edge, 58, scale);
+            if (!expect(closeEnough(result.x + (cx - proxy.x) * scale, cx) &&
+                        closeEnough(result.y + (cy - proxy.y) * scale, cy),
+                        "bar center must not drift toward transparent popup area or strip edge"))
+                return EXIT_FAILURE;
+            if (!expect(closeEnough(result.width, proxy.width * scale) && closeEnough(result.height, proxy.height * scale),
+                        "bar proxy must retain scaled blur padding"))
+                return EXIT_FAILURE;
+        }
+    }
+    if (!expectRect(scaleBarProxyRect({0, 0, 100, 40}, {0, 0, 100, 40}, Direction::Up, 58, 0.5),
+                    {25, 10, 50, 20}, "reservation larger than surface must clamp to the surface") ||
+        !expectRect(scaleBarProxyRect({0, 0, 100, 40}, {0, 0, 100, 40}, std::nullopt, 0, 0.5),
+                    {25, 10, 50, 20}, "unknown bar edge must fall back to centered scaling"))
+        return EXIT_FAILURE;
+
     // Repro #44: an inactive workspace preview must not be admitted by native
     // animation visibility after the preview transform has been removed.
     if (!expect(shouldSuppressOverviewExitWindow(true, false, false, true, false), "hide inactive workspace during exit handoff") ||

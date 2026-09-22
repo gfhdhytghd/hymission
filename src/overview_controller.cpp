@@ -1543,28 +1543,6 @@ bool buildBlurredProxyFramebuffers(const SP<Render::IFramebuffer>& sourceFramebu
     return true;
 }
 
-Rect scaleRectFromAnchor(const Rect& rect, const Rect& contentRect, WorkspaceStripAnchor anchor, double scaleX, double scaleY) {
-    double anchorX = contentRect.x + contentRect.width * 0.5;
-    double anchorY = contentRect.y + contentRect.height * 0.5;
-
-    switch (anchor) {
-        case WorkspaceStripAnchor::Left:
-            anchorX = contentRect.x;
-            break;
-        case WorkspaceStripAnchor::Right:
-            anchorX = contentRect.x + contentRect.width;
-            break;
-        case WorkspaceStripAnchor::Top:
-        default:
-            anchorY = contentRect.y;
-            break;
-    }
-
-    const double width = rect.width * scaleX;
-    const double height = rect.height * scaleY;
-    return makeRect(anchorX - (anchorX - rect.x) * scaleX, anchorY - (anchorY - rect.y) * scaleY, width, height);
-}
-
 double scaleLengthForRender(const PHLMONITOR& monitor, double logicalLength) {
     return logicalLength * renderScaleForMonitor(monitor);
 }
@@ -8875,7 +8853,32 @@ Rect OverviewController::hiddenStripLayerProxyRect(const HiddenStripLayerProxy& 
     const Rect   stripBand = workspaceStripBandRectForMonitor(proxy.monitor, m_state);
     const double moveMultiplier = hideBarAnimationMoveMultiplier();
 
-    Rect rect = scaleRectFromAnchor(proxy.proxyRectGlobal, proxy.capturedRectGlobal, anchor, scale, scale);
+    // Layer surfaces can include a large transparent popup area. Scale about
+    // the reserved bar's center, independently of the strip's slide direction.
+    std::optional<Direction> barEdge;
+    double exclusive = 0.0;
+    if (const auto resource = proxy.layer ? proxy.layer->m_layerSurface.lock() : nullptr) {
+        const auto& state = resource->m_current;
+        exclusive = state.exclusive;
+        const auto anchors = state.anchor;
+        auto edge = static_cast<uint32_t>(state.exclusiveEdge);
+        if (!edge) {
+            const auto vertical = anchors & (ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);
+            const auto horizontal = anchors & (ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+            if (vertical == ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP || vertical == ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)
+                edge = vertical;
+            else if (horizontal == ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT || horizontal == ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT)
+                edge = horizontal;
+        }
+        switch (edge) {
+            case ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP: barEdge = Direction::Up; break;
+            case ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM: barEdge = Direction::Down; break;
+            case ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT: barEdge = Direction::Left; break;
+            case ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT: barEdge = Direction::Right; break;
+            default: break;
+        }
+    }
+    Rect rect = scaleBarProxyRect(proxy.proxyRectGlobal, proxy.capturedRectGlobal, barEdge, exclusive, scale);
     switch (anchor) {
         case WorkspaceStripAnchor::Left:
             rect = translateRect(rect, stripBand.width * hiddenness * moveMultiplier, 0.0);
