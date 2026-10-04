@@ -11052,10 +11052,9 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
         preferredSelectedWindow && preferredSelectedWindow->m_isMapped ? preferredSelectedWindow :
         (expandSelectedWindowEnabled() ? Desktop::focusState()->window() : PHLWINDOW{});
     State next = buildState(monitor, requestedScope, workspaceOverrides, false, false, layoutSelectedWindow);
-    if (next.windows.empty() && next.stripEntries.empty()) {
-        notify(collectionSummary(monitor), CHyprColor(1.0, 0.7, 0.2, 1.0), 5000);
+    // An empty overview is a normal no-op, including when opened by a gesture.
+    if (next.windows.empty() && next.stripEntries.empty())
         return;
-    }
 
     if (!wasVisible)
         for (auto& window : next.windows)
