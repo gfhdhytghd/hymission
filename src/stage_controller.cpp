@@ -2011,7 +2011,7 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
             }
             // The glow is centered on the card edges and clipped only by the
             // output: the sidebar clip would cut the desktop-facing edge.
-            if (setting("stage_active_glow", 1) != 0 && monitor->m_activeWorkspace && workspace == monitor->m_activeWorkspace) {
+            if (setting("stage_active_glow", 0) != 0 && monitor->m_activeWorkspace && workspace == monitor->m_activeWorkspace) {
                 const auto glow = CHyprColor(static_cast<uint64_t>(setting("focus_selected_color", 0xF23DC7FF)));
                 const double glowRound = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
                     numberSetting("decoration:rounding", 0), box.w, box.h);

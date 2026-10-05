@@ -142,8 +142,9 @@ rendering is not run alongside the Stage transition. State output includes
 Only inactive workspaces appear; after a switch the new active workspace is
 removed and the old one becomes eligible. With `stage_show_active` enabled, the
 active workspace stays in the sidebar alongside every other workspace and its
-card keeps live previews with a soft glow outline in `focus_selected_color`;
-clicking it is a no-op; `stage_active_glow` disables the outline. With `stage_empty_slots` set, missing numbered
+card keeps live previews; clicking it is a no-op. Set `stage_active_glow = 1`
+to add a soft glow outline in `focus_selected_color`. Both `stage_show_active`
+and `stage_active_glow` default to `0`. With `stage_empty_slots` set, missing numbered
 workspaces up to that id are listed as synthetic empty slots that
 create the workspace on click or drop; when `stage_backdrop` is enabled,
 every card draws the monitor's background and bottom layer surfaces (the
