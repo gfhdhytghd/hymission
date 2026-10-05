@@ -16,6 +16,20 @@ bool near(double a, double b) { return std::abs(a - b) < 1e-7; }
 int main() {
     using namespace hymission::stage;
     bool ok = true;
+    ok &= expect(previewLayer(false, false, false, false) == PreviewLayer::Tiled,
+        "ordinary tiled windows remain visible");
+    ok &= expect(previewLayer(false, false, true, false) == PreviewLayer::Floating && PreviewLayer::Tiled < PreviewLayer::Floating,
+        "floating previews stay above tiled windows regardless of global list order");
+    for (const bool floating : {false, true}) {
+        ok &= expect(previewLayer(true, true, floating, false) == PreviewLayer::Fullscreen,
+            "both tiled and floating fullscreen owners remain visible");
+        ok &= expect(previewLayer(true, false, floating, false) == PreviewLayer::Hidden,
+            "fullscreen occlusion excludes underlying surfaces and their blur");
+    }
+    ok &= expect(previewLayer(true, false, false, true) == PreviewLayer::Hidden,
+        "over-fullscreen permission does not raise a tiled sibling");
+    ok &= expect(previewLayer(true, false, true, true) == PreviewLayer::Floating && PreviewLayer::Fullscreen < PreviewLayer::Floating,
+        "permitted floating windows remain above the fullscreen owner");
     const Settings defaults{.maxWidth = 240}; // explicit pixel override remains supported
     const auto automatic = layout(1920, 1050, 2, Settings{});
     ok &= expect(near(automatic.cardWidth, 384), "default maximum is one fifth of output width");

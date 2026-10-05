@@ -55,6 +55,11 @@ namespace {
 using Render::GL::g_pHyprOpenGL;
 using Clock = std::chrono::steady_clock;
 
+stage::PreviewLayer previewLayer(const PHLWINDOW& window) {
+    return stage::previewLayer(window->m_workspace && Fullscreen::controller()->hasFullscreen(window->m_workspace),
+        Fullscreen::controller()->isFullscreen(window), window->m_isFloating, window->isAllowedOverFullscreen());
+}
+
 Rect flightBounds(const PHLMONITOR& monitor) {
     static auto gapsOut = CConfigValue<Config::IComplexConfigValue>("general:gaps_out");
     const auto& gap = *static_cast<Config::CCssGapData*>(gapsOut.ptr());
@@ -478,6 +483,11 @@ struct StageController::Impl {
         const auto* screen = self->visualScreenFor(monitor);
         if (!standalone && !ignorePosition && !self->rendering && !renderer->m_bRenderingSnapshot && self->enabled && !self->blocked() && screen && !screen->covered &&
             !monitor->m_activeSpecialWorkspace && (self->flying(*screen, window) ||
+                (window && !window->m_pinned && previewLayer(window) == stage::PreviewLayer::Hidden &&
+                    std::ranges::any_of(screen->flights, [&](const Flight& flight) {
+                        const auto owner = flight.preview.window.lock();
+                        return owner && owner->m_workspace == window->m_workspace;
+                    })) ||
                 (self->dragHover && self->dragHover->window == window)))
             return;
         reinterpret_cast<RenderWindowFn>(self->renderWindowHook->m_original)(renderer, window, monitor, time, decorate, mode, ignorePosition, standalone);
@@ -2218,6 +2228,10 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
 }
 
 void StageController::Impl::drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, double radius) {
+    // Cached cards/flights can outlive a fullscreen change. Do not resurrect a
+    // covered window (or its blur) before the next preview collection.
+    if (previewLayer(window) == stage::PreviewLayer::Hidden)
+        return;
     const auto root = window->wlSurface()->resource();
     if (!root || target.w <= 0 || target.h <= 0)
         return;
@@ -2468,19 +2482,25 @@ bool StageController::Impl::updatePreviews(Screen& screen, Card& card, const Vec
     for (const auto& window : Desktop::windowState()->windows()) {
         if (!window->m_isMapped || window->isHidden() || window->onSpecialWorkspace() || window->m_pinned)
             continue;
-        if (window->m_workspace == workspace) {
-            const auto box = decorations ? window->getFullWindowBoundingBox() : CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
-            if (box.w <= 0 || box.h <= 0)
-                continue;
-            // A side change moves native tiled geometry. Hidden cards should
-            // depict its destination, not bake the intermediate layout slide
-            // into a thumbnail that persists until the next refresh.
-            const auto offset = (smartisan ? window->positionAnimation()->goal() - window->positionAnimation()->value() : Vector2D{}) +
-                (window->m_isFloating ? Vector2D{} : tiledOffset);
-            inputs.push_back(WindowInput{.index = windows.size(), .natural = Rect{box.x + offset.x, box.y + offset.y, box.w, box.h}});
-            boxes.push_back(box);
+        if (window->m_workspace == workspace && previewLayer(window) != stage::PreviewLayer::Hidden)
             windows.push_back(window);
-        }
+    }
+    // Hyprland renders tiled windows before floating windows regardless of
+    // their position in the global list. Preserve order inside each layer.
+    std::stable_sort(windows.begin(), windows.end(), [](const auto& a, const auto& b) { return previewLayer(a) < previewLayer(b); });
+    boxes.resize(windows.size());
+    for (std::size_t i = 0; i < windows.size(); ++i) {
+        const auto& window = windows[i];
+        const auto box = decorations ? window->getFullWindowBoundingBox() : CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
+        if (box.w <= 0 || box.h <= 0)
+            continue;
+        // A side change moves native tiled geometry. Hidden cards should
+        // depict its destination, not bake the intermediate layout slide
+        // into a thumbnail that persists until the next refresh.
+        const auto offset = (smartisan ? window->positionAnimation()->goal() - window->positionAnimation()->value() : Vector2D{}) +
+            (window->m_isFloating ? Vector2D{} : tiledOffset);
+        inputs.push_back(WindowInput{.index = i, .natural = Rect{box.x + offset.x, box.y + offset.y, box.w, box.h}});
+        boxes[i] = box;
     }
     const auto area = desktop(screen);
     const auto slots = stage::arrangeWindows(inputs, screen.geometry, Rect{area.x, area.y, area.w, area.h});
