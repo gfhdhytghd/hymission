@@ -363,7 +363,8 @@ workspace 切换补充语义：
 - `layout_engine_onlycurrentworkspace`
 - `layout_scale_weight`
 - `layout_space_weight`
-- `expand_selected_window`
+- `expand_selected_window`（已弃用，兼容接收但忽略）
+- `selected_expand_scale`
 - `hover_relayout_animation`
 - `hover_relayout_duration`
 - `hover_relayout_curve`
@@ -394,8 +395,9 @@ workspace 切换补充语义：
 - `outer_padding*`、`row_spacing`、`column_spacing`、`min_window_length`、`min_preview_short_edge`、`small_window_boost`、`max_preview_scale`、`workspace_overview_max_preview_scale`、`min_slot_scale`、`layout_engine`、`layout_engine_forceall`、`layout_engine_all`、`layout_engine_onlycurrentworkspace`、`layout_scale_weight`、`layout_space_weight` 当前只控制布局算法
 - `layout_engine = grid` 保持既有 row-search 几何；`layout_engine = natural` / `apple` / `expose` / `mission-control` 使用 Apple-like 自然求解器，优先保留窗口进入 overview 前的相对方位并消除重叠，且不按窗口数量主动回退 row-search；`layout_engine = thumbnail` / `thumbnails` 使用 workspace 缩略图布局，窗口按 workspace 分组并在其各自缩略图卡片中保持精确位置；`one_workspace_per_row = 1` 时仍保留 workspace 行语义，并在每个 workspace band 内运行自然求解
 - `layout_engine_all` 和 `layout_engine_onlycurrentworkspace` 允许默认 all-workspace / active-workspace scope 使用不同布局；空字符串表示回退到 `layout_engine`。显式 `forceall` dispatcher scope 优先读取 `layout_engine_forceall`，为空时回退到 `layout_engine_all`
-- `expand_selected_window` 让 overview 当前选中项在布局阶段获得额外权重，从而放大并挤开相邻 preview；它依赖 `selectedIndex`，因此在 `overview_focus_follows_mouse = 1` 时通常也会跟随 hover 触发 relayout
-- `hover_relayout_animation`、`hover_relayout_duration`、`hover_relayout_curve`、`hover_expand_scale` 只影响 `expand_selected_window` 的 selected-preview hover relayout，不影响 overview 打开/关闭动画、workspace transition 或 bar handoff
+- `selected_expand_scale` 控制当前选中 preview 的放大；`hover_expand_scale` 仅在 `overview_focus_follows_mouse = 0` 时控制独立悬停放大，两者限制在 `1.0` 到 `2.0`，`1.0` 关闭对应放大。同一 preview 同时选中和悬停时取较大值，不叠乘。仅悬停放大使用 `selected_expand_scale = 1.0`、`hover_expand_scale = 1.25`、`overview_focus_follows_mouse = 0`
+- `expand_selected_window` 仅保留为兼容配置名，值被忽略；显式设置时显示迁移提示。thumbnail 布局和单窗口 overview 不放大 preview；其他布局的实际倍率受可用空间、间距及碰撞约束限制
+- `hover_relayout_animation`、`hover_relayout_duration`、`hover_relayout_curve` 控制选中及悬停放大的 relayout 动画，不影响 overview 打开/关闭动画、workspace transition 或 bar handoff
 - `hover_relayout_animation` 为空时使用 `hover_relayout_duration` / `hover_relayout_curve`；非空且匹配 Hyprland animation tree leaf 时，selected-preview hover relayout 使用该 leaf 的 Hyprland 原生动画配置，包括 bezier 或 spring 曲线
 - `hover_relayout_curve` 在 fallback 模式下优先匹配 Hyprland 已注册 bezier 名称；匹配不到时再按 hymission 内置 fallback 曲线解析
 - `overview_focus_follows_mouse` 控制 overview 内部选中项是否跟随鼠标，以及在允许时是否把当前选中项实时同步到真实 focus；当 overview 打开前 `input:follow_mouse = 0` 时，它退化为“只改 overview 内部选中项 + 退出时提交”

@@ -789,8 +789,15 @@ std::vector<WindowExpansionTarget> resolveWindowExpansionTargets(std::optional<s
     if (selectedIndex)
         targets.push_back({.index = *selectedIndex, .scale = std::max(1.0, selectedExpandScale)});
 
-    if (!overviewFocusFollowsMouse && hoveredIndex && hoveredIndex != selectedIndex)
-        targets.push_back({.index = *hoveredIndex, .scale = std::max(1.0, hoverExpandScale)});
+    if (!overviewFocusFollowsMouse && hoveredIndex) {
+        // A selected preview is still hoverable when selected expansion is
+        // disabled. Merge the two effects instead of dropping hover or stacking
+        // scales, and retain the selected target at scale 1 to reset on leave.
+        if (hoveredIndex == selectedIndex)
+            targets.front().scale = std::max(targets.front().scale, hoverExpandScale);
+        else
+            targets.push_back({.index = *hoveredIndex, .scale = std::max(1.0, hoverExpandScale)});
+    }
 
     return targets;
 }

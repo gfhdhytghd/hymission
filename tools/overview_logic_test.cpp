@@ -173,8 +173,31 @@ int main() {
                      "independent hover should expand selected and hovered windows separately");
 
         const auto sameWindow = resolveWindowExpansionTargets(1, 1, false, 1.25, 1.5);
-        ok &= expect(sameWindow.size() == 1 && sameWindow[0].index == 1 && closeEnough(sameWindow[0].scale, 1.25),
-                     "the same selected and hovered window should use selected expansion without stacking scales");
+        ok &= expect(sameWindow.size() == 1 && sameWindow[0].index == 1 && closeEnough(sameWindow[0].scale, 1.5),
+                     "the same selected and hovered window should use the larger expansion without stacking scales");
+
+        // Issue #29: selection must not suppress hover-only expansion. Check
+        // both modes, disabled expansion, and the reporter's requested scales.
+        for (const bool follows : {false, true}) {
+            for (const double selectedScale : {1.0, 1.25}) {
+                for (const double hoverScale : {1.0, 1.1, 1.25, 2.0}) {
+                    const auto opened = resolveWindowExpansionTargets(1, std::nullopt, follows, selectedScale, hoverScale);
+                    ok &= expect(opened.size() == 1 && opened[0].index == 1 && closeEnough(opened[0].scale, selectedScale),
+                                 "opening without hover should only apply the selected scale");
+                    const auto hoveredSelection = resolveWindowExpansionTargets(1, 1, follows, selectedScale, hoverScale);
+                    ok &= expect(hoveredSelection.size() == 1 && hoveredSelection[0].index == 1 &&
+                                     closeEnough(hoveredSelection[0].scale, follows ? selectedScale : std::max(selectedScale, hoverScale)),
+                                 "hovering the selected window should honor independent hover without multiplying scales");
+                    const auto hoveredOther = resolveWindowExpansionTargets(1, 2, follows, selectedScale, hoverScale);
+                    ok &= expect(hoveredOther.size() == (follows ? 1U : 2U) && hoveredOther[0].index == 1 &&
+                                     closeEnough(hoveredOther[0].scale, selectedScale) &&
+                                     (follows || (hoveredOther[1].index == 2 && closeEnough(hoveredOther[1].scale, hoverScale))),
+                                 "moving hover to another window should restore the selected scale and apply the hover scale");
+                }
+            }
+        }
+        ok &= expect(resolveWindowExpansionTargets(std::nullopt, std::nullopt, false, 1.0, 1.25).empty(),
+                     "no selection or hover should produce no expansion targets");
 
         const auto hoverOnly = resolveWindowExpansionTargets(std::nullopt, 2, false, 1.25, 1.5);
         ok &= expect(hoverOnly.size() == 1 && hoverOnly[0].index == 2 && closeEnough(hoverOnly[0].scale, 1.5),

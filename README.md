@@ -453,9 +453,41 @@ overview-to-overview transition path.
 | --- | --- | --- | --- |
 | `selected_expand_scale` | float | `1.18` | Selected-preview scale multiplier. Values are clamped to `1.0` - `2.0`; `1.0` disables selected expansion, and layout bounds may cap the visible result. |
 | `hover_expand_scale` | float | `1.18` | Independently hovered-preview scale multiplier when `overview_focus_follows_mouse = 0`. Values are clamped to `1.0` - `2.0`; `1.0` disables hover expansion. It is ignored when focus follows the mouse. |
-| `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover and sync real focus when allowed. When enabled, hover uses `selected_expand_scale` through the updated selection and `hover_expand_scale` is ignored. When disabled, different selected and hovered previews may be enlarged at the same time. |
+| `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover and sync real focus when allowed. When enabled, hover uses `selected_expand_scale` through the updated selection and `hover_expand_scale` is ignored. When disabled, different selected and hovered previews may be enlarged at the same time; if both refer to the same preview, the larger scale wins (scales do not multiply). |
 | `expand_selected_window` | bool | `0` | Deprecated compatibility key. It is accepted to avoid a config error but ignored, and an on-screen migration notice asks the user to switch to `selected_expand_scale` / `hover_expand_scale`. |
 | `show_focus_indicator` | bool | `0` | Render selected and hovered preview focus chrome. |
+
+To enlarge only the hovered preview, without giving the previously focused
+window a persistent size bonus, set these values inside your existing
+`plugin.hymission` table passed to `hl.config`:
+
+```lua
+selected_expand_scale = 1.0,
+hover_expand_scale = 1.25,
+overview_focus_follows_mouse = 0,
+```
+
+This keeps selection independent of hover: the selected window also enlarges
+while hovered and returns to its base scale when the pointer leaves. Keyboard
+selection remains available, but hover no longer changes selection or real
+focus. A window already under the pointer when overview opens can still enlarge
+because it is hovered.
+
+| `overview_focus_follows_mouse` | `selected_expand_scale` | `hover_expand_scale` | Result |
+| --- | --- | --- | --- |
+| `0` | `1.0` | `1.25` | Hover expansion only, including over the selected window. |
+| `0` | `1.25` | `1.0` | Selected expansion only. |
+| `0` | `1.0` | `1.0` | Neither selected nor hovered expansion. |
+| `0` | `1.25` | `1.5` | Independent expansion; the same preview uses `1.5`. |
+| `1` | `1.0` | `1.25` | No expansion; the hover scale is ignored in this mode. |
+| `1` | `1.25` | `1.0` | Selection follows hover and uses `1.25`. |
+
+Remove the deprecated `expand_selected_window` key when migrating: setting it
+to either `0` or `1` does not override either scale. These effects apply to grid
+and natural layouts, not the thumbnail layout. The requested multiplier is
+limited by available space, spacing and collision constraints; `2.0` can therefore
+look the same as a smaller value in a crowded layout. A single-window overview
+does not expand its preview.
 
 While overview is visible, vertical mouse-wheel input cycles the selected
 window in overview order: scrolling down selects the next window and scrolling
