@@ -94,6 +94,14 @@ bool coversStrip(CoverMode mode, bool maximizeCover) {
     return mode == CoverMode::Fullscreen || (mode == CoverMode::Maximized && maximizeCover);
 }
 
+PreviewLayer previewLayer(bool workspaceFullscreen, bool fullscreen, bool floating, bool allowedOverFullscreen) {
+    if (fullscreen)
+        return PreviewLayer::Fullscreen;
+    if (workspaceFullscreen && !(floating && allowedOverFullscreen))
+        return PreviewLayer::Hidden;
+    return floating ? PreviewLayer::Floating : PreviewLayer::Tiled;
+}
+
 std::vector<WindowSlot> arrangeWindows(const std::vector<WindowInput>& windows, const Geometry& g, const Rect& desktop) {
     std::vector<WindowSlot> slots;
     if (desktop.width <= 0 || desktop.height <= 0 || g.cardWidth <= 0 || g.cardHeight <= 0)

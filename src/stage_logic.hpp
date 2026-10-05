@@ -62,4 +62,8 @@ Rect desktopArea(const Rect& base, const Geometry& geometry, bool right);
 enum class CoverMode { None, Maximized, Fullscreen };
 bool coversStrip(CoverMode mode, bool maximizeCover);
 
+// Native window-list order is only meaningful within each rendering layer.
+enum class PreviewLayer { Hidden, Tiled, Fullscreen, Floating };
+PreviewLayer previewLayer(bool workspaceFullscreen, bool fullscreen, bool floating, bool allowedOverFullscreen);
+
 } // namespace hymission::stage
