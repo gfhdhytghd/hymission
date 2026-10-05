@@ -158,6 +158,28 @@ struct WindowExpansionTarget {
     double      scale = 1.0;
 };
 
+// Per physical gesture, not per workspace transition. A committed distance
+// must not be reused by the next input sample when workspace_swipe_forever is on.
+struct WorkspaceSwipeProgress {
+    double delta = 0.0;
+    double absoluteOffset = 0.0;
+    bool   createdWorkspace = false;
+
+    [[nodiscard]] double nextDelta(double input, bool absolute) const {
+        return absolute ? input - absoluteOffset : delta + input;
+    }
+
+    [[nodiscard]] bool allowsTarget(bool syntheticEmpty) const {
+        return !syntheticEmpty || !createdWorkspace;
+    }
+
+    void committed(bool syntheticEmpty) {
+        absoluteOffset += delta;
+        delta = 0.0;
+        createdWorkspace = createdWorkspace || syntheticEmpty;
+    }
+};
+
 [[nodiscard]] std::optional<std::size_t> hitTest(const std::vector<Rect>& rects, double x, double y);
 [[nodiscard]] std::optional<std::size_t> chooseDirectionalNeighbor(const std::vector<Rect>& rects, std::size_t currentIndex, Direction direction);
 [[nodiscard]] std::optional<std::size_t> chooseCyclicIndex(std::size_t count, std::size_t currentIndex, int step = 1);

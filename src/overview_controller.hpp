@@ -457,7 +457,7 @@ class OverviewController {
         bool                      active = false;
         PHLMONITOR                monitor;
         eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_NONE;
-        double                    gestureDelta = 0.0;
+        WorkspaceSwipeProgress    progress;
         bool                      touchActive = false;
         int32_t                   touchId = 0;
         bool                      touchVertical = false;

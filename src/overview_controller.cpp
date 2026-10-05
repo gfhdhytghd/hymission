@@ -4629,7 +4629,7 @@ bool OverviewController::handleTouchDown(const ITouch::SDownEvent& event) {
     m_workspaceSwipeGesture.touchId = event.touchID;
     m_workspaceSwipeGesture.touchVertical = vertical;
     m_workspaceSwipeGesture.touchFromHighEdge = primary > 0.5;
-    m_workspaceSwipeGesture.gestureDelta = 0.0;
+    m_workspaceSwipeGesture.progress.delta = 0.0;
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
@@ -6634,6 +6634,11 @@ bool OverviewController::startOverviewWorkspaceTransitionByStep(const PHLMONITOR
     if (!resolveOverviewWorkspaceTargetByStep(monitor, step, targetId, targetName, targetWorkspace, syntheticEmpty))
         return false;
 
+    // A long swipe may traverse existing workspaces, but may create at most
+    // one new workspace until the fingers are lifted and a new gesture begins.
+    if (m_workspaceSwipeGesture.active && !m_workspaceSwipeGesture.progress.allowsTarget(syntheticEmpty))
+        return false;
+
     if (!beginOverviewWorkspaceTransition(monitor, targetId, std::move(targetName), targetWorkspace, syntheticEmpty, mode))
         return false;
 
@@ -6655,9 +6660,9 @@ void OverviewController::updateOverviewWorkspaceSwipeGestureAdjusted(double delt
     if (!m_workspaceSwipeGesture.active || !m_workspaceSwipeGesture.monitor)
         return;
 
-    const double candidateTotal = absolute ? delta : m_workspaceSwipeGesture.gestureDelta + delta;
+    const double candidateTotal = m_workspaceSwipeGesture.progress.nextDelta(delta, absolute);
     if (std::abs(candidateTotal) < 0.0001) {
-        m_workspaceSwipeGesture.gestureDelta = 0.0;
+        m_workspaceSwipeGesture.progress.delta = 0.0;
         if (m_workspaceTransition.active) {
             m_workspaceTransition.delta = 0.0;
             damageOwnedMonitors();
@@ -6684,7 +6689,7 @@ void OverviewController::updateOverviewWorkspaceSwipeGestureAdjusted(double delt
     nextGestureDelta = std::clamp(nextGestureDelta, -gestureDistance, gestureDistance);
 
     const double previousDelta = m_workspaceTransition.delta;
-    m_workspaceSwipeGesture.gestureDelta = nextGestureDelta;
+    m_workspaceSwipeGesture.progress.delta = nextGestureDelta;
     m_workspaceTransition.delta = (nextGestureDelta / gestureDistance) * m_workspaceTransition.distance;
     const double deltaStep = std::abs(previousDelta - m_workspaceTransition.delta);
     m_workspaceTransition.avgSpeed = (m_workspaceTransition.avgSpeed * static_cast<double>(m_workspaceTransition.speedPoints) + deltaStep) /
@@ -6693,19 +6698,19 @@ void OverviewController::updateOverviewWorkspaceSwipeGestureAdjusted(double delt
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
-        out << "[hymission] overview workspace swipe update gestureDelta=" << m_workspaceSwipeGesture.gestureDelta
+        out << "[hymission] overview workspace swipe update gestureDelta=" << m_workspaceSwipeGesture.progress.delta
             << " visualDelta=" << m_workspaceTransition.delta << " avgSpeed=" << m_workspaceTransition.avgSpeed << " step=" << m_workspaceTransition.step;
         debugLog(out.str());
     }
 
     damageOwnedMonitors();
 
-    if (gestureSwipeForeverEnabled() && std::abs(m_workspaceSwipeGesture.gestureDelta) >= gestureDistance - 0.5)
+    if (gestureSwipeForeverEnabled() && std::abs(m_workspaceSwipeGesture.progress.delta) >= gestureDistance - 0.5)
         requestOverviewWorkspaceTransitionCommit(true);
 }
 
 void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
-    const double gestureDelta = m_workspaceSwipeGesture.gestureDelta;
+    const double gestureDelta = m_workspaceSwipeGesture.progress.delta;
     const bool touchActive = m_workspaceSwipeGesture.touchActive;
     m_workspaceSwipeGesture = {};
 
@@ -6836,6 +6841,9 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         damageOwnedMonitors();
         return;
     }
+
+    if (followGesture && m_workspaceSwipeGesture.active)
+        m_workspaceSwipeGesture.progress.committed(targetWorkspaceSyntheticEmpty);
 
     const bool temporarilyDisabledAnimations = !m_animationsEnabledOverridden;
     if (temporarilyDisabledAnimations)

@@ -261,6 +261,7 @@ Gesture notes:
 - `recommand` is gesture-only and is only valid with `hymission:toggle`
 - scrolling layout movement supports both `hymission:scroll,layout` and Hyprland's official `scrollMove` / Lua `scroll_move`
 - workspace swipes should use `hl.plugin.hymission.gesture({ ..., action = "workspace" })`; Hymission already intercepts that path while overview is visible
+- with `gestures:workspace_swipe_forever` enabled, each overview workspace transition consumes its swipe distance; one physical gesture can create at most one new empty workspace, even past the final workspace. Lift and swipe again to create another. Existing workspaces remain navigable; `gestures:workspace_swipe_create_new = 0` disables creation and retains native target/wrap selection
 - in `recommand` mode, one side opens `forceall` and the other side opens `onlycurrentworkspace`
 - switching from one visible `recommand` side to the other only works in the side-changing direction; it must pass through hidden state and then cross a small transfer gap before the opposite side starts opening
 - swiping the other visible `recommand` direction only exits overview back to hidden and does not continue into the opposite side

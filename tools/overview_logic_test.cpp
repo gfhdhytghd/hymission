@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdlib>
 #include <cmath>
 #include <iostream>
@@ -71,6 +72,47 @@ int main() {
         !expectRect(scaleBarProxyRect({0, 0, 100, 40}, {0, 0, 100, 40}, std::nullopt, 0, 0.5),
                     {25, 10, 50, 20}, "unknown bar edge must fall back to centered scaling"))
         return EXIT_FAILURE;
+
+    // Issue #47: a completed swipe must not turn each remaining input sample
+    // into another workspace commit. Limit creation even on a very long swipe.
+    {
+        WorkspaceSwipeProgress swipe;
+        bool swipeOk = true;
+        swipe.delta = 300.0;
+        swipe.committed(false);
+        swipeOk &= expect(closeEnough(swipe.nextDelta(1.0, false), 1.0),
+                          "committing an existing workspace consumes the gesture distance");
+        swipeOk &= expect(swipe.allowsTarget(true), "existing transitions must not consume the creation allowance");
+        int created = 0;
+        for (int sample = 0; sample < 10000; ++sample) {
+            if (!swipe.allowsTarget(true))
+                continue;
+            swipe.delta = std::min(300.0, swipe.nextDelta(10.0, false));
+            if (swipe.delta >= 299.5) {
+                ++created;
+                swipe.committed(true);
+            }
+        }
+        swipeOk &= expect(created == 1, "one gesture may create at most one empty workspace");
+        swipeOk &= expect(swipe.allowsTarget(false), "creation limit must still allow returning to existing workspaces");
+        swipe.delta = -300.0;
+        swipe.committed(false);
+        swipeOk &= expect(closeEnough(swipe.nextDelta(-1.0, false), -1.0) && !swipe.allowsTarget(true),
+                          "reverse commits consume distance without restoring the creation allowance");
+        swipe = {};
+        swipeOk &= expect(swipe.allowsTarget(true) && closeEnough(swipe.delta, 0.0),
+                          "a fresh gesture resets the creation allowance and distance");
+        swipe.delta = 299.5;
+        swipe.committed(false);
+        swipeOk &= expect(closeEnough(swipe.nextDelta(300.0, true), 0.5),
+                          "absolute unified/touch input must subtract the committed distance too");
+        swipe.delta = -299.5;
+        swipe.committed(false);
+        swipeOk &= expect(closeEnough(swipe.nextDelta(-1.0, true), -1.0),
+                          "absolute unified/touch offsets must support direction reversal");
+        if (!swipeOk)
+            return EXIT_FAILURE;
+    }
 
     // Repro #44: an inactive workspace preview must not be admitted by native
     // animation visibility after the preview transform has been removed.
