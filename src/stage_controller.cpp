@@ -12,6 +12,13 @@
 #include <vector>
 #include <linux/input-event-codes.h>
 
+// Collect only the passes appended by a window render. Avoid hooking
+// CRenderPass::add, which other plugins (including Viewflow) also intercept.
+#include <hyprland/src/render/pass/PassElement.hpp>
+#define private public
+#include <hyprland/src/render/pass/Pass.hpp>
+#undef private
+
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/animation/WorkspaceAnimationController.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
@@ -314,14 +321,11 @@ struct StageController::Impl {
     CFunctionHook* workspaceAnimationHook = nullptr;
     CFunctionHook* changeWorkspaceHook = nullptr;
     CFunctionHook* blurFramebufferHook = nullptr;
-    CFunctionHook* passAddHook = nullptr;
     CFunctionHook* fadeoutsHook = nullptr;
     using BlurFramebufferFn = SP<Render::ITexture> (*)(Render::IHyprRenderer*, float, CRegion*);
-    using PassAddFn = void (*)(Render::CRenderPass*, UP<IPassElement>&&);
     using FadeoutsFn = void (*)(Render::IHyprRenderer*, PHLMONITOR, Desktop::eFadeoutPlane, PHLWORKSPACE);
     StageEdgeEffect edgeEffect;
-    StageWindowPassElement::Elements* capturedWindowPasses = nullptr;
-    Render::CRenderPass* capturedPass = nullptr;
+    bool capturingWindowPasses = false;
     SwipeBeginFn swipeBeginOriginal = nullptr;
     bool drawingDecoration = false;
     float decorationRadius = 0;
@@ -558,7 +562,7 @@ struct StageController::Impl {
                 (self->dragHover && self->dragHover->window == window)))
             return;
         const auto original = reinterpret_cast<RenderWindowFn>(self->renderWindowHook->m_original);
-        if (!standalone && !ignorePosition && !self->rendering && !self->capturedWindowPasses && !renderer->m_bRenderingSnapshot &&
+        if (!standalone && !ignorePosition && !self->rendering && !self->capturingWindowPasses && !renderer->m_bRenderingSnapshot &&
             self->enabled && !self->blocked() && screen && screen->geometry.enabled() && !screen->covered && !screen->suspended &&
             !monitor->m_activeSpecialWorkspace && scrollingTiled(window)) {
             self->captureWindowPasses(renderer, monitor, self->desktopViewport(*screen), [&] {
@@ -568,19 +572,11 @@ struct StageController::Impl {
         }
         original(renderer, window, monitor, time, decorate, mode, ignorePosition, standalone);
     }
-    static void passAddThunk(Render::CRenderPass* pass, UP<IPassElement>&& element) {
-        auto* self = instance;
-        if (self->capturedWindowPasses && pass == self->capturedPass) {
-            self->capturedWindowPasses->push_back(std::move(element));
-            return;
-        }
-        reinterpret_cast<PassAddFn>(self->passAddHook->m_original)(pass, std::move(element));
-    }
     static void fadeoutsThunk(Render::IHyprRenderer* renderer, PHLMONITOR monitor, Desktop::eFadeoutPlane plane, PHLWORKSPACE workspace) {
         auto* self = instance;
         const auto original = reinterpret_cast<FadeoutsFn>(self->fadeoutsHook->m_original);
         const auto* screen = self->visualScreenFor(monitor);
-        if (plane == Desktop::FADEOUT_PLANE_WINDOW_TILED && scrollingWorkspace(workspace) && !self->rendering && !self->capturedWindowPasses &&
+        if (plane == Desktop::FADEOUT_PLANE_WINDOW_TILED && scrollingWorkspace(workspace) && !self->rendering && !self->capturingWindowPasses &&
             !renderer->m_bRenderingSnapshot && self->enabled && !self->blocked() && screen && screen->geometry.enabled() &&
             !screen->covered && !screen->suspended && !monitor->m_activeSpecialWorkspace) {
             self->captureWindowPasses(renderer, monitor, self->desktopViewport(*screen), [&] { original(renderer, monitor, plane, workspace); });
@@ -979,15 +975,12 @@ bool StageController::Impl::installHooks() {
     const auto surfaceVisible = find("visibleRegion", "CSurfacePassElement::visibleRegion(bool&)");
     const auto surfaceUV = find("calculateUVForSurface", "IElementRenderer::calculateUVForSurface(");
     const auto addPass = find("addPassElement", "IHyprRenderer::addPassElement(");
-    // Search the mangled class/member name: a generic "add" lookup also
-    // matches unrelated symbols and can misalign Hyprland's demangled results.
-    const auto passAdd = find("CRenderPass3add", "Render::CRenderPass::add(");
     const auto fadeouts = find("renderFadeouts", "IHyprRenderer::renderFadeouts(");
     const auto workspaceAnimation = find("startAnimation", "Animation::Workspace::startAnimation(");
     const auto changeWorkspace = find("changeWorkspace", "Monitor::CMonitor::changeWorkspace(Hyprutils::Memory::CSharedPointer<CWorkspace> const&");
     renderWindow = reinterpret_cast<RenderWindowFn>(find("renderWindow", "IHyprRenderer::renderWindow("));
     shouldBlur = reinterpret_cast<ShouldBlurFn>(find("shouldBlur", "IHyprRenderer::shouldBlur(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>)"));
-    if (area && drag && hit && rounding && surfaceBox && surfaceVisible && surfaceUV && addPass && passAdd && fadeouts && workspaceAnimation && changeWorkspace && renderWindow && shouldBlur && g_pHyprOpenGL) {
+    if (area && drag && hit && rounding && surfaceBox && surfaceVisible && surfaceUV && addPass && fadeouts && workspaceAnimation && changeWorkspace && renderWindow && shouldBlur && g_pHyprOpenGL) {
         areaHook = HyprlandAPI::createFunctionHook(handle, area, reinterpret_cast<void*>(&recheckThunk));
         dragHook = HyprlandAPI::createFunctionHook(handle, drag, reinterpret_cast<void*>(&dragThunk));
         hitHook = HyprlandAPI::createFunctionHook(handle, hit, reinterpret_cast<void*>(&windowAtThunk));
@@ -997,14 +990,13 @@ bool StageController::Impl::installHooks() {
         surfaceVisibleHook = HyprlandAPI::createFunctionHook(handle, surfaceVisible, reinterpret_cast<void*>(&surfaceVisibleThunk));
         surfaceUVHook = HyprlandAPI::createFunctionHook(handle, surfaceUV, reinterpret_cast<void*>(&surfaceUVThunk));
         addPassHook = HyprlandAPI::createFunctionHook(handle, addPass, reinterpret_cast<void*>(&addPassThunk));
-        passAddHook = HyprlandAPI::createFunctionHook(handle, passAdd, reinterpret_cast<void*>(&passAddThunk));
         fadeoutsHook = HyprlandAPI::createFunctionHook(handle, fadeouts, reinterpret_cast<void*>(&fadeoutsThunk));
         workspaceAnimationHook = HyprlandAPI::createFunctionHook(handle, workspaceAnimation, reinterpret_cast<void*>(&workspaceAnimationThunk));
         changeWorkspaceHook = HyprlandAPI::createFunctionHook(handle, changeWorkspace, reinterpret_cast<void*>(&changeWorkspaceThunk));
         hooksReady = attach(areaHook, "work area") && attach(dragHook, "drag end") && attach(hitHook, "window hit test") &&
             attach(roundingHook, "rounding") && attach(renderWindowHook, "window rendering") &&
             (overviewRendering || (attach(surfaceBoxHook, "surface box") && attach(surfaceVisibleHook, "surface visible region") && attach(surfaceUVHook, "surface UV"))) &&
-            attach(addPassHook, "decoration pass") && attach(passAddHook, "window pass collection") && attach(fadeoutsHook, "fading window clipping") &&
+            attach(addPassHook, "decoration pass") && attach(fadeoutsHook, "fading window clipping") &&
             attach(workspaceAnimationHook, "workspace animation") && attach(changeWorkspaceHook, "workspace change");
         if (hooksReady)
             renderWindow = reinterpret_cast<RenderWindowFn>(renderWindowHook->m_original);
@@ -1037,7 +1029,7 @@ bool StageController::Impl::installHooks() {
 
 void StageController::Impl::releaseHooks() {
     for (auto** hook : {&areaHook, &dragHook, &hitHook, &roundingHook, &renderWindowHook, &surfaceBoxHook, &surfaceVisibleHook, &surfaceUVHook, &addPassHook,
-                        &workspaceAnimationHook, &changeWorkspaceHook, &blurFramebufferHook, &passAddHook, &fadeoutsHook}) {
+                        &workspaceAnimationHook, &changeWorkspaceHook, &blurFramebufferHook, &fadeoutsHook}) {
         if (!*hook)
             continue;
         (*hook)->unhook();
@@ -2436,12 +2428,19 @@ void StageController::Impl::retargetFlight(Flight& flight, double progress, cons
 void StageController::Impl::captureWindowPasses(Render::IHyprRenderer* renderer, const PHLMONITOR& monitor,
                                                const stage::EdgeViewport& viewport, const std::function<void()>& render) {
     StageWindowPassElement::Elements elements;
-    capturedWindowPasses = &elements;
-    capturedPass = &renderer->currentPass();
+    auto& passes = renderer->currentPass().m_passElements;
+    const auto first = passes.size();
+    capturingWindowPasses = true;
     {
-        Hyprutils::Utils::CScopeGuard reset{[&] { capturedWindowPasses = nullptr; capturedPass = nullptr; }};
+        Hyprutils::Utils::CScopeGuard reset{[&] { capturingWindowPasses = false; }};
         render();
     }
+    // Keep earlier desktop passes in place and preserve the native ordering of
+    // every surface/decoration appended by this render, including direct adds.
+    elements.reserve(passes.size() - first);
+    for (size_t i = first; i < passes.size(); ++i)
+        elements.push_back(std::move(passes[i].element));
+    passes.resize(first);
     if (elements.empty())
         return;
     const PHLMONITORREF ref = monitor;
