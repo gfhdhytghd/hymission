@@ -979,7 +979,9 @@ bool StageController::Impl::installHooks() {
     const auto surfaceVisible = find("visibleRegion", "CSurfacePassElement::visibleRegion(bool&)");
     const auto surfaceUV = find("calculateUVForSurface", "IElementRenderer::calculateUVForSurface(");
     const auto addPass = find("addPassElement", "IHyprRenderer::addPassElement(");
-    const auto passAdd = find("add", "Render::CRenderPass::add(");
+    // Search the mangled class/member name: a generic "add" lookup also
+    // matches unrelated symbols and can misalign Hyprland's demangled results.
+    const auto passAdd = find("CRenderPass3add", "Render::CRenderPass::add(");
     const auto fadeouts = find("renderFadeouts", "IHyprRenderer::renderFadeouts(");
     const auto workspaceAnimation = find("startAnimation", "Animation::Workspace::startAnimation(");
     const auto changeWorkspace = find("changeWorkspace", "Monitor::CMonitor::changeWorkspace(Hyprutils::Memory::CSharedPointer<CWorkspace> const&");
