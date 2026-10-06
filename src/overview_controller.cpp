@@ -6493,6 +6493,9 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
     if (!monitor || !isVisible() || m_state.phase != Phase::Active)
         return false;
 
+    if (syntheticEmpty && !canCreateOverviewWorkspace(monitor))
+        return false;
+
     if (m_state.relayoutActive) {
         for (auto& managed : m_state.windows) {
             managed.targetGlobal = currentPreviewRect(managed);
@@ -6621,6 +6624,18 @@ bool OverviewController::beginExternalOverviewWorkspaceTransition(const PHLWORKS
 
     damageOwnedMonitors();
     return true;
+}
+
+bool OverviewController::canCreateOverviewWorkspace(const PHLMONITOR& monitor) const {
+    if (!m_state.collectionPolicy.onlyActiveWorkspace)
+        return true;
+
+    // Do not extend an empty edge workspace again, even after lifting the
+    // fingers or reopening overview. Hidden group members still count as
+    // content; pinned windows follow the user and do not populate a workspace.
+    return monitor && monitor->m_activeWorkspace && std::ranges::any_of(Desktop::viewState()->windows(), [&](const auto& window) {
+        return window && window->m_isMapped && !window->m_pinned && window->m_workspace == monitor->m_activeWorkspace;
+    });
 }
 
 bool OverviewController::startOverviewWorkspaceTransitionByStep(const PHLMONITOR& monitor, int step, WorkspaceTransitionMode mode) {
@@ -6834,6 +6849,12 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
 
     auto targetWorkspace = ::State::workspaceState()->query().id(targetWorkspaceId).run();
     if (!targetWorkspace && targetWorkspaceSyntheticEmpty) {
+        // Recheck live content: windows may close or move during the gesture.
+        if (!canCreateOverviewWorkspace(transitionMonitor)) {
+            clearOverviewWorkspaceTransition();
+            damageOwnedMonitors();
+            return;
+        }
         targetWorkspace = ::State::workspaceState()->create(targetWorkspaceId, transitionMonitor->m_id, targetWorkspaceName);
     }
     if (!targetWorkspace) {

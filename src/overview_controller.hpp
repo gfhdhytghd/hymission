@@ -680,6 +680,7 @@ class OverviewController {
                                                                bool syntheticEmpty, WorkspaceTransitionMode mode);
     [[nodiscard]] bool         beginExternalOverviewWorkspaceTransition(const PHLWORKSPACE& workspace);
     [[nodiscard]] bool         startOverviewWorkspaceTransitionByStep(const PHLMONITOR& monitor, int step, WorkspaceTransitionMode mode);
+    [[nodiscard]] bool         canCreateOverviewWorkspace(const PHLMONITOR& monitor) const;
     void                       updateOverviewWorkspaceTransition();
     void                       requestOverviewWorkspaceTransitionCommit(bool followGesture = false);
     void                       commitOverviewWorkspaceTransition(bool followGesture = false);
