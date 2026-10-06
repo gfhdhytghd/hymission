@@ -434,6 +434,7 @@ struct StageController::Impl {
     bool interactive(const Screen& screen) const;
     bool ownsTransition(const PHLWORKSPACE& workspace, bool allowCovered = false) const;
     Screen* screenFor(const PHLMONITOR& monitor);
+    std::vector<Card> cardsForWorkspace(const PHLMONITOR& monitor, const PHLWORKSPACE& activeWorkspace) const;
     std::pair<Screen*, std::optional<std::size_t>> hit(const Vector2D& point);
     void pointer();
     void updateDragHover();
@@ -487,7 +488,13 @@ struct StageController::Impl {
             if (auto* screen = self->screenFor(workspace->m_monitor.lock()))
                 screen->revealFromBottom = left;
         }
-        const bool owned = settlingSwipe || self->ownsTransition(workspace);
+        const auto monitor = workspace ? workspace->m_monitor.lock() : PHLMONITOR{};
+        const auto* screen = self->screenFor(monitor);
+        // Overview owns window motion while Stage is suspended. Its exit now
+        // lands directly in Stage cards; a native slide must not run underneath.
+        const bool overviewOwnsMotion = self->enabled && workspace && !workspace->m_isSpecialWorkspace && screen && screen->geometry.enabled() &&
+            self->overviewProgress && self->overviewProgress(monitor).has_value();
+        const bool owned = settlingSwipe || overviewOwnsMotion || self->ownsTransition(workspace);
         reinterpret_cast<WorkspaceAnimationFn>(self->workspaceAnimationHook->m_original)(workspace, type, left, instant || owned, std::move(style));
         if (owned)
             workspace->m_renderOffset->setValueAndWarp(Vector2D{});
@@ -1140,6 +1147,47 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
         request();
 }
 
+std::vector<StageController::Impl::Card> StageController::Impl::cardsForWorkspace(const PHLMONITOR& monitor, const PHLWORKSPACE& activeWorkspace) const {
+    const auto workspaces = State::workspaceState()->workspacesCopy();
+    const bool showEmpty = setting("stage_show_empty", 1) != 0;
+    std::vector<Card> targets;
+    for (const auto& workspace : workspaces) {
+        if (workspace->m_isSpecialWorkspace || workspace->m_monitor != monitor)
+            continue;
+        if (setting("stage_show_active", 0) == 0 && workspace == activeWorkspace)
+            continue;
+        if (!showEmpty && workspace->getWindowCount(std::nullopt, false) == 0)
+            continue;
+        targets.emplace_back(Card{.workspace = workspace});
+    }
+    if (const long emptySlots = setting("stage_empty_slots", 0); emptySlots > 0) {
+        WORKSPACEID highest = 0;
+        for (const auto& card : targets) {
+            if (card.workspace.lock() && cardID(card) > highest)
+                highest = cardID(card);
+        }
+        const WORKSPACEID last = std::max<WORKSPACEID>(highest, static_cast<WORKSPACEID>(emptySlots));
+        for (WORKSPACEID id = 1; id <= last; ++id) {
+            if (std::ranges::any_of(targets, [&](const Card& card) { return cardID(card) == id; }))
+                continue;
+            // Never synthesize a slot for an id owned by another monitor.
+            if (std::ranges::any_of(workspaces, [&](const auto& workspace) {
+                    return workspace && !workspace->m_isSpecialWorkspace && workspace->m_id == id && workspace->m_monitor != monitor;
+                }))
+                continue;
+            targets.emplace_back(Card{.syntheticId = id});
+        }
+    }
+    std::ranges::sort(targets, [](const Card& a, const Card& b) {
+        const auto ida = cardID(a), idb = cardID(b);
+        if ((ida > 0) != (idb > 0))
+            return ida > 0;
+        return ida > 0 ? ida < idb :
+            (a.workspace.lock() && b.workspace.lock() && a.workspace.lock()->m_name < b.workspace.lock()->m_name);
+    });
+    return targets;
+}
+
 void StageController::Impl::sync() {
     if (syncing || shuttingDown)
         return;
@@ -1206,7 +1254,6 @@ void StageController::Impl::sync() {
     if (changedMode)
         clearSwipe();
     smartisan = nextSmartisan;
-    const bool showEmpty = setting("stage_show_empty", 1) != 0;
     auto* drag = g_layoutManager->dragController().get();
     const auto dragged = drag && drag->mode() == MBIND_MOVE && drag->target() ? drag->target()->window() : nullptr;
     if (dragged != lastDragged) {
@@ -1218,7 +1265,6 @@ void StageController::Impl::sync() {
         const auto monitor = screen.monitor.lock();
         return !monitor || std::ranges::find(State::monitorState()->monitors(), monitor) == State::monitorState()->monitors().end();
     });
-    const auto workspaces = State::workspaceState()->workspacesCopy();
     std::vector<PHLMONITOR> relayout;
     struct PendingFlight {
         PHLMONITOR monitor;
@@ -1267,41 +1313,7 @@ void StageController::Impl::sync() {
         screen->scale = monitor->m_scale;
         screen->transform = static_cast<int>(monitor->m_transform);
 
-        std::vector<Card> targets;
-        for (const auto& workspace : workspaces) {
-            if (workspace->m_isSpecialWorkspace || workspace->m_monitor != monitor)
-                continue;
-            if (setting("stage_show_active", 0) == 0 && workspace == monitor->m_activeWorkspace)
-                continue;
-            if (!showEmpty && workspace->getWindowCount(std::nullopt, false) == 0)
-                continue;
-            targets.emplace_back(Card{.workspace = workspace});
-        }
-        if (const long emptySlots = setting("stage_empty_slots", 0); emptySlots > 0) {
-            WORKSPACEID highest = 0;
-            for (const auto& card : targets) {
-                if (card.workspace.lock() && cardID(card) > highest)
-                    highest = cardID(card);
-            }
-            const WORKSPACEID last = std::max<WORKSPACEID>(highest, static_cast<WORKSPACEID>(emptySlots));
-            for (WORKSPACEID id = 1; id <= last; ++id) {
-                if (std::ranges::any_of(targets, [&](const Card& card) { return cardID(card) == id; }))
-                    continue;
-                // Never synthesize a slot for an id owned by another monitor.
-                if (std::ranges::any_of(workspaces, [&](const auto& workspace) {
-                        return workspace && !workspace->m_isSpecialWorkspace && workspace->m_id == id && workspace->m_monitor != monitor;
-                    }))
-                    continue;
-                targets.emplace_back(Card{.syntheticId = id});
-            }
-        }
-        std::ranges::sort(targets, [](const Card& a, const Card& b) {
-            const auto ida = cardID(a), idb = cardID(b);
-            if ((ida > 0) != (idb > 0))
-                return ida > 0;
-            return ida > 0 ? ida < idb :
-                (a.workspace.lock() && b.workspace.lock() && a.workspace.lock()->m_name < b.workspace.lock()->m_name);
-        });
+        auto targets = cardsForWorkspace(monitor, monitor->m_activeWorkspace);
         bool changedCards = targets.size() != screen->cards.size();
         if (!changedCards) {
             for (std::size_t i = 0; i < targets.size(); ++i)
@@ -2891,6 +2903,47 @@ std::optional<Rect> StageController::overviewOrigin(const PHLWINDOW& window) {
                 offset = (screen->right ? 1 : -1) * (1 - screen->shown) * screen->geometry.bandWidth;
             return Rect{self->sidebar(*screen).x + screen->geometry.padding + offset + preview.target.x,
                 screen->base.y + self->cardTop(*screen, i) + preview.target.y, preview.target.w, preview.target.h};
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<Rect> StageController::overviewDestination(const PHLWINDOW& window, const PHLWORKSPACE& activeWorkspace) {
+    auto* self = Impl::instance;
+    if (!self || !self->enabled || !window || !window->m_isMapped || window->m_pinned || !window->m_workspace || window->onSpecialWorkspace())
+        return std::nullopt;
+    const auto monitor = window->m_workspace->m_monitor.lock();
+    const auto* source = self->screenFor(monitor);
+    if (!monitor || !source || !source->geometry.enabled() || monitor->m_activeSpecialWorkspace)
+        return std::nullopt;
+    const auto target = activeWorkspace && activeWorkspace->m_monitor == monitor ? activeWorkspace : monitor->m_activeWorkspace;
+    if (!target || target->m_isSpecialWorkspace || window->m_workspace == target)
+        return std::nullopt;
+    const auto mode = Fullscreen::controller()->getFullscreenModes(target).internal;
+    if (mode == Fullscreen::FSMODE_FULLSCREEN || (self->maximizeCover && mode == Fullscreen::FSMODE_MAXIMIZED))
+        return std::nullopt;
+
+    // Predict without changing the desktop or using opening-time card positions:
+    // the old active workspace gains a card and the new active one may lose it.
+    Impl::Screen destination;
+    destination.monitor = monitor;
+    destination.base = source->base;
+    destination.right = source->right;
+    destination.cards = self->cardsForWorkspace(monitor, target);
+    destination.geometry = stage::layout(destination.base.w, destination.base.h, destination.cards.size(),
+        self->settingsForSide(destination.right), std::nullopt, monitor->m_size.x);
+    destination.scroll = destination.geometry.clampScroll(source->scroll);
+    if (!destination.geometry.enabled())
+        return std::nullopt;
+    for (std::size_t i = 0; i < destination.cards.size(); ++i) {
+        auto& card = destination.cards[i];
+        if (card.workspace != window->m_workspace || !self->updatePreviews(destination, card))
+            continue;
+        for (const auto& preview : card.previews) {
+            if (preview.window == window)
+                return Rect{self->sidebar(destination).x + destination.geometry.padding + preview.target.x,
+                    destination.base.y + destination.geometry.cardTop(i, destination.scroll) + preview.target.y,
+                    preview.target.w, preview.target.h};
         }
     }
     return std::nullopt;

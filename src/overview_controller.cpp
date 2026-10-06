@@ -8457,6 +8457,10 @@ void OverviewController::applyOffscreenOpenAnimationEndpoints(State& state) cons
 
 void OverviewController::applyOffscreenExitAnimationEndpoints(State& state, const PHLWORKSPACE& activeWorkspaceOverride) const {
     for (auto& window : state.windows) {
+        if (const auto destination = StageController::overviewDestination(window.window, activeWorkspaceOverride)) {
+            window.exitGlobal = *destination;
+            continue;
+        }
         if (!shouldUseOffscreenAnimationEndpoint(window, state, activeWorkspaceOverride))
             continue;
 

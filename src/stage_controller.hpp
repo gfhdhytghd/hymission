@@ -34,6 +34,8 @@ class StageController {
     static bool renderingPreview();
     static CBox transformPreviewBox(CBox box);
     static std::optional<Rect> overviewOrigin(const PHLWINDOW& window);
+    // Settled card endpoint after overview activates the requested workspace.
+    static std::optional<Rect> overviewDestination(const PHLWINDOW& window, const PHLWORKSPACE& activeWorkspace);
 
   private:
     struct Impl;
