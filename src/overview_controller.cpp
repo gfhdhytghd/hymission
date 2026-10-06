@@ -11259,8 +11259,20 @@ bool OverviewController::retargetGestureScope(ScopeOverride requestedScope) {
     if (!monitor)
         return false;
 
+    // The pointer still belongs to the previous scope's geometry. Do not let
+    // the initial hover pass replace the window that this gesture targets.
+    const ScopedFlag suppressInitialHover(m_suppressInitialHoverUpdate);
     beginOpen(monitor, requestedScope, preferredWindow, workspaceOverrides);
-    return isVisible() && m_state.collectionPolicy.requestedScope == requestedScope;
+    const bool retargeted = isVisible() && m_state.collectionPolicy.requestedScope == requestedScope;
+    if (retargeted && !workspaceOverrides.empty()) {
+        // We crossed the desktop and activated the selected workspace. The
+        // compact side is now opening from that desktop, not the one where the
+        // all-workspace overview began. Releasing below its open threshold (or
+        // cancelling it) must not focus the old workspace while the compact
+        // state still contains only windows from the target workspace.
+        m_state.focusBeforeOpen = preferredWindow;
+    }
+    return retargeted;
 }
 
 void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVisualOverride, bool deferFullscreenMutations) {
