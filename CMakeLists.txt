@@ -41,6 +41,7 @@ add_library(hymission SHARED
   src/overview_controller.cpp
   src/stage_logic.cpp
   src/stage_controller.cpp
+  src/stage_edge_effect.cpp
 )
 
 target_include_directories(hymission PRIVATE ${HYPR_DEPS_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS} ${GLIB_INCLUDE_DIRS})
@@ -68,6 +69,14 @@ add_executable(hymission-layout-demo
 target_include_directories(hymission-layout-demo PRIVATE src)
 
 if(BUILD_TESTING)
+  pkg_check_modules(EDGE_TEST_GL QUIET IMPORTED_TARGET egl glesv2 hyprutils)
+  if(EDGE_TEST_GL_FOUND)
+    add_executable(hymission-stage-edge-render-test tools/stage_edge_render_test.cpp)
+    target_include_directories(hymission-stage-edge-render-test PRIVATE src)
+    target_link_libraries(hymission-stage-edge-render-test PRIVATE PkgConfig::EDGE_TEST_GL)
+    add_test(NAME hymission-stage-edge-render-test COMMAND hymission-stage-edge-render-test)
+    set_tests_properties(hymission-stage-edge-render-test PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+  endif()
   add_executable(hymission-stage-logic-test tools/stage_logic_test.cpp src/stage_logic.cpp src/mission_layout.cpp)
   target_include_directories(hymission-stage-logic-test PRIVATE src)
   add_test(NAME hymission-stage-logic-test COMMAND hymission-stage-logic-test)

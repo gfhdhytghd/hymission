@@ -16,6 +16,38 @@ bool near(double a, double b) { return std::abs(a - b) < 1e-7; }
 int main() {
     using namespace hymission::stage;
     bool ok = true;
+    const hymission::Rect viewportBox{200, 50, 800, 500};
+    const auto hard = edgeViewport(viewportBox, 0, 0);
+    ok &= expect(near(edgeOpacity(hard, 200, 50), 1) && near(edgeOpacity(hard, 999.9, 549.9), 1), "zero widths retain the entire interior");
+    for (const auto& point : {std::pair{199.9, 100.0}, {1000.0, 100.0}, {500.0, 49.9}, {500.0, 550.0}})
+        ok &= expect(near(edgeOpacity(hard, point.first, point.second), 0), "zero widths NEVER disable hard clipping");
+    const auto invalidEdges = edgeViewport(viewportBox, -10, std::numeric_limits<double>::quiet_NaN());
+    ok &= expect(near(invalidEdges.left, 0) && near(invalidEdges.right, 0), "invalid effect widths become hard clips");
+    const auto wideEdges = edgeViewport(viewportBox, 1e8, 1e8);
+    ok &= expect(near(wideEdges.left, 400) && near(wideEdges.right, 400), "large bilateral bands do not overlap");
+    const auto soft = edgeViewport(viewportBox, 64, 0);
+    const auto mirrored = edgeViewport(viewportBox, 0, 64);
+    ok &= expect(near(edgeOpacity(soft, 200, 100), 0) && near(edgeOpacity(soft, 232, 100), 0.5) &&
+        near(edgeOpacity(soft, 264, 100), 1) && near(edgeOpacity(soft, 999, 100), 1), "desktop fades only at the sidebar boundary");
+    for (int d = 1; d < 800; ++d)
+        ok &= expect(near(edgeOpacity(soft, 200 + d, 100), edgeOpacity(mirrored, 1000 - d, 100)), "right sidebar mirrors the desktop edge");
+    const auto cardView = edgeViewport({20, 300, 160, 100}, 16, 16);
+    for (const double offset : {-1.5, -0.3, 0.0, 0.6, 1.1}) {
+        const hymission::Rect from{viewportBox.x + offset * viewportBox.width, viewportBox.y + 100, 200, 100};
+        const hymission::Rect to{cardView.box.x + offset * cardView.box.width, cardView.box.y + 20, 40, 20};
+        for (int step = 0; step <= 100; ++step) {
+            const auto frame = scrollingFlightFrame(from, to, soft, cardView, step / 100.0);
+            ok &= expect(near((frame.window.x - frame.viewport.box.x) / frame.viewport.box.width, offset), "scrolling flights preserve viewport-relative positions");
+            if (offset < -0.25 || offset >= 1)
+                ok &= expect(frame.window.x + frame.window.width <= frame.viewport.box.x || frame.window.x >= frame.viewport.box.x + frame.viewport.box.width,
+                    "fully offscreen columns never get fitted back into a flying viewport");
+            const auto restart = scrollingFlightFrame(frame.window, to, frame.viewport, cardView, 0);
+            ok &= expect(near(restart.window.x, frame.window.x) && near(restart.window.width, frame.window.width) &&
+                near(restart.viewport.box.x, frame.viewport.box.x) && near(restart.viewport.left, frame.viewport.left), "retarget preserves the displayed window, clip and effect widths");
+        }
+    }
+    const auto hardFlight = scrollingFlightFrame({0, 50, 100, 100}, {0, 300, 20, 20}, hard, edgeViewport(cardView.box, 0, 0), 0.5);
+    ok &= expect(near(hardFlight.viewport.left, 0) && near(hardFlight.viewport.right, 0), "hard clipping survives flight interpolation");
     ok &= expect(previewLayer(false, false, false, false) == PreviewLayer::Tiled,
         "ordinary tiled windows remain visible");
     ok &= expect(previewLayer(false, false, true, false) == PreviewLayer::Floating && PreviewLayer::Tiled < PreviewLayer::Floating,

@@ -58,6 +58,22 @@ std::pair<double, double> mapPreviewCenter(const Rect& card, const Rect& desktop
 Rect sidebarArea(const Rect& base, const Geometry& geometry, bool right);
 Rect desktopArea(const Rect& base, const Geometry& geometry, bool right);
 
+// The viewport is always a hard clip, including when both effect widths are 0.
+// Widths are measured at the displayed size, independently of window geometry.
+struct EdgeViewport {
+    Rect box;
+    double left = 0;
+    double right = 0;
+};
+EdgeViewport edgeViewport(const Rect& box, double left, double right);
+double edgeOpacity(const EdgeViewport& viewport, double x, double y);
+struct ScrollingFlightFrame {
+    Rect window;
+    EdgeViewport viewport;
+};
+ScrollingFlightFrame scrollingFlightFrame(const Rect& from, const Rect& to, const EdgeViewport& fromViewport,
+    const EdgeViewport& toViewport, double progress);
+
 // Keep this policy independent of compositor enum values for state tests.
 enum class CoverMode { None, Maximized, Fullscreen };
 bool coversStrip(CoverMode mode, bool maximizeCover);

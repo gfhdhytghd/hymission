@@ -639,6 +639,8 @@ hl.config({
             stage_card_max_width = 0, -- automatic: output width / 5
             stage_window_rounding = -1.0, -- half of decoration:rounding
             stage_window_decorations = 0,
+            stage_scrolling_desktop_edge_width = 64,
+            stage_scrolling_preview_edge_width = 16, -- 0 keeps hard clipping
             stage_show_empty = 1,
             stage_show_active = 0,
             stage_empty_slots = 0,
@@ -659,6 +661,8 @@ hl.config({
 | `stage_card_max_width` | `0` | `0` automatically caps card width at one fifth of each output's logical width. Positive values override the cap in logical pixels. |
 | `stage_window_rounding` | `-1.0` | Window miniature corner radius in logical pixels at its displayed size. Negative values use half of `decoration:rounding`; `0` makes square corners. |
 | `stage_window_decorations` | `0` | Hide compositor window decorations in miniatures; `1` includes them. Client-drawn titlebars remain part of application content. |
+| `stage_scrolling_desktop_edge_width` | `64` | Native `scrolling` tiled windows progressively blur and fade inside the desktop edge facing the sidebar; follows Smartisan side changes. Width in displayed logical pixels. `0` (or negative) keeps a hard clip with no blur/fade. |
+| `stage_scrolling_preview_edge_width` | `16` | Blur/fade width at each side of a scrolling workspace miniature, in displayed logical pixels. Large widths are reduced to avoid overlap. `0` (or negative) keeps hard clipping. |
 | `stage_padding` | `-1` | Follow `general:gaps_out` on the outer left/top/bottom edges; the desktop-facing edge accounts for native gaps. Nonnegative values override all sidebar edges in logical pixels. |
 | `stage_card_gap` | `-1` | Follow the sum of top/bottom `general:gaps_in`; nonnegative values override the vertical card gap. |
 | `stage_desktop_gap` | `-1` | No additional gap beyond native spacing; nonnegative values add explicit spacing before the desktop. |

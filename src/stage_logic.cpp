@@ -194,4 +194,43 @@ Rect sidebarArea(const Rect& base, const Geometry& geometry, bool right) {
 Rect desktopArea(const Rect& base, const Geometry& geometry, bool right) {
     return {right ? base.x : base.x + geometry.reservation, base.y, geometry.desktopWidth, base.height};
 }
+EdgeViewport edgeViewport(const Rect& box, double left, double right) {
+    const double width = std::max(0.0, sane(box.width, 0));
+    left = std::clamp(sane(left, 0), 0.0, width);
+    right = std::clamp(sane(right, 0), 0.0, width);
+    if (left + right > width) {
+        const double scale = width / (left + right);
+        left *= scale;
+        right *= scale;
+    }
+    return {box, left, right};
+}
+
+double edgeOpacity(const EdgeViewport& viewport, double x, double y) {
+    const auto& b = viewport.box;
+    if (x < b.x || x >= b.x + b.width || y < b.y || y >= b.y + b.height || b.width <= 0 || b.height <= 0)
+        return 0;
+    const auto smooth = [](double t) { t = std::clamp(t, 0.0, 1.0); return t * t * (3 - 2 * t); };
+    return std::min(viewport.left > 0 ? smooth((x - b.x) / viewport.left) : 1.0,
+        viewport.right > 0 ? smooth((b.x + b.width - x) / viewport.right) : 1.0);
+}
+
+ScrollingFlightFrame scrollingFlightFrame(const Rect& from, const Rect& to, const EdgeViewport& fromViewport,
+    const EdgeViewport& toViewport, double progress) {
+    const double t = transitionProgress(progress, 1);
+    const auto lerp = [t](double a, double b) { return a + (b - a) * t; };
+    const auto& a = fromViewport.box;
+    const auto& b = toViewport.box;
+    const Rect view{lerp(a.x, b.x), lerp(a.y, b.y), lerp(a.width, b.width), lerp(a.height, b.height)};
+    const auto viewport = edgeViewport(view, lerp(fromViewport.left, toViewport.left), lerp(fromViewport.right, toViewport.right));
+    if (a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0)
+        return {{view.x, view.y, 0, 0}, viewport};
+    // Interpolate relative coordinates so hidden tape columns stay hidden.
+    // The renderer intersects this viewport with output bounds; fitting either
+    // rectangle would move/resize native content at the animation endpoints.
+    return {{view.x + lerp((from.x - a.x) / a.width, (to.x - b.x) / b.width) * view.width,
+             view.y + lerp((from.y - a.y) / a.height, (to.y - b.y) / b.height) * view.height,
+             lerp(from.width / a.width, to.width / b.width) * view.width,
+             lerp(from.height / a.height, to.height / b.height) * view.height}, viewport};
+}
 } // namespace hymission::stage

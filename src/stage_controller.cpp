@@ -1,5 +1,6 @@
 #include "stage_controller.hpp"
 #include "stage_logic.hpp"
+#include "stage_edge_effect.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -19,6 +20,7 @@
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/GlobalWindowController.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
+#include <hyprland/src/desktop/state/Fadeout.hpp>
 #include <hyprland/src/desktop/state/ViewHitTester.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
@@ -35,6 +37,8 @@
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/pass/PassElement.hpp>
 #include <hyprland/src/render/pass/RendererHintsPassElement.hpp>
+#include <hyprland/src/render/pass/RectPassElement.hpp>
+#include <hyprland/src/render/pass/TexPassElement.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
@@ -48,6 +52,9 @@
 #include "overview_controller.hpp"
 #undef private
 
+#include <hyprland/src/layout/algorithm/Algorithm.hpp>
+#include <hyprland/src/layout/supplementary/WorkspaceAlgoMatcher.hpp>
+
 #include "vendor/nlohmann/json.hpp"
 
 namespace hymission {
@@ -59,6 +66,21 @@ stage::PreviewLayer previewLayer(const PHLWINDOW& window) {
     return stage::previewLayer(window->m_workspace && Fullscreen::controller()->hasFullscreen(window->m_workspace),
         Fullscreen::controller()->isFullscreen(window), window->m_isFloating, window->isAllowedOverFullscreen());
 }
+
+bool scrollingWorkspace(const PHLWORKSPACE& workspace) {
+    if (!workspace || workspace->m_isSpecialWorkspace || Fullscreen::controller()->hasFullscreen(workspace) || !workspace->m_space)
+        return false;
+    const auto algorithm = workspace->m_space->algorithm();
+    return algorithm && algorithm->tiledAlgo() &&
+        Layout::Supplementary::algoMatcher()->getNameForTiledAlgo(&typeid(*algorithm->tiledAlgo())) == "scrolling";
+}
+
+bool scrollingTiled(const PHLWINDOW& window) {
+    return window && !window->m_isFloating && !window->m_pinned && scrollingWorkspace(window->m_workspace);
+}
+
+Rect rect(const CBox& box) { return {box.x, box.y, box.w, box.h}; }
+CBox box(const Rect& rect) { return {rect.x, rect.y, rect.width, rect.height}; }
 
 Rect flightBounds(const PHLMONITOR& monitor) {
     static auto gapsOut = CConfigValue<Config::IComplexConfigValue>("general:gaps_out");
@@ -130,6 +152,30 @@ class StagePassElement final : public IPassElement {
     std::function<void()> m_draw;
     CBox m_bounds;
 };
+
+// Preserve native window passes (decorations, subsurfaces and popups included),
+// but make their opaque region conservative: the viewport edge can be transparent.
+class StageWindowPassElement final : public IPassElement {
+  public:
+    using Elements = std::vector<UP<IPassElement>>;
+    StageWindowPassElement(Elements elements, std::function<void(Elements&)> draw, const CBox& bounds) :
+        m_elements(std::move(elements)), m_draw(std::move(draw)), m_bounds(bounds) {}
+    std::vector<UP<IPassElement>> draw() override { m_draw(m_elements); return {}; }
+    void discard() override { for (auto& element : m_elements) element->discard(); }
+    bool needsLiveBlur() override { return true; }
+    bool needsPrecomputeBlur() override {
+        return std::ranges::any_of(m_elements, [](const auto& element) { return element->needsPrecomputeBlur(); });
+    }
+    bool undiscardable() override { return true; }
+    const char* passName() override { return "HymissionScrollingWindow"; }
+    ePassElementType type() override { return EK_CUSTOM; }
+    std::optional<CBox> boundingBox() override { return m_bounds; }
+    CRegion opaqueRegion() override { return {}; }
+  private:
+    Elements m_elements;
+    std::function<void(Elements&)> m_draw;
+    CBox m_bounds;
+};
 } // namespace
 
 struct StageController::Impl {
@@ -146,6 +192,8 @@ struct StageController::Impl {
         float toRadius = 0;
         bool dropToCard = false;
         bool offscreen = false;
+        std::optional<stage::EdgeViewport> fromViewport;
+        std::optional<stage::EdgeViewport> toViewport;
     };
     struct DragHover {
         PHLWINDOWREF window;
@@ -265,6 +313,15 @@ struct StageController::Impl {
     CFunctionHook* addPassHook = nullptr;
     CFunctionHook* workspaceAnimationHook = nullptr;
     CFunctionHook* changeWorkspaceHook = nullptr;
+    CFunctionHook* blurFramebufferHook = nullptr;
+    CFunctionHook* passAddHook = nullptr;
+    CFunctionHook* fadeoutsHook = nullptr;
+    using BlurFramebufferFn = SP<Render::ITexture> (*)(Render::IHyprRenderer*, float, CRegion*);
+    using PassAddFn = void (*)(Render::CRenderPass*, UP<IPassElement>&&);
+    using FadeoutsFn = void (*)(Render::IHyprRenderer*, PHLMONITOR, Desktop::eFadeoutPlane, PHLWORKSPACE);
+    StageEdgeEffect edgeEffect;
+    StageWindowPassElement::Elements* capturedWindowPasses = nullptr;
+    Render::CRenderPass* capturedPass = nullptr;
     SwipeBeginFn swipeBeginOriginal = nullptr;
     bool drawingDecoration = false;
     float decorationRadius = 0;
@@ -345,7 +402,14 @@ struct StageController::Impl {
     void renderStage(eRenderStage stage);
     void draw(const PHLMONITOR& monitor);
     void drawFlights(Screen& screen, const PHLMONITOR& monitor);
-    void drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, double radius);
+    void drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, double radius,
+                     std::optional<stage::EdgeViewport> viewport = std::nullopt);
+    void drawWindowPasses(StageWindowPassElement::Elements& elements, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport);
+    void captureWindowPasses(Render::IHyprRenderer* renderer, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport, const std::function<void()>& render);
+    stage::EdgeViewport desktopViewport(const Screen& screen) const;
+    stage::EdgeViewport cardViewport(const CBox& card) const;
+    std::pair<Rect, std::optional<stage::EdgeViewport>> flightFrame(const Flight& flight, double progress, const PHLMONITOR& monitor) const;
+    void retargetFlight(Flight& flight, double progress, const PHLMONITOR& monitor);
     void startFlights(Screen& screen, WORKSPACEID previous, const std::vector<Card>& oldCards, const stage::Geometry& oldGeometry, double oldScroll, bool oldRight,
                       const std::vector<std::pair<PHLWINDOWREF, CBox>>& origins, PHLWORKSPACE visualActive = nullptr, bool stopNative = true);
     bool flying(const Screen& screen, const PHLWINDOW& window) const;
@@ -493,7 +557,47 @@ struct StageController::Impl {
                     })) ||
                 (self->dragHover && self->dragHover->window == window)))
             return;
-        reinterpret_cast<RenderWindowFn>(self->renderWindowHook->m_original)(renderer, window, monitor, time, decorate, mode, ignorePosition, standalone);
+        const auto original = reinterpret_cast<RenderWindowFn>(self->renderWindowHook->m_original);
+        if (!standalone && !ignorePosition && !self->rendering && !self->capturedWindowPasses && !renderer->m_bRenderingSnapshot &&
+            self->enabled && !self->blocked() && screen && screen->geometry.enabled() && !screen->covered && !screen->suspended &&
+            !monitor->m_activeSpecialWorkspace && scrollingTiled(window)) {
+            self->captureWindowPasses(renderer, monitor, self->desktopViewport(*screen), [&] {
+                original(renderer, window, monitor, time, decorate, mode, ignorePosition, standalone);
+            });
+            return;
+        }
+        original(renderer, window, monitor, time, decorate, mode, ignorePosition, standalone);
+    }
+    static void passAddThunk(Render::CRenderPass* pass, UP<IPassElement>&& element) {
+        auto* self = instance;
+        if (self->capturedWindowPasses && pass == self->capturedPass) {
+            self->capturedWindowPasses->push_back(std::move(element));
+            return;
+        }
+        reinterpret_cast<PassAddFn>(self->passAddHook->m_original)(pass, std::move(element));
+    }
+    static void fadeoutsThunk(Render::IHyprRenderer* renderer, PHLMONITOR monitor, Desktop::eFadeoutPlane plane, PHLWORKSPACE workspace) {
+        auto* self = instance;
+        const auto original = reinterpret_cast<FadeoutsFn>(self->fadeoutsHook->m_original);
+        const auto* screen = self->visualScreenFor(monitor);
+        if (plane == Desktop::FADEOUT_PLANE_WINDOW_TILED && scrollingWorkspace(workspace) && !self->rendering && !self->capturedWindowPasses &&
+            !renderer->m_bRenderingSnapshot && self->enabled && !self->blocked() && screen && screen->geometry.enabled() &&
+            !screen->covered && !screen->suspended && !monitor->m_activeSpecialWorkspace) {
+            self->captureWindowPasses(renderer, monitor, self->desktopViewport(*screen), [&] { original(renderer, monitor, plane, workspace); });
+            return;
+        }
+        original(renderer, monitor, plane, workspace);
+    }
+    static SP<Render::ITexture> blurFramebufferThunk(Render::IHyprRenderer* renderer, float alpha, CRegion* damage) {
+        auto* self = instance;
+        const auto original = reinterpret_cast<BlurFramebufferFn>(self->blurFramebufferHook->m_original);
+        const auto backdrop = self->edgeEffect.backdrop();
+        if (!backdrop)
+            return original(renderer, alpha, damage);
+        const auto destination = renderer->m_renderData.currentFB;
+        renderer->bindFB(backdrop);
+        Hyprutils::Utils::CScopeGuard restore{[&] { renderer->bindFB(destination); }};
+        return original(renderer, alpha, damage);
     }
     static float roundingThunk(Desktop::View::CWindow* window) {
         auto* self = instance;
@@ -684,10 +788,14 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
         if (!window)
             continue;
         if (window->m_workspace == target && swipe->sourceCovered) {
-            flight.from.translate(Vector2D{hiddenSidebarOffset(source->right, source->geometry.bandWidth), 0.0});
+            const double offset = hiddenSidebarOffset(source->right, source->geometry.bandWidth);
+            flight.from.translate(Vector2D{offset, 0.0});
+            if (flight.fromViewport) flight.fromViewport->box.x += offset;
             flight.offscreen = true;
         } else if (window->m_workspace != target && swipe->targetCovered) {
-            flight.to.translate(Vector2D{hiddenSidebarOffset(visual.right, visual.geometry.bandWidth), 0.0});
+            const double offset = hiddenSidebarOffset(visual.right, visual.geometry.bandWidth);
+            flight.to.translate(Vector2D{offset, 0.0});
+            if (flight.toViewport) flight.toViewport->box.x += offset;
             flight.offscreen = true;
         }
     }
@@ -776,12 +884,7 @@ void StageController::Impl::endSwipe() {
     if (commit) {
         if (swipe->prepared) {
             for (auto& flight : swipe->visual.flights) {
-                const auto box = flight.offscreen ? stage::transitionBox({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
-                    {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, swipe->progress) : stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
-                    {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, swipe->progress,
-                    flightBounds(monitor));
-                flight.from = {box.x, box.y, box.width, box.height};
-                flight.fromRadius += (flight.toRadius - flight.fromRadius) * stage::transitionProgress(swipe->progress, 1);
+                retargetFlight(flight, swipe->progress, monitor);
             }
             swipe->releaseDuration = std::max(16.0, swipe->releaseDuration);
         }
@@ -820,9 +923,10 @@ void StageController::Impl::endSwipe() {
                     }
                     continue;
                 }
-                if (next != actual->flights.end())
+                if (next != actual->flights.end()) {
                     flight.to = next->to;
-                else if (actual->covered && window->m_workspace == target) {
+                    flight.toViewport = next->toViewport;
+                } else if (actual->covered && window->m_workspace == target) {
                     window->positionAnimation()->warp();
                     window->sizeAnimation()->warp();
                     flight.to = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() :
@@ -875,11 +979,13 @@ bool StageController::Impl::installHooks() {
     const auto surfaceVisible = find("visibleRegion", "CSurfacePassElement::visibleRegion(bool&)");
     const auto surfaceUV = find("calculateUVForSurface", "IElementRenderer::calculateUVForSurface(");
     const auto addPass = find("addPassElement", "IHyprRenderer::addPassElement(");
+    const auto passAdd = find("add", "Render::CRenderPass::add(");
+    const auto fadeouts = find("renderFadeouts", "IHyprRenderer::renderFadeouts(");
     const auto workspaceAnimation = find("startAnimation", "Animation::Workspace::startAnimation(");
     const auto changeWorkspace = find("changeWorkspace", "Monitor::CMonitor::changeWorkspace(Hyprutils::Memory::CSharedPointer<CWorkspace> const&");
     renderWindow = reinterpret_cast<RenderWindowFn>(find("renderWindow", "IHyprRenderer::renderWindow("));
     shouldBlur = reinterpret_cast<ShouldBlurFn>(find("shouldBlur", "IHyprRenderer::shouldBlur(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>)"));
-    if (area && drag && hit && rounding && surfaceBox && surfaceVisible && surfaceUV && addPass && workspaceAnimation && changeWorkspace && renderWindow && shouldBlur && g_pHyprOpenGL) {
+    if (area && drag && hit && rounding && surfaceBox && surfaceVisible && surfaceUV && addPass && passAdd && fadeouts && workspaceAnimation && changeWorkspace && renderWindow && shouldBlur && g_pHyprOpenGL) {
         areaHook = HyprlandAPI::createFunctionHook(handle, area, reinterpret_cast<void*>(&recheckThunk));
         dragHook = HyprlandAPI::createFunctionHook(handle, drag, reinterpret_cast<void*>(&dragThunk));
         hitHook = HyprlandAPI::createFunctionHook(handle, hit, reinterpret_cast<void*>(&windowAtThunk));
@@ -889,12 +995,15 @@ bool StageController::Impl::installHooks() {
         surfaceVisibleHook = HyprlandAPI::createFunctionHook(handle, surfaceVisible, reinterpret_cast<void*>(&surfaceVisibleThunk));
         surfaceUVHook = HyprlandAPI::createFunctionHook(handle, surfaceUV, reinterpret_cast<void*>(&surfaceUVThunk));
         addPassHook = HyprlandAPI::createFunctionHook(handle, addPass, reinterpret_cast<void*>(&addPassThunk));
+        passAddHook = HyprlandAPI::createFunctionHook(handle, passAdd, reinterpret_cast<void*>(&passAddThunk));
+        fadeoutsHook = HyprlandAPI::createFunctionHook(handle, fadeouts, reinterpret_cast<void*>(&fadeoutsThunk));
         workspaceAnimationHook = HyprlandAPI::createFunctionHook(handle, workspaceAnimation, reinterpret_cast<void*>(&workspaceAnimationThunk));
         changeWorkspaceHook = HyprlandAPI::createFunctionHook(handle, changeWorkspace, reinterpret_cast<void*>(&changeWorkspaceThunk));
         hooksReady = attach(areaHook, "work area") && attach(dragHook, "drag end") && attach(hitHook, "window hit test") &&
             attach(roundingHook, "rounding") && attach(renderWindowHook, "window rendering") &&
             (overviewRendering || (attach(surfaceBoxHook, "surface box") && attach(surfaceVisibleHook, "surface visible region") && attach(surfaceUVHook, "surface UV"))) &&
-            attach(addPassHook, "decoration pass") && attach(workspaceAnimationHook, "workspace animation") && attach(changeWorkspaceHook, "workspace change");
+            attach(addPassHook, "decoration pass") && attach(passAddHook, "window pass collection") && attach(fadeoutsHook, "fading window clipping") &&
+            attach(workspaceAnimationHook, "workspace animation") && attach(changeWorkspaceHook, "workspace change");
         if (hooksReady)
             renderWindow = reinterpret_cast<RenderWindowFn>(renderWindowHook->m_original);
     }
@@ -905,13 +1014,28 @@ bool StageController::Impl::installHooks() {
             error = "stage disabled: OpenGL renderer unavailable";
         Log::logger->log(Log::ERR, "[hymission] {}", error);
         HyprlandAPI::addNotification(handle, "[hymission] " + error, CHyprColor(1.0, 0.3, 0.2, 1.0), 8000);
+    } else {
+        // Soft effects are optional. Missing blur interception must never
+        // disable the independent viewport clip or Stage itself.
+        for (const auto& match : HyprlandAPI::findFunctionsByName(handle, "blurMainFramebuffer")) {
+            if (match.demangled.find("IHyprRenderer::blurMainFramebuffer(") == std::string::npos)
+                continue;
+            blurFramebufferHook = HyprlandAPI::createFunctionHook(handle, match.address, reinterpret_cast<void*>(&blurFramebufferThunk));
+            if (blurFramebufferHook && !blurFramebufferHook->hook()) {
+                HyprlandAPI::removeFunctionHook(handle, blurFramebufferHook);
+                blurFramebufferHook = nullptr;
+            }
+            break;
+        }
+        if (!blurFramebufferHook)
+            Log::logger->log(Log::WARN, "[hymission] Stage edge blur hook unavailable; retaining hard clipping");
     }
     return hooksReady;
 }
 
 void StageController::Impl::releaseHooks() {
     for (auto** hook : {&areaHook, &dragHook, &hitHook, &roundingHook, &renderWindowHook, &surfaceBoxHook, &surfaceVisibleHook, &surfaceUVHook, &addPassHook,
-                        &workspaceAnimationHook, &changeWorkspaceHook}) {
+                        &workspaceAnimationHook, &changeWorkspaceHook, &blurFramebufferHook, &passAddHook, &fadeoutsHook}) {
         if (!*hook)
             continue;
         (*hook)->unhook();
@@ -1034,6 +1158,7 @@ void StageController::Impl::sync() {
     const bool wasEnabled = enabled;
     enabled = wanted && installHooks();
     if (!enabled) {
+        edgeEffect.reset();
         clearSwipe();
         stopTimer(refreshTimer);
         stopTimer(motionTimer);
@@ -1053,6 +1178,8 @@ void StageController::Impl::sync() {
         syncing = false;
         return;
     }
+    if (reconfigure)
+        edgeEffect.reset();
     if (swipe && (reconfigure || blocked()))
         clearSwipe();
 
@@ -1695,6 +1822,10 @@ void StageController::Impl::finishThumbnailDrag() {
             CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
         screen->flights.push_back({Preview{window, target, target}, from, target,
             static_cast<float>(stage::previewRounding(-1, numberSetting("decoration:rounding", 0), from.w, from.h)), window->rounding()});
+        if (scrollingTiled(window)) {
+            screen->flights.back().fromViewport = stage::edgeViewport(rect(from), 0, 0);
+            screen->flights.back().toViewport = desktopViewport(*screen);
+        }
         screen->flightStart = Clock::now();
         screen->flightDuration = std::clamp(setting("stage_transition_ms", 300), 0L, 2000L);
         updatePreviewLiveness();
@@ -1860,16 +1991,18 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
                     if (preview != card->previews.end()) {
                         const double p = flightProgress(*screen);
                         for (auto& flight : screen->flights) {
-                            const auto box = stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
-                                {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, p, flightBounds(monitor));
-                            flight.from = {box.x, box.y, box.width, box.height};
-                            flight.fromRadius += (flight.toRadius - flight.fromRadius) * stage::transitionProgress(p, 1);
+                            retargetFlight(flight, p, monitor);
                         }
                         std::erase_if(screen->flights, [&](const auto& f) { return f.preview.window == window; });
                         const auto target = preview->target.copy().translate(Vector2D{sidebar(*screen).x + screen->geometry.padding,
                             screen->base.y + cardTop(*screen, std::distance(screen->cards.begin(), card))});
                         screen->flights.push_back({*preview, dropOrigin, target, dropRadius, static_cast<float>(stage::previewRounding(
                             numberSetting("plugin:hymission:stage_window_rounding", -1), numberSetting("decoration:rounding", 0), target.w, target.h)), true});
+                        if (scrollingTiled(window)) {
+                            screen->flights.back().fromViewport = stage::edgeViewport(rect(dropOrigin), 0, 0);
+                            screen->flights.back().toViewport = cardViewport(CBox{sidebar(*screen).x + screen->geometry.padding,
+                                screen->base.y + cardTop(*screen, std::distance(screen->cards.begin(), card)), screen->geometry.cardWidth, screen->geometry.cardHeight});
+                        }
                         screen->flightStart = Clock::now();
                         screen->flightDuration = duration;
                         updatePreviewLiveness();
@@ -2007,7 +2140,8 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
                     continue;
                 const auto radius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
                     numberSetting("decoration:rounding", 0), preview.target.w, preview.target.h);
-                drawPreview(window, monitor, preview.target.copy().translate(box.pos()), cardClip, radius);
+                drawPreview(window, monitor, preview.target.copy().translate(box.pos()), cardClip, radius,
+                    scrollingTiled(window) ? std::optional{cardViewport(box)} : std::nullopt);
             }
             // The glow is centered on the card edges and clipped only by the
             // output: the sidebar clip would cut the desktop-facing edge.
@@ -2173,11 +2307,6 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
         if (const auto window = flight.preview.window.lock())
             addWorkspace(window->m_workspace);
     }
-    const auto interpolate = [&](const CBox& from, const CBox& to, double p) {
-        const auto r = stage::transitionBoxWithin({from.x, from.y, from.w, from.h}, {to.x, to.y, to.w, to.h}, p,
-            flightBounds(monitor));
-        return CBox{r.x, r.y, r.width, r.height};
-    };
     const auto miniature = [&](const PHLWORKSPACE& workspace, const CBox& natural, const std::vector<Card>& cards,
                                const stage::Geometry& geometry, double scroll, bool right, const PHLWINDOW& window, bool cached) -> std::optional<CBox> {
         const auto it = std::ranges::find_if(cards, [&](const Card& card) { return card.workspace == workspace; });
@@ -2221,7 +2350,7 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
             const auto old = std::ranges::find_if(previousFlights, [&](const Flight& flight) { return flight.preview.window == window; });
             const auto origin = std::ranges::find_if(origins, [&](const auto& entry) { return entry.first == window; });
             const auto originalBox = origin == origins.end() ? preview.natural : origin->second;
-            const auto from = old != previousFlights.end() ? std::optional<CBox>{interpolate(old->from, old->to, oldProgress)} :
+            const auto from = old != previousFlights.end() ? std::optional<CBox>{box(flightFrame(*old, oldProgress, monitor).first)} :
                 workspace->m_id == previous ? std::optional<CBox>{originalBox} : miniature(workspace, originalBox, oldCards, oldGeometry, oldScroll, oldRight, window, true);
             const auto goal = setting("stage_window_decorations", 0) ? preview.natural : CBox{window->positionAnimation()->goal(), window->sizeAnimation()->goal()};
             const auto to = workspace == activeWorkspace ? std::optional<CBox>{preview.natural} :
@@ -2233,6 +2362,26 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
                 workspace->m_id == previous ? nativeRadius : radius(*from);
             const double toRadius = workspace == activeWorkspace ? nativeRadius : radius(*to);
             screen.flights.push_back({std::move(preview), *from, *to, static_cast<float>(fromRadius), static_cast<float>(toRadius)});
+            auto& flight = screen.flights.back();
+            if (scrollingTiled(window)) {
+                const auto miniatureView = [&](const std::vector<Card>& cards, const stage::Geometry& geometry, double scroll, bool right) -> std::optional<stage::EdgeViewport> {
+                    const auto area = stage::desktopArea(rect(screen.base), geometry, right);
+                    const auto view = miniature(workspace, box(area), cards, geometry, scroll, right, window, false);
+                    return view ? std::optional{cardViewport(*view)} : std::nullopt;
+                };
+                if (old != previousFlights.end())
+                    flight.fromViewport = flightFrame(*old, oldProgress, monitor).second;
+                if (!flight.fromViewport) {
+                    if (workspace->m_id == previous) {
+                        const auto area = stage::desktopArea(rect(screen.base), oldGeometry, oldRight);
+                        const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 64) : 0;
+                        flight.fromViewport = stage::edgeViewport(area, oldRight ? 0 : width, oldRight ? width : 0);
+                    } else
+                        flight.fromViewport = miniatureView(oldCards, oldGeometry, oldScroll, oldRight);
+                }
+                flight.toViewport = workspace == activeWorkspace ? std::optional{desktopViewport(screen)} :
+                    miniatureView(screen.cards, screen.geometry, screen.scroll, screen.right);
+            }
         }
     }
     if (screen.flights.empty())
@@ -2256,11 +2405,105 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
     armMotion();
 }
 
-void StageController::Impl::drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, double radius) {
+stage::EdgeViewport StageController::Impl::desktopViewport(const Screen& screen) const {
+    const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 64) : 0;
+    return stage::edgeViewport(rect(desktop(screen)), screen.right ? 0 : width, screen.right ? width : 0);
+}
+
+stage::EdgeViewport StageController::Impl::cardViewport(const CBox& card) const {
+    const double width = blurFramebufferHook ? setting("stage_scrolling_preview_edge_width", 16) : 0;
+    return stage::edgeViewport(rect(card), width, width);
+}
+
+std::pair<Rect, std::optional<stage::EdgeViewport>> StageController::Impl::flightFrame(const Flight& flight, double progress, const PHLMONITOR& monitor) const {
+    if (flight.fromViewport && flight.toViewport) {
+        const auto frame = stage::scrollingFlightFrame(rect(flight.from), rect(flight.to), *flight.fromViewport, *flight.toViewport, progress);
+        return {frame.window, frame.viewport};
+    }
+    return {flight.offscreen ? stage::transitionBox(rect(flight.from), rect(flight.to), progress) :
+        stage::transitionBoxWithin(rect(flight.from), rect(flight.to), progress, flightBounds(monitor)), std::nullopt};
+}
+
+void StageController::Impl::retargetFlight(Flight& flight, double progress, const PHLMONITOR& monitor) {
+    const auto [window, viewport] = flightFrame(flight, progress, monitor);
+    flight.from = box(window);
+    flight.fromViewport = viewport;
+    flight.fromRadius += (flight.toRadius - flight.fromRadius) * stage::transitionProgress(progress, 1);
+}
+
+void StageController::Impl::captureWindowPasses(Render::IHyprRenderer* renderer, const PHLMONITOR& monitor,
+                                               const stage::EdgeViewport& viewport, const std::function<void()>& render) {
+    StageWindowPassElement::Elements elements;
+    capturedWindowPasses = &elements;
+    capturedPass = &renderer->currentPass();
+    {
+        Hyprutils::Utils::CScopeGuard reset{[&] { capturedWindowPasses = nullptr; capturedPass = nullptr; }};
+        render();
+    }
+    if (elements.empty())
+        return;
+    const PHLMONITORREF ref = monitor;
+    renderer->addPassElement(makeUnique<StageWindowPassElement>(std::move(elements), [this, ref, viewport](auto& passes) {
+        if (const auto mon = ref.lock())
+            drawWindowPasses(passes, mon, viewport);
+        else
+            for (auto& pass : passes) pass->discard();
+    }, box(viewport.box).translate(-monitor->m_position)));
+}
+
+void StageController::Impl::drawWindowPasses(StageWindowPassElement::Elements& elements, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport) {
+    auto& state = g_pHyprRenderer->m_renderData;
+    const auto previousModif = state.renderModif;
+    Hyprutils::Utils::CScopeGuard restore{[&] { state.renderModif = previousModif; }};
+    const CBox clip = box(viewport.box).translate(-monitor->m_position).scale(monitor->m_scale);
+    const bool drawn = edgeEffect.draw(monitor, viewport, clip, [&](const CBox& limit) {
+        state.renderModif = previousModif;
+        const auto damage = state.damage;
+        for (auto& element : elements) {
+            state.damage = damage;
+            state.clipBox = limit;
+            CBox* ownClip = nullptr;
+            bool* optimize = nullptr;
+            if (auto* surface = dynamic_cast<CSurfacePassElement*>(element.get())) {
+                ownClip = &surface->m_data.clipBox;
+                optimize = &surface->m_data.blockBlurOptimization;
+            } else if (auto* texture = dynamic_cast<CTexPassElement*>(element.get()))
+                ownClip = &texture->m_data.clipBox;
+            else if (auto* rectangle = dynamic_cast<CRectPassElement*>(element.get()))
+                ownClip = &rectangle->m_data.clipBox;
+            const auto savedClip = ownClip ? *ownClip : CBox{};
+            const bool savedOptimize = optimize && *optimize;
+            Hyprutils::Utils::CScopeGuard restoreElement{[&] {
+                if (ownClip) *ownClip = savedClip;
+                if (optimize) *optimize = savedOptimize;
+            }};
+            if (ownClip) {
+                *ownClip = savedClip.empty() ? limit : savedClip.intersection(limit);
+                if (ownClip->empty()) {
+                    element->discard();
+                    continue; // An empty native clip means UNCLIPPED, not invisible.
+                }
+            }
+            if (optimize)
+                *optimize = true;
+            g_pHyprRenderer->draw(element, damage);
+        }
+    });
+    if (!drawn)
+        for (auto& element : elements)
+            element->discard();
+}
+
+void StageController::Impl::drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, double radius,
+                                       std::optional<stage::EdgeViewport> viewport) {
     // Cached cards/flights can outlive a fullscreen change. Do not resurrect a
     // covered window (or its blur) before the next preview collection.
     if (previewLayer(window) == stage::PreviewLayer::Hidden)
         return;
+    if (viewport) {
+        edgeEffect.draw(monitor, *viewport, clip, [&](const CBox& limit) { drawPreview(window, monitor, target, limit, radius); });
+        return;
+    }
     const auto root = window->wlSurface()->resource();
     if (!root || target.w <= 0 || target.h <= 0)
         return;
@@ -2368,23 +2611,26 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
         const auto window = flight.preview.window.lock();
         if (!window || !window->m_isMapped || window->isHidden() || window->m_pinned || window->m_monitor != monitor)
             continue;
-        if ((!swipe || &swipe->visual != &screen) && window->m_workspace == monitor->m_activeWorkspace)
+        if ((!swipe || &swipe->visual != &screen) && window->m_workspace == monitor->m_activeWorkspace) {
             flight.to = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() : CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
-        else if (flight.dropToCard) {
+            if (flight.toViewport)
+                flight.toViewport = desktopViewport(screen);
+        } else if (flight.dropToCard) {
             const auto card = std::ranges::find_if(screen.cards, [&](const auto& c) { return c.workspace == window->m_workspace; });
             if (card != screen.cards.end()) {
                 const auto preview = std::ranges::find_if(card->previews, [&](const auto& p) { return p.window == window; });
-                if (preview != card->previews.end())
+                if (preview != card->previews.end()) {
                     flight.to = preview->target.copy().translate(Vector2D{sidebar(screen).x + screen.geometry.padding,
                         screen.base.y + cardTop(screen, std::distance(screen.cards.begin(), card))});
+                    if (flight.toViewport)
+                        flight.toViewport = cardViewport(CBox{sidebar(screen).x + screen.geometry.padding,
+                            screen.base.y + cardTop(screen, std::distance(screen.cards.begin(), card)), screen.geometry.cardWidth, screen.geometry.cardHeight});
+                }
             }
         }
-        const auto box = flight.offscreen ? stage::transitionBox({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
-            {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, p) : stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
-            {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, p,
-            bounds);
-        drawPreview(window, monitor, CBox{box.x, box.y, box.width, box.height}, clip,
-            flight.fromRadius + (flight.toRadius - flight.fromRadius) * stage::transitionProgress(p, 1));
+        const auto [frame, viewport] = flightFrame(flight, p, monitor);
+        drawPreview(window, monitor, box(frame), clip,
+            flight.fromRadius + (flight.toRadius - flight.fromRadius) * stage::transitionProgress(p, 1), viewport);
     }
     g_pHyprRenderer->m_renderData.clipBox = previousClip;
 }
@@ -2550,6 +2796,7 @@ StageController::Impl::~Impl() {
     stopTimer(refreshTimer);
     stopTimer(motionTimer);
     listeners.clear();
+    edgeEffect.reset();
     releaseHooks();
     if (g_layoutManager) {
         for (const auto& screen : screens) {
@@ -2568,6 +2815,7 @@ std::string StageController::Impl::stateJson() const {
         {"refresh_interval_ms", std::clamp(setting("stage_refresh_ms", 16), 1L, 16L)}, {"error", error},
         {"swipe_begin_count", swipeBegins}, {"swipe_update_count", swipeUpdates}, {"swipe_end_count", swipeEnds},
         {"raw_swipe_update_count", rawSwipeUpdates},
+        {"scrolling_edge_blur_hook", blurFramebufferHook != nullptr}, {"scrolling_edge_error", edgeEffect.error()},
         {"drag_hover_active", dragHover.has_value()},
         {"thumbnail_drag_active", !!thumbnailDrag},
         {"screens", nlohmann::json::array()}};
@@ -2620,9 +2868,7 @@ std::optional<Rect> StageController::overviewOrigin(const PHLWINDOW& window) {
     }
     for (const auto& flight : screen->flights)
         if (flight.preview.window == window)
-            return flight.offscreen ? stage::transitionBox({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
-                {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, self->flightProgress(*screen)) : stage::transitionBoxWithin({flight.from.x, flight.from.y, flight.from.w, flight.from.h},
-                {flight.to.x, flight.to.y, flight.to.w, flight.to.h}, self->flightProgress(*screen), flightBounds(monitor));
+            return self->flightFrame(flight, self->flightProgress(*screen), monitor).first;
     if (window->m_workspace == monitor->m_activeWorkspace)
         return std::nullopt; // Desktop windows already have the correct natural origin.
     for (std::size_t i = 0; i < screen->cards.size(); ++i) {

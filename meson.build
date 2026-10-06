@@ -33,6 +33,7 @@ src = [
   'src/overview_controller.cpp',
   'src/stage_logic.cpp',
   'src/stage_controller.cpp',
+  'src/stage_edge_effect.cpp',
 ]
 
 glib_dep = dependency('glib-2.0')
@@ -72,6 +73,18 @@ stage_logic_test = executable('hymission-stage-logic-test',
   install: false,
 )
 test('hymission-stage-logic-test', stage_logic_test)
+
+edge_test_egl = dependency('egl', required: false)
+edge_test_gles = dependency('glesv2', required: false)
+if edge_test_egl.found() and edge_test_gles.found()
+  stage_edge_render_test = executable('hymission-stage-edge-render-test',
+    'tools/stage_edge_render_test.cpp',
+    include_directories: include_directories('src'),
+    dependencies: [edge_test_egl, edge_test_gles, dependency('hyprutils')],
+    install: false,
+  )
+  test('hymission-stage-edge-render-test', stage_edge_render_test, env: ['LIBGL_ALWAYS_SOFTWARE=1'])
+endif
 
 overview_logic_test = executable('hymission-overview-logic-test',
   ['tools/overview_logic_test.cpp', 'src/overview_logic.cpp'],

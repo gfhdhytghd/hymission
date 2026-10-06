@@ -55,6 +55,42 @@ logged on activation/config reload.
 
 ## Rendering and input
 
+### Scrolling workspaces
+
+Native `scrolling` tiled windows always clip to the reduced desktop viewport,
+including their decorations, popups and native window close animations. They
+cannot scroll into the sidebar or another output. In cards, the same viewport
+maps to the card rectangle. Offscreen columns keep their native geometry and
+scroll position; they are never moved or fitted back into view.
+
+Inside these clips, a fixed band progressively blurs the window content and
+fades it to transparency. The desktop has one band facing the sidebar (left by
+default, mirrored when Smartisan changes sides); each scrolling card has both
+left and right bands. The revealed background remains unchanged. Floating and
+pinned windows and non-scrolling workspaces retain their existing rendering.
+The bands remain horizontal even for a vertically configured scrolling layout.
+
+`stage_scrolling_desktop_edge_width = 64` and
+`stage_scrolling_preview_edge_width = 16` set independent widths in displayed
+logical pixels. Zero or negative values mean **hard clipping**, never unclipped
+rendering. Excessive widths are clamped to the viewport and bilateral bands
+cannot overlap. Shader/resource failures also retain the hard clip. The state
+command reports whether the blur hook is available and any effect error.
+
+The effect renders native window passes into a reusable transparent RGBA layer
+in the current pass, then composites it with premultiplied alpha. Native window
+background blur samples the original backdrop. It does not start a nested
+compositor render, capture static client snapshots or draw an opaque blur panel.
+Gaussian sampling stays inside the clip; its support is bounded by the native
+live-blur damage expansion (and at most 12 logical pixels). Width zero requires
+no effect framebuffer. Framebuffers retain output precision and color space.
+
+Workspace flights interpolate the viewport and its effect widths together;
+window positions stay relative to that viewport. Completely offscreen columns
+stay invisible, partially visible columns stay clipped, and interruption,
+swipe cancellation and retargeting preserve the displayed crop. Existing
+fullscreen, Overview and session-lock suspension rules still apply.
+
 ### Smartisan mode
 
 `stage_smartisan_mode = 1` enables an optional per-monitor side transition.
