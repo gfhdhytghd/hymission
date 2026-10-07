@@ -307,7 +307,9 @@ clip, viewport and edge widths.
 
 Overview window surfaces retain native transparency and use live backdrop blur
 during entry, exit and the settled overview. Blur planning uses the same
-transformed surface state as drawing. Offscreen workspace-strip snapshots still
+transformed surface state as drawing. Deferred Stage shadow passes retain their
+window owner and transform the native interior cutout with the preview, so the
+shadow does not fill the transparent window layer. Offscreen workspace-strip snapshots still
 disable window blur because their export framebuffer may differ from the output.
 
 On the normal desktop, native closing snapshots are classified individually by

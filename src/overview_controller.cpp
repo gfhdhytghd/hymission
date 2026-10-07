@@ -174,15 +174,36 @@ class OverviewOverlayPassElement final : public IPassElement {
 
 class OverviewShadowPassElement final : public IPassElement {
   public:
-    OverviewShadowPassElement(CBox box, int round, float roundingPower, int range, CHyprColor color, float alpha) :
-        m_box(box), m_round(round), m_roundingPower(roundingPower), m_range(range), m_color(color), m_alpha(alpha) {
+    OverviewShadowPassElement(CBox box, int round, float roundingPower, int range, CHyprColor color, float alpha,
+                              PHLWINDOW cutoutWindow = {}, CBox cutoutSource = {}, CBox cutoutTarget = {}) :
+        m_box(box), m_round(round), m_roundingPower(roundingPower), m_range(range), m_color(color), m_alpha(alpha),
+        m_cutoutWindow(cutoutWindow), m_cutoutSource(cutoutSource), m_cutoutTarget(cutoutTarget) {
     }
 
     std::vector<UP<IPassElement>> draw() override {
         if (!g_pHyprOpenGL || m_box.width < 1 || m_box.height < 1 || m_range <= 0 || m_alpha <= 0.001F)
             return {};
 
-        g_pHyprOpenGL->renderRoundedShadow(m_box, m_round, m_roundingPower, m_range, m_color, m_alpha);
+        auto& state = g_pHyprRenderer->m_renderData;
+        const auto window = m_cutoutWindow.lock();
+        if (window && m_cutoutSource.w > 0 && m_cutoutSource.h > 0 && m_cutoutTarget.w > 0 && m_cutoutTarget.h > 0) {
+            const auto savedWindow = state.currentWindow;
+            const auto savedModif = state.renderModif;
+            Hyprutils::Utils::CScopeGuard restore{[&] { state.currentWindow = savedWindow; state.renderModif = savedModif; }};
+            const double scale = std::min(m_cutoutTarget.w / m_cutoutSource.w, m_cutoutTarget.h / m_cutoutSource.h);
+            state.currentWindow = window;
+            state.renderModif = {};
+            state.renderModif.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_TRANSLATE, -m_cutoutSource.pos());
+            state.renderModif.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_SCALE, static_cast<float>(scale));
+            state.renderModif.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_TRANSLATE, m_cutoutTarget.pos());
+            // The shadow box is already in preview coordinates. Undo that
+            // mapping for the input, letting native rendering transform BOTH
+            // the shadow and its window cutout together exactly once.
+            CBox nativeBox = m_box;
+            nativeBox.translate(-m_cutoutTarget.pos()).scale(1.0 / scale).translate(m_cutoutSource.pos());
+            g_pHyprOpenGL->renderRoundedShadow(nativeBox, m_round, m_roundingPower, m_range, m_color, m_alpha);
+        } else
+            g_pHyprOpenGL->renderRoundedShadow(m_box, m_round, m_roundingPower, m_range, m_color, m_alpha);
         return {};
     }
 
@@ -209,6 +230,9 @@ class OverviewShadowPassElement final : public IPassElement {
     int        m_range = 0;
     CHyprColor m_color;
     float      m_alpha = 1.0F;
+    PHLWINDOWREF m_cutoutWindow;
+    CBox       m_cutoutSource;
+    CBox       m_cutoutTarget;
 };
 
 namespace {
@@ -4280,9 +4304,25 @@ void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, co
     const float previewAlpha = managedPreviewAlphaFor(window, alpha);
     if (immediate)
         g_pHyprOpenGL->renderRoundedShadow(shadowBox, shadowRound, static_cast<float>(roundingPower), renderRange, shadowColor, previewAlpha);
-    else
-        g_pHyprRenderer->m_renderPass.add(
-            makeUnique<OverviewShadowPassElement>(shadowBox, shadowRound, static_cast<float>(roundingPower), renderRange, shadowColor, previewAlpha));
+    else {
+        PHLWINDOW cutoutWindow;
+        CBox cutoutSource, cutoutTarget;
+        // Stage wraps these passes in a deferred transparent layer. Preserve
+        // the owner and map native shadow exclusion into that layer's preview.
+        // Other overview paths retain their existing rendering.
+        if (stageTransitionFrame(window, monitor)) {
+            cutoutWindow = window;
+            cutoutSource = CBox{window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT),
+                               window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)};
+            if (window->m_workspace && !window->m_pinned)
+                cutoutSource.translate(window->m_workspace->m_renderOffset->value());
+            cutoutSource.translate(window->m_floatingOffset - monitor->m_position).scale(monitor->m_scale);
+            cutoutTarget = toBox(rectToMonitorRenderLocal(previewRect, monitor));
+        }
+        g_pHyprRenderer->m_renderPass.add(makeUnique<OverviewShadowPassElement>(
+            shadowBox, shadowRound, static_cast<float>(roundingPower), renderRange, shadowColor, previewAlpha,
+            cutoutWindow, cutoutSource, cutoutTarget));
+    }
 }
 
 void OverviewController::borderDrawHook(void* borderDecorationThisptr, const PHLMONITOR& monitor, const float& alpha) {
