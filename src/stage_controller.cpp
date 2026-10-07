@@ -2052,27 +2052,27 @@ void StageController::Impl::renderStage(eRenderStage stage) {
     if (renderBlocked(monitor))
         return;
     const auto progress = overviewProgress ? overviewProgress(monitor) : std::nullopt;
-    if (progress && *progress >= 1.0)
+    // Overview animates these same windows from/to their Stage card bounds.
+    // Rendering the sidebar as well would duplicate them and add a second slide.
+    if (progress && *progress > 0.0)
         return;
     auto* screen = visualScreenFor(monitor);
     if (!screen || !screen->geometry.enabled() || monitor->m_activeSpecialWorkspace || screen->shown <= 0)
         return;
-    // During overview, compose the sliding sidebar below its window previews
-    // and workspace strip. On the desktop it stays above native windows.
-    const auto drawStage = progress ? RENDER_PRE_WINDOWS : RENDER_POST_WINDOWS;
-    if (stage == drawStage) {
+    if (stage == RENDER_POST_WINDOWS) {
         const PHLMONITORREF ref = monitor;
         g_pHyprRenderer->m_renderPass.add(makeUnique<StagePassElement>([this, ref] {
             if (const auto mon = ref.lock())
                 draw(mon);
-        }, screen->flights.empty() && !screen->paneTransition && !dragHover && !(overviewProgress && overviewProgress(monitor)) ? sidebar(*screen).translate(-monitor->m_position)
+        }, screen->flights.empty() && !screen->paneTransition && !dragHover ? sidebar(*screen).translate(-monitor->m_position)
                                   : CBox{{}, monitor->m_size}));
     }
 }
 
 void StageController::Impl::draw(const PHLMONITOR& monitor) {
     auto* screen = visualScreenFor(monitor);
-    if (!screen || renderBlocked(monitor) || rendering || !g_pHyprOpenGL)
+    const auto progress = overviewProgress ? overviewProgress(monitor) : std::nullopt;
+    if (!screen || renderBlocked(monitor) || rendering || !g_pHyprOpenGL || (progress && *progress > 0.0))
         return;
     const auto now = Clock::now();
     if (now - screen->lastFrame > std::chrono::seconds(1)) {
@@ -2183,17 +2183,7 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
         }
       }
     };
-    const auto overview = overviewProgress ? overviewProgress(monitor) : std::nullopt;
-    if (overview) {
-        // Use the same progress as the overview, including gesture reversal and
-        // cancelled gestures. Travel past reserved output margins and the glow.
-        const double travel = screen->geometry.bandWidth + 8 + (screen->right ?
-            monitor->m_position.x + monitor->m_size.x - (screen->base.x + screen->base.w) :
-            screen->base.x - monitor->m_position.x);
-        const double hidden = 1 - screen->shown * (1 - std::clamp(*overview, 0.0, 1.0));
-        drawPane(screen->cards, screen->geometry, screen->scroll, screen->right,
-            (screen->right ? 1 : -1) * travel * hidden);
-    } else if (swipe && &swipe->visual == screen && swipe->sourceCovered) {
+    if (swipe && &swipe->visual == screen && swipe->sourceCovered) {
         if (!swipe->targetCovered) {
             const double travel = screen->right ? monitor->m_position.x + monitor->m_size.x - (screen->base.x + screen->base.w) + screen->geometry.bandWidth :
                 screen->base.x - monitor->m_position.x + screen->geometry.bandWidth;
@@ -2232,8 +2222,6 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
             drawPane(screen->cards, screen->geometry, screen->scroll, screen->right, slide);
     }
     g_pHyprRenderer->m_renderData.clipBox = previousClip;
-    if (overview)
-        return;
     drawFlights(*screen, monitor);
     if (dragHover && dragHover->monitor == monitor) {
         if (const auto window = dragHover->window.lock()) {

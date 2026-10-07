@@ -27,3 +27,17 @@ Physical gesture and visual acceptance remain pending after a user-run update:
 - Reverse the gesture before committing; previews should retrace their path.
 - Repeat using click/Return, then verify Stage-disabled and fullscreen exits.
 - Cross the hidden gap into B's compact overview and confirm it remains on B.
+
+## Follow-up: remove the sidebar's overview slide
+
+The sidebar renderer independently translated its full preview pane off-screen
+with overview progress. That still drew duplicate thumbnails moving sideways
+while overview animated the same windows from their card origins. Do not enqueue
+or execute the Stage pane pass while overview owns the monitor, and remove the
+overview-specific pane translation. Only overview's card-to-window motion is
+drawn during entry and exit. Normal Stage workspace and fullscreen transitions
+keep their own rendering paths.
+
+Repeat entry, reversal and exit after updating: no second set of card previews
+should slide sideways behind the overview windows. This remains a live visual
+acceptance check, not a claim made by the build or logic tests.
