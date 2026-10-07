@@ -66,12 +66,15 @@ scroll position; they are never moved or fitted back into view.
 Inside these clips, a fixed band progressively blurs the window content and
 fades it to transparency. The desktop has one band facing the sidebar (left by
 default, mirrored when Smartisan changes sides); each scrolling card has both
-left and right bands. The revealed background remains unchanged. Floating and
+left and right bands. Only windows crossing a viewport edge receive that edge
+effect; a fully visible window keeps its own edge sharp. Opacity is shifted half
+a band toward the clipped side independently of the smooth blur-strength ramp.
+The revealed background remains unchanged. Floating and
 pinned windows and non-scrolling workspaces retain their existing rendering.
 The bands remain horizontal even for a vertically configured scrolling layout.
 
-`stage_scrolling_desktop_edge_width = 64` and
-`stage_scrolling_preview_edge_width = 16` set independent widths in displayed
+`stage_scrolling_desktop_edge_width = 32` and
+`stage_scrolling_preview_edge_width = 8` set independent widths in displayed
 logical pixels. Zero or negative values mean **hard clipping**, never unclipped
 rendering. Excessive widths are clamped to the viewport and bilateral bands
 cannot overlap. Shader/resource failures also retain the hard clip. The state
@@ -81,7 +84,9 @@ The effect renders native window passes into a reusable transparent RGBA layer
 in the current pass, then composites it with premultiplied alpha. Native window
 background blur samples the original backdrop. It does not start a nested
 compositor render, capture static client snapshots or draw an opaque blur panel.
-Gaussian sampling stays inside the clip; its support is bounded by the native
+Full-resolution, horizontal-then-vertical Gaussian filtering uses paired bilinear
+taps rather than a stretched sparse grid. Gaussian sampling stays inside the
+clip; its support is bounded by the native
 live-blur damage expansion (and at most 12 logical pixels). Width zero requires
 no effect framebuffer. Framebuffers retain output precision and color space.
 

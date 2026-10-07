@@ -66,6 +66,7 @@ struct EdgeViewport {
     double right = 0;
 };
 EdgeViewport edgeViewport(const Rect& box, double left, double right);
+EdgeViewport edgeViewportForWindow(const EdgeViewport& viewport, const Rect& window);
 double edgeOpacity(const EdgeViewport& viewport, double x, double y);
 struct ScrollingFlightFrame {
     Rect window;

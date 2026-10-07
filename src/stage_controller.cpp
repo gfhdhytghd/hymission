@@ -572,7 +572,9 @@ struct StageController::Impl {
         if (!standalone && !ignorePosition && !self->rendering && !self->capturingWindowPasses && !renderer->m_bRenderingSnapshot &&
             self->enabled && !self->blocked() && screen && screen->geometry.enabled() && !screen->covered && !screen->suspended &&
             !monitor->m_activeSpecialWorkspace && scrollingTiled(window)) {
-            self->captureWindowPasses(renderer, monitor, self->desktopViewport(*screen), [&] {
+            const CBox bounds{window->positionAnimation()->value() + window->m_workspace->m_renderOffset->value(), window->sizeAnimation()->value()};
+            const auto viewport = stage::edgeViewportForWindow(self->desktopViewport(*screen), rect(bounds));
+            self->captureWindowPasses(renderer, monitor, viewport, [&] {
                 original(renderer, window, monitor, time, decorate, mode, ignorePosition, standalone);
             });
             return;
@@ -2380,7 +2382,7 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
                 if (!flight.fromViewport) {
                     if (workspace->m_id == previous) {
                         const auto area = stage::desktopArea(rect(screen.base), oldGeometry, oldRight);
-                        const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 64) : 0;
+                        const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 32) : 0;
                         flight.fromViewport = stage::edgeViewport(area, oldRight ? 0 : width, oldRight ? width : 0);
                     } else
                         flight.fromViewport = miniatureView(oldCards, oldGeometry, oldScroll, oldRight);
@@ -2412,12 +2414,12 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
 }
 
 stage::EdgeViewport StageController::Impl::desktopViewport(const Screen& screen) const {
-    const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 64) : 0;
+    const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 32) : 0;
     return stage::edgeViewport(rect(desktop(screen)), screen.right ? 0 : width, screen.right ? width : 0);
 }
 
 stage::EdgeViewport StageController::Impl::cardViewport(const CBox& card) const {
-    const double width = blurFramebufferHook ? setting("stage_scrolling_preview_edge_width", 16) : 0;
+    const double width = blurFramebufferHook ? setting("stage_scrolling_preview_edge_width", 8) : 0;
     return stage::edgeViewport(rect(card), width, width);
 }
 
@@ -2514,7 +2516,7 @@ void StageController::Impl::drawPreview(const PHLWINDOW& window, const PHLMONITO
     if (previewLayer(window) == stage::PreviewLayer::Hidden)
         return;
     if (viewport) {
-        edgeEffect.draw(monitor, *viewport, clip, [&](const CBox& limit) { drawPreview(window, monitor, target, limit, radius); });
+        edgeEffect.draw(monitor, stage::edgeViewportForWindow(*viewport, rect(target)), clip, [&](const CBox& limit) { drawPreview(window, monitor, target, limit, radius); });
         return;
     }
     const auto root = window->wlSurface()->resource();

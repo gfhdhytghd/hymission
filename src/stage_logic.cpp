@@ -206,13 +206,22 @@ EdgeViewport edgeViewport(const Rect& box, double left, double right) {
     return {box, left, right};
 }
 
+EdgeViewport edgeViewportForWindow(const EdgeViewport& viewport, const Rect& window) {
+    auto result = viewport;
+    if (window.x >= viewport.box.x - 0.01)
+        result.left = 0;
+    if (window.x + window.width <= viewport.box.x + viewport.box.width + 0.01)
+        result.right = 0;
+    return result;
+}
+
 double edgeOpacity(const EdgeViewport& viewport, double x, double y) {
     const auto& b = viewport.box;
     if (x < b.x || x >= b.x + b.width || y < b.y || y >= b.y + b.height || b.width <= 0 || b.height <= 0)
         return 0;
     const auto smooth = [](double t) { t = std::clamp(t, 0.0, 1.0); return t * t * (3 - 2 * t); };
-    return std::min(viewport.left > 0 ? smooth((x - b.x) / viewport.left) : 1.0,
-        viewport.right > 0 ? smooth((b.x + b.width - x) / viewport.right) : 1.0);
+    return std::min(viewport.left > 0 ? smooth((x - b.x) / viewport.left + 0.5) : 1.0,
+        viewport.right > 0 ? smooth((b.x + b.width - x) / viewport.right + 0.5) : 1.0);
 }
 
 ScrollingFlightFrame scrollingFlightFrame(const Rect& from, const Rect& to, const EdgeViewport& fromViewport,

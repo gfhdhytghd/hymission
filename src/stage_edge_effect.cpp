@@ -122,21 +122,24 @@ bool StageEdgeEffect::ensureShader() {
     return m_program != 0;
 }
 
-SP<Render::IFramebuffer> StageEdgeEffect::bufferFor(const PHLMONITOR& monitor, const SP<Render::IFramebuffer>& destination) {
+SP<Render::IFramebuffer> StageEdgeEffect::bufferFor(const PHLMONITOR& monitor, const SP<Render::IFramebuffer>& destination, bool horizontal) {
     GLState restore;
     std::erase_if(m_buffers, [](const Buffer& b) { return b.monitor.expired(); });
     auto it = std::ranges::find_if(m_buffers, [&](const Buffer& b) { return b.monitor == monitor; });
     if (it == m_buffers.end()) {
-        m_buffers.push_back({monitor, g_pHyprRenderer->createFB("hymission scrolling window layer")});
+        m_buffers.push_back({monitor, nullptr, nullptr});
         it = std::prev(m_buffers.end());
-        if (it->framebuffer) {
-            auto stencil = g_pHyprRenderer->createTexture();
-            glGenTextures(1, &stencil->m_texID);
-            it->framebuffer->addStencil(stencil);
-        }
     }
     // Keep the output's precision and color space, but require an alpha channel.
-    auto fb = it->framebuffer;
+    auto& fb = horizontal ? it->horizontal : it->framebuffer;
+    if (!fb) {
+        fb = g_pHyprRenderer->createFB(horizontal ? "hymission horizontal blur" : "hymission scrolling window layer");
+        if (fb) {
+            auto stencil = g_pHyprRenderer->createTexture();
+            glGenTextures(1, &stencil->m_texID);
+            fb->addStencil(stencil);
+        }
+    }
     if (!fb || !fb->alloc(static_cast<int>(monitor->m_pixelSize.x), static_cast<int>(monitor->m_pixelSize.y),
                           NFormatUtils::alphaFormat(destination->m_drmFormat))) {
         if (m_error.empty()) {
@@ -192,7 +195,8 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
     const bool soft = (left > 0 && affected.x < view.x + left) || (right > 0 && affected.x + affected.w > view.x + view.w - right);
     const auto destination = state.currentFB;
     const auto fb = soft && destination && ensureShader() ? bufferFor(monitor, destination) : nullptr;
-    if (!fb) {
+    const auto horizontal = fb ? bufferFor(monitor, destination, true) : nullptr;
+    if (!fb || !horizontal) {
         // Some native texture paths use the clip rectangle instead of damage.
         // Keep disjoint damage disjoint, or transparent windows would be drawn
         // over their previous pixels in the undamaged gaps between rectangles.
@@ -209,8 +213,8 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
     static auto blurSize = CConfigValue<Config::INTEGER>("decoration:blur:size");
     static auto blurPasses = CConfigValue<Config::INTEGER>("decoration:blur:passes");
     const double nativeSupport = std::clamp(*blurSize, int64_t{1}, int64_t{40}) * std::pow(2, std::clamp(*blurPasses, int64_t{1}, int64_t{8}));
-    const double maxRadius = std::min(12.0 * monitor->m_scale, nativeSupport - 1);
-    const double support = std::ceil(std::min(maxRadius, std::max(left, right) / 4)) + 1;
+    const double maxRadius = std::min({12.0 * monitor->m_scale, nativeSupport - 1, 32.0});
+    const double support = std::ceil(std::min(maxRadius, std::max(left, right) / 2)) + 1;
     const CBox sample = CBox{affected.x - support, affected.y - support, affected.w + support * 2, affected.h + support * 2}.intersection(hardClip);
     {
         GLState restoreGL;
@@ -273,8 +277,23 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
     glUniform4f(uniform("uSampleFB"), sampleFB.x, sampleFB.y, sampleFB.w, sampleFB.h);
     glUniform2f(uniform("uWidths"), left, right);
     glUniform1f(uniform("uMaxRadius"), maxRadius);
-    g_pHyprOpenGL->blend(true);
+    // First pass fills the padded sample rectangle without opacity. The
+    // second samples only that fresh rectangle and composites over the output.
+    g_pHyprRenderer->bindFB(horizontal);
+    g_pHyprOpenGL->blend(false);
     g_pHyprOpenGL->setCapStatus(GL_STENCIL_TEST, false);
+    glUniform1i(uniform("uPass"), 0);
+    g_pHyprOpenGL->scissor(sample, true);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    g_pHyprRenderer->bindFB(destination);
+    glActiveTexture(GL_TEXTURE0);
+    horizontal->getTexture()->bind();
+    if (mirror) {
+        glActiveTexture(GL_TEXTURE1);
+        horizontal->getMirrorTexture()->bind();
+    }
+    glUniform1i(uniform("uPass"), 1);
+    g_pHyprOpenGL->blend(true);
     outputDamage.forEachRect([&](const auto& rect) {
         g_pHyprOpenGL->scissor(&rect, true);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);

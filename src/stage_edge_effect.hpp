@@ -22,6 +22,7 @@ class StageEdgeEffect {
     struct Buffer {
         PHLMONITORREF monitor;
         SP<Render::IFramebuffer> framebuffer;
+        SP<Render::IFramebuffer> horizontal;
     };
     std::vector<Buffer> m_buffers;
     SP<Render::IFramebuffer> m_backdrop;
@@ -29,6 +30,6 @@ class StageEdgeEffect {
     GLuint m_vao = 0;
     std::string m_error;
     bool ensureShader();
-    SP<Render::IFramebuffer> bufferFor(const PHLMONITOR& monitor, const SP<Render::IFramebuffer>& destination);
+    SP<Render::IFramebuffer> bufferFor(const PHLMONITOR& monitor, const SP<Render::IFramebuffer>& destination, bool horizontal = false);
 };
 } // namespace hymission

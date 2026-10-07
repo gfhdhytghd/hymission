@@ -27,10 +27,18 @@ int main() {
     ok &= expect(near(wideEdges.left, 400) && near(wideEdges.right, 400), "large bilateral bands do not overlap");
     const auto soft = edgeViewport(viewportBox, 64, 0);
     const auto mirrored = edgeViewport(viewportBox, 0, 64);
-    ok &= expect(near(edgeOpacity(soft, 200, 100), 0) && near(edgeOpacity(soft, 232, 100), 0.5) &&
+    ok &= expect(near(edgeOpacity(soft, 200, 100), 0.5) && near(edgeOpacity(soft, 232, 100), 1) &&
         near(edgeOpacity(soft, 264, 100), 1) && near(edgeOpacity(soft, 999, 100), 1), "desktop fades only at the sidebar boundary");
     for (int d = 1; d < 800; ++d)
         ok &= expect(near(edgeOpacity(soft, 200 + d, 100), edgeOpacity(mirrored, 1000 - d, 100)), "right sidebar mirrors the desktop edge");
+    const auto complete = edgeViewportForWindow(soft, {200, 50, 400, 300});
+    const auto inset = edgeViewportForWindow(soft, {210, 50, 400, 300});
+    const auto clipped = edgeViewportForWindow(soft, {190, 50, 400, 300});
+    ok &= expect(complete.left == 0 && inset.left == 0 && clipped.left == soft.left,
+        "only crossing windows blur; flush and fully visible window edges stay sharp");
+    const auto rightClipped = edgeViewportForWindow(mirrored, {800, 50, 220, 300});
+    ok &= expect(rightClipped.right == mirrored.right && edgeViewportForWindow(mirrored, {800, 50, 200, 300}).right == 0,
+        "crossing classification mirrors with the sidebar");
     const auto cardView = edgeViewport({20, 300, 160, 100}, 16, 16);
     for (const double offset : {-1.5, -0.3, 0.0, 0.6, 1.1}) {
         const hymission::Rect from{viewportBox.x + offset * viewportBox.width, viewportBox.y + 100, 200, 100};

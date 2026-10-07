@@ -60,10 +60,10 @@ int main() {
     if (!linked)
         return 1;
     glUseProgram(program);
-    GLuint vao, textures[4], framebuffer;
+    GLuint vao, textures[6], framebuffer;
     glGenVertexArrays(1, &vao);
     glBindVertexArray(vao);
-    glGenTextures(4, textures);
+    glGenTextures(6, textures);
     for (auto texture : textures) {
         glBindTexture(GL_TEXTURE_2D, texture);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -91,6 +91,7 @@ int main() {
     std::vector<unsigned char> mirrorSource(source.size()), mirrorPixels(source.size()), blended(source.size());
     bool ok = true;
     int cases = 0;
+    int antiAliasSamples = 0;
     for (int transform = 0; transform < 8; ++transform) {
       for (const float fraction : {0.F, 0.25F, 0.75F}) {
         const auto tr = static_cast<Hyprutils::Math::eTransform>(transform);
@@ -142,6 +143,17 @@ int main() {
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, textures[0]);
                     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, source.data());
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textures[4], 0);
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, textures[5], 0);
+                    glUniform1i(location("uPass"), 0);
+                    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textures[1], 0);
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, textures[3], 0);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, textures[4]);
+                    glActiveTexture(GL_TEXTURE1);
+                    glBindTexture(GL_TEXTURE_2D, textures[5]);
+                    glUniform1i(location("uPass"), 1);
                     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
                     glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
                     glReadBuffer(GL_COLOR_ATTACHMENT1);
@@ -157,7 +169,7 @@ int main() {
                     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
                     glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, blended.data());
                     glDisable(GL_BLEND);
-                    bool clipped = true, clean = true, opaqueCenter = true, mirrored = true, composited = true;
+                    bool clipped = true, clean = true, opaqueCenter = true, mirrored = true, composited = true, noGrid = true;
                     int fading = 0, blurred = 0;
                     for (int y = 0; y < H; ++y)
                         for (int x = 0; x < W; ++x) {
@@ -173,6 +185,16 @@ int main() {
                             else {
                                 clean &= pixels[i] == 0 && pixels[i + 1] <= pixels[i + 3] && pixels[i + 3] <= alpha;
                                 const bool edge = (left && m.x < viewX + left) || (right && m.x > viewX + viewW - right);
+                                if (pattern == 2 && edge) {
+                                    const float distance = left && m.x < viewX + left ? m.x - viewX : viewX + viewW - m.x;
+                                    const float width = left && m.x < viewX + left ? left : right;
+                                    const float t = std::clamp(distance / width, 0.F, 1.F);
+                                    const float radius = std::min(12 * scale, width * 0.5F) * (1 - t * t * (3 - 2 * t));
+                                    if (radius >= 5 && distance > radius + 2 && m.y > viewY + radius + 2 && m.y < viewY + viewH - radius - 2) {
+                                        ++antiAliasSamples;
+                                        noGrid &= std::abs(2 * pixels[i + 1] - pixels[i + 3]) <= 8;
+                                    }
+                                }
                                 if (!edge)
                                     opaqueCenter &= pixels[i + 3] == alpha && pixels[i + 1] == source[i + 1];
                                 else {
@@ -181,11 +203,11 @@ int main() {
                                 }
                             }
                         }
-                    const bool passed = clipped && clean && opaqueCenter && mirrored && composited && (mode == 0 || fading > 0) && (pattern != 2 || mode == 0 || blurred > 0);
+                    const bool passed = noGrid && clipped && clean && opaqueCenter && mirrored && composited && (mode == 0 || fading > 0) && (pattern != 2 || mode == 0 || blurred > 0);
                     if (!passed)
                         std::cerr << "FAIL transform=" << transform << " scale=" << scale << " mode=" << mode << " pattern=" << pattern
                             << " fraction=" << fraction << " clip=" << clipped << " clean=" << clean << " center=" << opaqueCenter
-                            << " mirror=" << mirrored << " composite=" << composited << " fade=" << fading << " blur=" << blurred << '\n';
+                            << " noGrid=" << noGrid << " mirror=" << mirrored << " composite=" << composited << " fade=" << fading << " blur=" << blurred << '\n';
                     ok &= passed;
                     ++cases;
                 }
@@ -193,10 +215,10 @@ int main() {
         }
       }
     }
-    ok &= glGetError() == GL_NO_ERROR;
-    std::cout << cases << " GPU cases; renderer: " << glGetString(GL_RENDERER) << '\n';
+    ok &= glGetError() == GL_NO_ERROR && antiAliasSamples > 0;
+    std::cout << cases << " GPU cases; anti-alias samples: " << antiAliasSamples << "; renderer: " << glGetString(GL_RENDERER) << '\n';
     glDeleteFramebuffers(1, &framebuffer);
-    glDeleteTextures(4, textures);
+    glDeleteTextures(6, textures);
     glDeleteVertexArrays(1, &vao);
     glDeleteProgram(program);
     glDeleteShader(vertex);
