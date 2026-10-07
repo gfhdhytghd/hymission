@@ -8456,6 +8456,7 @@ void OverviewController::applyOffscreenOpenAnimationEndpoints(State& state) cons
 }
 
 void OverviewController::applyOffscreenExitAnimationEndpoints(State& state, const PHLWORKSPACE& activeWorkspaceOverride) const {
+    StageController::prepareOverviewExit(state.participatingMonitors, activeWorkspaceOverride);
     for (auto& window : state.windows) {
         if (const auto destination = StageController::overviewDestination(window.window, activeWorkspaceOverride)) {
             window.exitGlobal = *destination;
@@ -9749,10 +9750,10 @@ void OverviewController::requestCloseHoveredWindow() {
     }
 }
 
-std::optional<double> OverviewController::stageOverviewProgress(const PHLMONITOR& monitor) const {
-    if (!isVisible() || m_stripSnapshotRenderDepth > 0 || rawWindowRenderActive() || captureInputSuppressed())
-        return std::nullopt;
-    return ownsMonitor(monitor) ? visualProgress() : 0.0;
+stage::OverviewPhase OverviewController::stageOverviewPhase(const PHLMONITOR& monitor) const {
+    if (!isVisible() || !ownsMonitor(monitor))
+        return stage::OverviewPhase::Inactive;
+    return m_deactivatePending ? stage::OverviewPhase::Releasing : stage::OverviewPhase::Active;
 }
 
 double OverviewController::visualProgress() const {
@@ -11665,6 +11666,7 @@ void OverviewController::deactivate() {
     m_stripSnapshotsDirty = false;
     m_stripSnapshotRefreshScheduled = false;
     m_state = {};
+    StageController::finishOverview();
     for (const auto& ownedMonitor : ownedMonitors) {
         g_pHyprRenderer->damageMonitor(ownedMonitor);
         ownedMonitor->scheduleFrame();
@@ -11923,6 +11925,8 @@ void OverviewController::updateAnimation() {
         if (!m_deactivatePending) {
             if (debugLogsEnabled())
                 debugLog("[hymission] anim closing complete, queue deferred deactivate");
+            StageController::prepareOverviewExit(m_state.participatingMonitors,
+                m_state.pendingExitFocus ? m_state.pendingExitFocus->m_workspace : PHLWORKSPACE{});
             m_deactivatePending = true;
             scheduleDeactivate();
         }

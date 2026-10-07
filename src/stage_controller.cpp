@@ -298,7 +298,9 @@ struct StageController::Impl {
 
     HANDLE handle;
     std::function<bool()> overviewSuspended;
-    std::function<std::optional<double>(const PHLMONITOR&)> overviewProgress;
+    std::function<stage::OverviewPhase(const PHLMONITOR&)> overviewPhase;
+    std::vector<Screen> overviewExitScreens;
+    bool finishingOverview = false;
     std::vector<Screen> screens;
     std::vector<PHLWINDOWREF> livePreviewWindows;
     std::optional<Swipe> swipe;
@@ -390,8 +392,8 @@ struct StageController::Impl {
         return screen.cards.empty() ? std::nullopt : std::optional<std::size_t>(index);
     }
 
-    Impl(HANDLE h, std::function<bool()> suspended, std::function<std::optional<double>(const PHLMONITOR&)> progress) :
-        handle(h), overviewSuspended(std::move(suspended)), overviewProgress(std::move(progress)) { instance = this; }
+    Impl(HANDLE h, std::function<bool()> suspended, std::function<stage::OverviewPhase(const PHLMONITOR&)> phase) :
+        handle(h), overviewSuspended(std::move(suspended)), overviewPhase(std::move(phase)) { instance = this; }
     ~Impl();
     void initialize();
     void request(bool dirty = true);
@@ -428,6 +430,8 @@ struct StageController::Impl {
     void endSwipe();
     void clearSwipe();
     Screen* visualScreenFor(const PHLMONITOR& monitor);
+    Screen* preparedOverviewScreen(const PHLMONITOR& monitor);
+    stage::OverviewPhase overviewPhaseFor(const PHLMONITOR& monitor) const;
     stage::Settings settingsForSide(bool right) const;
     bool blocked() const;
     bool renderBlocked(const PHLMONITOR& monitor) const;
@@ -493,7 +497,7 @@ struct StageController::Impl {
         // Overview owns window motion while Stage is suspended. Its exit now
         // lands directly in Stage cards; a native slide must not run underneath.
         const bool overviewOwnsMotion = self->enabled && workspace && !workspace->m_isSpecialWorkspace && screen && screen->geometry.enabled() &&
-            self->overviewProgress && self->overviewProgress(monitor).has_value();
+            self->overviewPhaseFor(monitor) != stage::OverviewPhase::Inactive;
         const bool owned = settlingSwipe || overviewOwnsMotion || self->ownsTransition(workspace);
         reinterpret_cast<WorkspaceAnimationFn>(self->workspaceAnimationHook->m_original)(workspace, type, left, instant || owned, std::move(style));
         if (owned)
@@ -627,7 +631,8 @@ bool StageController::Impl::blocked() const {
 bool StageController::Impl::renderBlocked(const PHLMONITOR& monitor) const {
     if (g_pSessionLockManager && g_pSessionLockManager->isSessionLocked())
         return true;
-    return blocked() && !(overviewProgress && overviewProgress(monitor).has_value());
+    const bool prepared = std::ranges::any_of(overviewExitScreens, [&](const auto& screen) { return screen.monitor == monitor; });
+    return stage::overviewRenderOwner(overviewPhaseFor(monitor), prepared) == stage::OverviewRenderOwner::Overview;
 }
 
 bool StageController::Impl::ownsTransition(const PHLWORKSPACE& workspace, bool allowCovered) const {
@@ -652,7 +657,19 @@ StageController::Impl::Screen* StageController::Impl::screenFor(const PHLMONITOR
     return it == screens.end() ? nullptr : &*it;
 }
 
+stage::OverviewPhase StageController::Impl::overviewPhaseFor(const PHLMONITOR& monitor) const {
+    return overviewPhase ? overviewPhase(monitor) : stage::OverviewPhase::Inactive;
+}
+
+StageController::Impl::Screen* StageController::Impl::preparedOverviewScreen(const PHLMONITOR& monitor) {
+    const auto it = std::ranges::find_if(overviewExitScreens, [&](const auto& screen) { return screen.monitor == monitor; });
+    return it == overviewExitScreens.end() ? nullptr : &*it;
+}
+
 StageController::Impl::Screen* StageController::Impl::visualScreenFor(const PHLMONITOR& monitor) {
+    if (overviewPhaseFor(monitor) == stage::OverviewPhase::Releasing)
+        if (auto* prepared = preparedOverviewScreen(monitor))
+            return prepared;
     if (swipe && swipe->prepared && swipe->monitor == monitor)
         return &swipe->visual;
     return screenFor(monitor);
@@ -1289,7 +1306,7 @@ void StageController::Impl::sync() {
         const auto oldGeometry = screen->geometry;
         const bool switching = screen->active != WORKSPACE_INVALID && monitor->m_activeWorkspace && screen->active != monitor->m_activeWorkspace->m_id;
         const bool changedOutput = !sameBox(base, screen->base) || screen->scale != monitor->m_scale || screen->transform != static_cast<int>(monitor->m_transform);
-        if (switching && !changedOutput && !changedPolicy && !reconfigure && !blocked() && !screen->covered && !screen->suspended) {
+        if (!finishingOverview && switching && !changedOutput && !changedPolicy && !reconfigure && !blocked() && !screen->covered && !screen->suspended) {
             pendingFlights.push_back({monitor, screen->active, screen->cards, oldGeometry, screen->scroll, screen->right, {}});
             for (const auto& window : Desktop::windowState()->windows()) {
                 if (window->m_monitor == monitor && window->m_isMapped && !window->isHidden() && !window->m_pinned)
@@ -1300,7 +1317,7 @@ void StageController::Impl::sync() {
         const bool oldRight = screen->right;
         if (!smartisan || changedMode)
             screen->right = false;
-        if (smartisan && switching && !blocked() && !screen->covered && !screen->suspended)
+        if (!finishingOverview && smartisan && switching && !blocked() && !screen->covered && !screen->suspended)
             screen->right = !screen->right;
         const bool changedSide = oldRight != screen->right;
         if (changedSide && smartisan && switching && !changedOutput && !reconfigure && numberSetting("animations:enabled", 1) != 0 && setting("stage_transition_ms", 300) > 0) {
@@ -1352,7 +1369,7 @@ void StageController::Impl::sync() {
             for (std::size_t i = 0; i < screen->cards.size(); ++i) {
                 auto& card = screen->cards[i];
                 const auto old = std::ranges::find_if(oldTops, [&](const auto& entry) { return entry.first == cardID(card); });
-                card.shift = !changedOutput && numberSetting("animations:enabled", 1) && setting("stage_transition_ms", 300) > 0 && old != oldTops.end() ?
+                card.shift = !finishingOverview && !blocked() && !changedOutput && numberSetting("animations:enabled", 1) && setting("stage_transition_ms", 300) > 0 && old != oldTops.end() ?
                     old->second - screen->geometry.cardTop(i, 0) : 0;
                 card.shiftStart = Clock::now();
                 if (card.shift != 0)
@@ -1373,6 +1390,10 @@ void StageController::Impl::sync() {
             armMotion();
         }
         const bool suspended = blocked() || !!monitor->m_activeSpecialWorkspace;
+        if (finishingOverview) {
+            screen->shown = cover || !!monitor->m_activeSpecialWorkspace ? 0 : 1;
+            screen->slideFrom = screen->shown;
+        }
         const bool changedSuspension = screen->suspended != suspended;
         screen->suspended = suspended;
         if (suspended || cover || changedOutput || reconfigure || (!switching && (changedCards || changedGeometry)))
@@ -2069,11 +2090,6 @@ void StageController::Impl::renderStage(eRenderStage stage) {
     const auto monitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
     if (renderBlocked(monitor))
         return;
-    const auto progress = overviewProgress ? overviewProgress(monitor) : std::nullopt;
-    // Overview animates these same windows from/to their Stage card bounds.
-    // Rendering the sidebar as well would duplicate them and add a second slide.
-    if (progress && *progress > 0.0)
-        return;
     auto* screen = visualScreenFor(monitor);
     if (!screen || !screen->geometry.enabled() || monitor->m_activeSpecialWorkspace || screen->shown <= 0)
         return;
@@ -2089,8 +2105,7 @@ void StageController::Impl::renderStage(eRenderStage stage) {
 
 void StageController::Impl::draw(const PHLMONITOR& monitor) {
     auto* screen = visualScreenFor(monitor);
-    const auto progress = overviewProgress ? overviewProgress(monitor) : std::nullopt;
-    if (!screen || renderBlocked(monitor) || rendering || !g_pHyprOpenGL || (progress && *progress > 0.0))
+    if (!screen || renderBlocked(monitor) || rendering || !g_pHyprOpenGL)
         return;
     const auto now = Clock::now();
     if (now - screen->lastFrame > std::chrono::seconds(1)) {
@@ -2852,12 +2867,22 @@ std::string StageController::Impl::stateJson() const {
         nlohmann::json cards = nlohmann::json::array();
         for (const auto& card : screen.cards) {
             if (const auto workspace = card.workspace.lock())
-                cards.push_back({{"workspace", workspace->m_id}, {"name", workspace->m_name}, {"previews_ready", card.previewsReady}});
+                cards.push_back({{"workspace", workspace->m_id}, {"name", workspace->m_name}, {"previews_ready", card.previewsReady}, {"shift", card.shift}});
             else if (card.syntheticId > 0)
                 cards.push_back({{"workspace", card.syntheticId}, {"name", "empty:" + std::to_string(card.syntheticId)}, {"synthetic", true},
                     {"previews_ready", true}});
         }
+        const auto prepared = std::ranges::find_if(overviewExitScreens, [&](const auto& candidate) { return candidate.monitor == monitor; });
+        const auto owner = stage::overviewRenderOwner(overviewPhaseFor(monitor), prepared != overviewExitScreens.end());
+        nlohmann::json preparedCards = nlohmann::json::array();
+        if (prepared != overviewExitScreens.end())
+            for (const auto& card : prepared->cards)
+                preparedCards.push_back(cardID(card));
         result["screens"].push_back({{"monitor", monitor->m_name}, {"card_width", screen.geometry.cardWidth}, {"card_height", screen.geometry.cardHeight},
+                                     {"overview_render_owner", owner == stage::OverviewRenderOwner::Overview ? "overview" :
+                                         owner == stage::OverviewRenderOwner::PreparedStage ? "prepared_stage" : "stage"},
+                                     {"prepared_active_workspace", prepared != overviewExitScreens.end() ? prepared->active : WORKSPACE_INVALID},
+                                     {"prepared_cards", preparedCards},
                                      {"preview_render_fps", Clock::now() - rendered.lastFrame < std::chrono::seconds(1) ? rendered.previewRenderFPS : 0},
                                      {"background_ready", !!(screen.background && screen.background->isAllocated())},
                                      {"background_error", screen.backgroundError},
@@ -2873,8 +2898,8 @@ std::string StageController::Impl::stateJson() const {
 }
 
 StageController::StageController(HANDLE handle, std::function<bool()> suspended,
-                                 std::function<std::optional<double>(const PHLMONITOR&)> progress) :
-    m_impl(std::make_unique<Impl>(handle, std::move(suspended), std::move(progress))) {}
+                                 std::function<stage::OverviewPhase(const PHLMONITOR&)> phase) :
+    m_impl(std::make_unique<Impl>(handle, std::move(suspended), std::move(phase))) {}
 StageController::~StageController() = default;
 void StageController::initialize() { m_impl->initialize(); }
 std::string StageController::stateJson() const { return m_impl->stateJson(); }
@@ -2920,45 +2945,98 @@ std::optional<Rect> StageController::overviewOrigin(const PHLWINDOW& window) {
     return std::nullopt;
 }
 
+void StageController::prepareOverviewExit(const std::vector<PHLMONITOR>& monitors, const PHLWORKSPACE& activeWorkspace) {
+    auto* self = Impl::instance;
+    if (!self)
+        return;
+    self->overviewExitScreens.clear();
+    if (!self->enabled)
+        return;
+    for (const auto& monitor : monitors) {
+        const auto* source = self->screenFor(monitor);
+        if (!monitor || !source || !source->geometry.enabled())
+            continue;
+        const auto target = activeWorkspace && activeWorkspace->m_monitor == monitor ? activeWorkspace : monitor->m_activeWorkspace;
+        if (!target || target->m_isSpecialWorkspace)
+            continue;
+
+        // One settled scene supplies every exit endpoint and the first Stage
+        // frame. Never expose the live list while it still describes the old
+        // active workspace or has outstanding card-shift animations.
+        Impl::Screen destination = *source;
+        destination.active = target->m_id;
+        destination.cards = self->cardsForWorkspace(monitor, target);
+        destination.geometry = stage::layout(destination.base.w, destination.base.h, destination.cards.size(),
+            self->settingsForSide(destination.right), std::nullopt, monitor->m_size.x);
+        destination.scroll = destination.geometry.clampScroll(source->scroll);
+        destination.flights.clear();
+        destination.departingCards.clear();
+        destination.paneTransition = false;
+        destination.hovered.reset();
+        destination.reorderHover.reset();
+        destination.suspended = false;
+        const auto mode = Fullscreen::controller()->getFullscreenModes(target).internal;
+        destination.covered = mode == Fullscreen::FSMODE_FULLSCREEN || (self->maximizeCover && mode == Fullscreen::FSMODE_MAXIMIZED);
+        destination.shown = destination.covered || monitor->m_activeSpecialWorkspace ? 0 : 1;
+        destination.slideFrom = destination.shown;
+        for (auto& card : destination.cards) {
+            if (card.workspace.lock())
+                self->updatePreviews(destination, card);
+        }
+        self->overviewExitScreens.push_back(std::move(destination));
+    }
+}
+
 std::optional<Rect> StageController::overviewDestination(const PHLWINDOW& window, const PHLWORKSPACE& activeWorkspace) {
     auto* self = Impl::instance;
     if (!self || !self->enabled || !window || !window->m_isMapped || window->m_pinned || !window->m_workspace || window->onSpecialWorkspace())
         return std::nullopt;
     const auto monitor = window->m_workspace->m_monitor.lock();
-    const auto* source = self->screenFor(monitor);
-    if (!monitor || !source || !source->geometry.enabled() || monitor->m_activeSpecialWorkspace)
+    const auto* destination = self->preparedOverviewScreen(monitor);
+    if (!monitor || !destination || destination->shown <= 0 || !destination->geometry.enabled())
         return std::nullopt;
     const auto target = activeWorkspace && activeWorkspace->m_monitor == monitor ? activeWorkspace : monitor->m_activeWorkspace;
-    if (!target || target->m_isSpecialWorkspace || window->m_workspace == target)
+    if (!target || destination->active != target->m_id || window->m_workspace == target)
         return std::nullopt;
-    const auto mode = Fullscreen::controller()->getFullscreenModes(target).internal;
-    if (mode == Fullscreen::FSMODE_FULLSCREEN || (self->maximizeCover && mode == Fullscreen::FSMODE_MAXIMIZED))
-        return std::nullopt;
-
-    // Predict without changing the desktop or using opening-time card positions:
-    // the old active workspace gains a card and the new active one may lose it.
-    Impl::Screen destination;
-    destination.monitor = monitor;
-    destination.base = source->base;
-    destination.right = source->right;
-    destination.cards = self->cardsForWorkspace(monitor, target);
-    destination.geometry = stage::layout(destination.base.w, destination.base.h, destination.cards.size(),
-        self->settingsForSide(destination.right), std::nullopt, monitor->m_size.x);
-    destination.scroll = destination.geometry.clampScroll(source->scroll);
-    if (!destination.geometry.enabled())
-        return std::nullopt;
-    for (std::size_t i = 0; i < destination.cards.size(); ++i) {
-        auto& card = destination.cards[i];
-        if (card.workspace != window->m_workspace || !self->updatePreviews(destination, card))
+    for (std::size_t i = 0; i < destination->cards.size(); ++i) {
+        const auto& card = destination->cards[i];
+        if (card.workspace != window->m_workspace)
             continue;
         for (const auto& preview : card.previews) {
             if (preview.window == window)
-                return Rect{self->sidebar(destination).x + destination.geometry.padding + preview.target.x,
-                    destination.base.y + destination.geometry.cardTop(i, destination.scroll) + preview.target.y,
+                return Rect{self->sidebar(*destination).x + destination->geometry.padding + preview.target.x,
+                    destination->base.y + destination->geometry.cardTop(i, destination->scroll) + preview.target.y,
                     preview.target.w, preview.target.h};
         }
     }
     return std::nullopt;
+}
+
+void StageController::finishOverview() {
+    auto* self = Impl::instance;
+    if (!self)
+        return;
+    // Called from deferred overview teardown, outside rendering, after final
+    // focus/fullscreen restoration. Publish current cards before another frame
+    // can render; an idle refresh would leave one frame of the old workspace.
+    self->finishingOverview = true;
+    for (auto& screen : self->screens) {
+        const auto monitor = screen.monitor.lock();
+        const auto* prepared = self->preparedOverviewScreen(monitor);
+        if (prepared && monitor && monitor->m_activeWorkspace && prepared->active == monitor->m_activeWorkspace->m_id) {
+            screen.cards = prepared->cards;
+            screen.scroll = prepared->scroll;
+        }
+        screen.flights.clear();
+        screen.departingCards.clear();
+        screen.paneTransition = false;
+        for (auto& card : screen.cards)
+            card.shift = 0;
+    }
+    self->forceRefresh = true;
+    self->sync();
+    self->finishingOverview = false;
+    self->overviewExitScreens.clear();
 }
 
 bool StageController::beginWorkspaceSwipe(void* gesture, void (*original)(void*)) {

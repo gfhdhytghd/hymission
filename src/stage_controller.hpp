@@ -3,7 +3,9 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <vector>
 #include "mission_layout.hpp"
+#include "stage_logic.hpp"
 #include <string>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
@@ -14,7 +16,7 @@ namespace hymission {
 class StageController {
   public:
     StageController(HANDLE handle, std::function<bool()> overviewSuspended,
-                    std::function<std::optional<double>(const PHLMONITOR&)> overviewProgress);
+                    std::function<stage::OverviewPhase(const PHLMONITOR&)> overviewPhase);
     ~StageController();
     StageController(const StageController&) = delete;
     StageController& operator=(const StageController&) = delete;
@@ -36,6 +38,8 @@ class StageController {
     static std::optional<Rect> overviewOrigin(const PHLWINDOW& window);
     // Settled card endpoint after overview activates the requested workspace.
     static std::optional<Rect> overviewDestination(const PHLWINDOW& window, const PHLWORKSPACE& activeWorkspace);
+    static void prepareOverviewExit(const std::vector<PHLMONITOR>& monitors, const PHLWORKSPACE& activeWorkspace);
+    static void finishOverview();
 
   private:
     struct Impl;

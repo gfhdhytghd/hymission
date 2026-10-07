@@ -16,6 +16,20 @@ bool near(double a, double b) { return std::abs(a - b) < 1e-7; }
 int main() {
     using namespace hymission::stage;
     bool ok = true;
+    // Lifecycle regression: A's old sidebar must never cover B's predicted
+    // sidebar during the zero-progress frame or deferred overview teardown.
+    ok &= expect(overviewRenderOwner(OverviewPhase::Inactive, false) == OverviewRenderOwner::Stage,
+                 "resting desktop uses live Stage cards");
+    for (const bool prepared : {false, true}) {
+        ok &= expect(overviewRenderOwner(OverviewPhase::Active, prepared) == OverviewRenderOwner::Overview,
+                     "overview owns all gesture frames including zero and reversal");
+    }
+    ok &= expect(overviewRenderOwner(OverviewPhase::Releasing, false) == OverviewRenderOwner::Overview,
+                 "missing prepared exit must not reveal old live Stage cards");
+    ok &= expect(overviewRenderOwner(OverviewPhase::Releasing, true) == OverviewRenderOwner::PreparedStage,
+                 "deferred teardown shows the same prepared scene as exit endpoints");
+    ok &= expect(overviewRenderOwner(OverviewPhase::Inactive, true) == OverviewRenderOwner::Stage,
+                 "after synchronous publication live Stage resumes ownership");
     const hymission::Rect viewportBox{200, 50, 800, 500};
     const auto hard = edgeViewport(viewportBox, 0, 0);
     ok &= expect(near(edgeOpacity(hard, 200, 50), 1) && near(edgeOpacity(hard, 999.9, 549.9), 1), "zero widths retain the entire interior");

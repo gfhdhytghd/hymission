@@ -7,6 +7,19 @@
 
 namespace hymission::stage {
 
+enum class OverviewPhase { Inactive, Active, Releasing };
+enum class OverviewRenderOwner { Stage, Overview, PreparedStage };
+
+// Ownership is a lifecycle decision, not an opacity/progress threshold. In
+// particular, a zero-progress gesture is still owned by overview.
+constexpr OverviewRenderOwner overviewRenderOwner(OverviewPhase phase, bool prepared) {
+    if (phase == OverviewPhase::Inactive)
+        return OverviewRenderOwner::Stage;
+    if (phase == OverviewPhase::Releasing && prepared)
+        return OverviewRenderOwner::PreparedStage;
+    return OverviewRenderOwner::Overview;
+}
+
 // All dimensions are logical pixels. Width/height have already had the bar's
 // reserved area removed; desktop gaps belong to the native layout, not here.
 struct Settings {
