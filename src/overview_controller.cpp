@@ -4735,10 +4735,11 @@ bool OverviewController::surfaceNeedsLiveBlurHook(void* surfacePassThisptr) {
         previewMonitorForWindow(renderData->pWindow) != monitor)
         return m_surfaceNeedsLiveBlurOriginal(surfacePassThisptr);
 
-    const float savedAlpha = renderData->alpha;
-    renderData->alpha = managedPreviewAlphaFor(renderData->pWindow, savedAlpha);
+    SurfaceRenderDataSnapshot snapshot;
+    if (!prepareSurfaceRenderData(surfacePassThisptr, "needsLiveBlur", renderData, monitor, snapshot))
+        return m_surfaceNeedsLiveBlurOriginal(surfacePassThisptr);
     const bool needsBlur = m_surfaceNeedsLiveBlurOriginal(surfacePassThisptr);
-    renderData->alpha = savedAlpha;
+    restoreSurfaceRenderData(renderData, snapshot);
     return needsBlur;
 }
 
@@ -4758,10 +4759,11 @@ bool OverviewController::surfaceNeedsPrecomputeBlurHook(void* surfacePassThisptr
         previewMonitorForWindow(renderData->pWindow) != monitor)
         return m_surfaceNeedsPrecomputeBlurOriginal(surfacePassThisptr);
 
-    const float savedAlpha = renderData->alpha;
-    renderData->alpha = managedPreviewAlphaFor(renderData->pWindow, savedAlpha);
+    SurfaceRenderDataSnapshot snapshot;
+    if (!prepareSurfaceRenderData(surfacePassThisptr, "needsPrecomputeBlur", renderData, monitor, snapshot))
+        return m_surfaceNeedsPrecomputeBlurOriginal(surfacePassThisptr);
     const bool needsBlur = m_surfaceNeedsPrecomputeBlurOriginal(surfacePassThisptr);
-    renderData->alpha = savedAlpha;
+    restoreSurfaceRenderData(renderData, snapshot);
     return needsBlur;
 }
 
@@ -9046,7 +9048,7 @@ bool OverviewController::shouldSuppressSurfaceBlur(void* surfacePassThisptr) con
     // Hyprland's blur path temporarily binds the monitor blur/main FBs, and
     // CGLFramebuffer::bind() resets the viewport to monitor->m_pixelSize. On a
     // rotated output that swaps the export viewport dimensions mid-pass.
-    if (!isAnimating() && !m_stripPreviewContext.active)
+    if (!m_stripPreviewContext.active)
         return false;
 
     const auto* renderData = surfaceRenderDataMutable(surfacePassThisptr);
@@ -9094,6 +9096,10 @@ bool OverviewController::prepareSurfaceRenderData(void* surfacePassThisptr, cons
 
     const bool transformed = transformSurfaceRenderDataForWindow(renderData->pWindow, monitor, *renderData);
     if (transformed) {
+        // Moving previews need the backdrop at their displayed position. Keep
+        // blur planning and drawing on the same live path; the native cached
+        // desktop blur is not a substitute for the transformed composition.
+        renderData->blockBlurOptimization = true;
         renderData->alpha = managedPreviewAlphaFor(renderData->pWindow, snapshot.alpha);
         if (!isWindowFadingOut(renderData->pWindow))
             renderData->fadeAlpha = 1.0F;

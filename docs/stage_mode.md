@@ -305,6 +305,11 @@ heading toward the new endpoint. `hyprctl hymission-overview-state` window diagn
 `stageOpeningReveal`, `stageClosingReveal` and the current Stage transition
 clip, viewport and edge widths.
 
+Overview window surfaces retain native transparency and use live backdrop blur
+during entry, exit and the settled overview. Blur planning uses the same
+transformed surface state as drawing. Offscreen workspace-strip snapshots still
+disable window blur because their export framebuffer may differ from the output.
+
 On the normal desktop, native closing snapshots are classified individually by
 their animated window bodies. A fully visible closing window keeps sharp edges;
 a window crossing the scrolling boundary retains that edge effect. Native
