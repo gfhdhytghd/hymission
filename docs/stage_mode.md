@@ -288,6 +288,11 @@ reports this drag separately from a native desktop-window drag.
 
 Overview/raw capture/input suppression, special workspaces and session locking
 suspend stage drawing/input. They do not remove the native reservation.
+In `onlycurrentworkspace` Overview, the sidebar slides toward the outside edge
+(left in the default layout), following timed or gesture progress and reversing
+on cancellation. It is composited below overview windows. `forceall` keeps the
+sidebar suppressed because overview already animates those same windows.
+
 Opening Overview captures Stage's displayed window rectangles before suspension.
 Sidebar windows expand from their current card previews (including scroll and
 flight offsets), while active desktop windows retain their desktop origins.

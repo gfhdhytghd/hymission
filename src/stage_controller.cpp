@@ -301,6 +301,7 @@ struct StageController::Impl {
     std::function<bool()> overviewSuspended;
     std::function<stage::OverviewPhase(const PHLMONITOR&)> overviewPhase;
     std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> overviewFrame;
+    std::function<std::optional<double>(const PHLMONITOR&)> sidebarProgress;
     std::vector<Screen> overviewExitScreens;
     bool finishingOverview = false;
     std::vector<Screen> screens;
@@ -395,8 +396,8 @@ struct StageController::Impl {
     }
 
     Impl(HANDLE h, std::function<bool()> suspended, std::function<stage::OverviewPhase(const PHLMONITOR&)> phase,
-         std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> frame) :
-        handle(h), overviewSuspended(std::move(suspended)), overviewPhase(std::move(phase)), overviewFrame(std::move(frame)) { instance = this; }
+         std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> frame, std::function<std::optional<double>(const PHLMONITOR&)> slide) :
+        handle(h), overviewSuspended(std::move(suspended)), overviewPhase(std::move(phase)), overviewFrame(std::move(frame)), sidebarProgress(std::move(slide)) { instance = this; }
     ~Impl();
     void initialize();
     void request(bool dirty = true);
@@ -645,6 +646,8 @@ bool StageController::Impl::blocked() const {
 bool StageController::Impl::renderBlocked(const PHLMONITOR& monitor) const {
     if (g_pSessionLockManager && g_pSessionLockManager->isSessionLocked())
         return true;
+    if (sidebarProgress && sidebarProgress(monitor))
+        return false;
     const bool prepared = std::ranges::any_of(overviewExitScreens, [&](const auto& screen) { return screen.monitor == monitor; });
     return stage::overviewRenderOwner(overviewPhaseFor(monitor), prepared) == stage::OverviewRenderOwner::Overview;
 }
@@ -681,7 +684,7 @@ StageController::Impl::Screen* StageController::Impl::preparedOverviewScreen(con
 }
 
 StageController::Impl::Screen* StageController::Impl::visualScreenFor(const PHLMONITOR& monitor) {
-    if (overviewPhaseFor(monitor) == stage::OverviewPhase::Releasing)
+    if (overviewPhaseFor(monitor) == stage::OverviewPhase::Releasing || (sidebarProgress && sidebarProgress(monitor)))
         if (auto* prepared = preparedOverviewScreen(monitor))
             return prepared;
     if (swipe && swipe->prepared && swipe->monitor == monitor)
@@ -2104,15 +2107,18 @@ void StageController::Impl::renderStage(eRenderStage stage) {
     const auto monitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
     if (renderBlocked(monitor))
         return;
+    const auto progress = sidebarProgress ? sidebarProgress(monitor) : std::nullopt;
+    if (progress && *progress >= 1.0)
+        return;
     auto* screen = visualScreenFor(monitor);
     if (!screen || !screen->geometry.enabled() || monitor->m_activeSpecialWorkspace || screen->shown <= 0)
         return;
-    if (stage == RENDER_POST_WINDOWS) {
+    if (stage == (progress ? RENDER_PRE_WINDOWS : RENDER_POST_WINDOWS)) {
         const PHLMONITORREF ref = monitor;
         g_pHyprRenderer->m_renderPass.add(makeUnique<StagePassElement>([this, ref] {
             if (const auto mon = ref.lock())
                 draw(mon);
-        }, screen->flights.empty() && !screen->paneTransition && !dragHover ? sidebar(*screen).translate(-monitor->m_position)
+        }, !progress && screen->flights.empty() && !screen->paneTransition && !dragHover ? sidebar(*screen).translate(-monitor->m_position)
                                   : CBox{{}, monitor->m_size}));
     }
 }
@@ -2230,7 +2236,17 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
         }
       }
     };
-    if (swipe && &swipe->visual == screen && swipe->sourceCovered) {
+    const auto progress = sidebarProgress ? sidebarProgress(monitor) : std::nullopt;
+    if (progress) {
+        // Only-current-workspace overview does not own the sidebar's windows.
+        // Slide that separate pane out beneath the overview's window passes.
+        const double travel = screen->geometry.bandWidth + 8 + (screen->right ?
+            monitor->m_position.x + monitor->m_size.x - (screen->base.x + screen->base.w) :
+            screen->base.x - monitor->m_position.x);
+        const double hidden = 1 - screen->shown * (1 - std::clamp(*progress, 0.0, 1.0));
+        drawPane(screen->cards, screen->geometry, screen->scroll, screen->right,
+            (screen->right ? 1 : -1) * travel * hidden);
+    } else if (swipe && &swipe->visual == screen && swipe->sourceCovered) {
         if (!swipe->targetCovered) {
             const double travel = screen->right ? monitor->m_position.x + monitor->m_size.x - (screen->base.x + screen->base.w) + screen->geometry.bandWidth :
                 screen->base.x - monitor->m_position.x + screen->geometry.bandWidth;
@@ -2269,6 +2285,8 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
             drawPane(screen->cards, screen->geometry, screen->scroll, screen->right, slide);
     }
     g_pHyprRenderer->m_renderData.clipBox = previousClip;
+    if (progress)
+        return;
     drawFlights(*screen, monitor);
     if (dragHover && dragHover->monitor == monitor) {
         if (const auto window = dragHover->window.lock()) {
@@ -2952,8 +2970,8 @@ std::string StageController::Impl::stateJson() const {
 
 StageController::StageController(HANDLE handle, std::function<bool()> suspended,
                                  std::function<stage::OverviewPhase(const PHLMONITOR&)> phase,
-                                 std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> frame) :
-    m_impl(std::make_unique<Impl>(handle, std::move(suspended), std::move(phase), std::move(frame))) {}
+                                 std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> frame, std::function<std::optional<double>(const PHLMONITOR&)> slide) :
+    m_impl(std::make_unique<Impl>(handle, std::move(suspended), std::move(phase), std::move(frame), std::move(slide))) {}
 StageController::~StageController() = default;
 void StageController::initialize() { m_impl->initialize(); }
 std::string StageController::stateJson() const { return m_impl->stateJson(); }

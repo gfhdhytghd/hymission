@@ -9819,6 +9819,13 @@ stage::OverviewPhase OverviewController::stageOverviewPhase(const PHLMONITOR& mo
     return m_deactivatePending ? stage::OverviewPhase::Releasing : stage::OverviewPhase::Active;
 }
 
+std::optional<double> OverviewController::stageSidebarProgress(const PHLMONITOR& monitor) const {
+    if (rawWindowRenderActive() || captureInputSuppressed() || m_stripPreviewContext.active ||
+        !stage::overviewSidebarSlides(m_state.collectionPolicy.onlyActiveWorkspace, stageOverviewPhase(monitor)))
+        return std::nullopt;
+    return visualProgress();
+}
+
 std::optional<stage::EdgeFrame> OverviewController::stageTransitionFrame(const PHLWINDOW& window, const PHLMONITOR& monitor) const {
     if (nativeWindowRenderActive() || m_stripPreviewContext.active || !window || !monitor || !isVisible() || !ownsMonitor(monitor) ||
         !shouldApplyOverviewTransform(window) || m_workspaceTransition.active)

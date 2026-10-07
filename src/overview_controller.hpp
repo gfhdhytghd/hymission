@@ -89,6 +89,7 @@ class OverviewController {
     [[nodiscard]] std::string     handleCaptureInputCommand(const std::string& args);
     [[nodiscard]] bool            rawWindowRenderActive() const;
     [[nodiscard]] bool            captureInputSuppressed() const;
+    [[nodiscard]] std::optional<double> stageSidebarProgress(const PHLMONITOR& monitor) const;
     [[nodiscard]] stage::OverviewPhase stageOverviewPhase(const PHLMONITOR& monitor) const;
     [[nodiscard]] std::optional<stage::EdgeFrame> stageTransitionFrame(const PHLWINDOW& window, const PHLMONITOR& monitor) const;
     [[nodiscard]] bool            suspendsStage() const { return isVisible() || rawWindowRenderActive() || captureInputSuppressed(); }

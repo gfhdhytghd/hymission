@@ -20,6 +20,10 @@ constexpr OverviewRenderOwner overviewRenderOwner(OverviewPhase phase, bool prep
     return OverviewRenderOwner::Overview;
 }
 
+constexpr bool overviewSidebarSlides(bool onlyActiveWorkspace, OverviewPhase phase) {
+    return onlyActiveWorkspace && phase == OverviewPhase::Active;
+}
+
 // All dimensions are logical pixels. Width/height have already had the bar's
 // reserved area removed; desktop gaps belong to the native layout, not here.
 struct Settings {

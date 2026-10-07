@@ -75,6 +75,10 @@ int main() {
                 near(restart.viewport.box.x, frame.viewport.box.x) && near(restart.viewport.left, frame.viewport.left), "retarget preserves the displayed window, clip and effect widths");
         }
     }
+    ok &= expect(overviewSidebarSlides(true, OverviewPhase::Active), "compact overview retains its independent sliding sidebar");
+    ok &= expect(!overviewSidebarSlides(false, OverviewPhase::Active), "forceall never duplicates overview-owned sidebar windows");
+    ok &= expect(!overviewSidebarSlides(true, OverviewPhase::Releasing) && !overviewSidebarSlides(true, OverviewPhase::Inactive),
+        "sidebar slide yields to the prepared and normal desktop scenes on release");
     // Overview starts with exactly the Stage pixels, including a partially
     // clipped tape window and a card clipped by the scrolling sidebar itself.
     const hymission::Rect revealOutput{-1920, 0, 1920, 1080};
