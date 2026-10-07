@@ -75,6 +75,67 @@ int main() {
                 near(restart.viewport.box.x, frame.viewport.box.x) && near(restart.viewport.left, frame.viewport.left), "retarget preserves the displayed window, clip and effect widths");
         }
     }
+    // Overview starts with exactly the Stage pixels, including a partially
+    // clipped tape window and a card clipped by the scrolling sidebar itself.
+    const hymission::Rect revealOutput{-1920, 0, 1920, 1080};
+    const OverviewEndpoint reveal{{-1940, 100, 200, 160}, edgeViewport({-1900, 80, 240, 200}, 16, 16), {-1900, 120, 240, 160}};
+    ok &= expect(overviewEndpointVisible(reveal), "partially clipped Stage windows get a reveal");
+    auto invisible = reveal;
+    invisible.window.x = -2100;
+    invisible.window.width = 200;
+    ok &= expect(!overviewEndpointVisible(invisible), "touching the clip edge without pixels is not visible");
+    invisible = reveal;
+    invisible.clip.height = 0;
+    ok &= expect(!overviewEndpointVisible(invisible), "fully scrolled-out cards cannot seed a reveal");
+    const auto initial = overviewRevealFrame(reveal, reveal.window, revealOutput, 0);
+    ok &= expect(near(initial.viewport.box.x, reveal.viewport.box.x) && near(initial.viewport.left, 16) &&
+        near(initial.clip.y, 120) && near(initial.clip.height, 160), "first overview frame retains card and strip clipping and gradient");
+    const hymission::Rect fullPreview{-1200, 200, 500, 400};
+    const auto opened = overviewRevealFrame(reveal, fullPreview, revealOutput, 1);
+    ok &= expect(near(opened.clip.x, revealOutput.x) && near(opened.clip.width, revealOutput.width) &&
+        near(opened.viewport.left, 0) && near(opened.viewport.right, 0), "fully open overview reveals the complete window without a gradient");
+    const auto almost = overviewRevealFrame(reveal, reveal.window, revealOutput, 0.00001);
+    ok &= expect(std::abs(almost.clip.x - initial.clip.x) < 0.001 && std::abs(almost.clip.y - initial.clip.y) < 0.001,
+        "opening does not instantly release the cropped window edges");
+    for (int step = 0; step <= 100; ++step) {
+        const double p = step / 100.0;
+        const hymission::Rect current{reveal.window.x + (fullPreview.x - reveal.window.x) * p,
+            reveal.window.y + (fullPreview.y - reveal.window.y) * p,
+            reveal.window.width + (fullPreview.width - reveal.window.width) * p,
+            reveal.window.height + (fullPreview.height - reveal.window.height) * p};
+        const auto frame = overviewRevealFrame(reveal, current, revealOutput, p);
+        const auto reverse = overviewRevealFrame(reveal, current, revealOutput, 1 - (100 - step) / 100.0);
+        ok &= expect(near(frame.clip.x, reverse.clip.x) && near(frame.viewport.left, reverse.viewport.left),
+            "gesture reversal follows the same reveal instead of resetting the crop");
+        ok &= expect(std::isfinite(frame.clip.x) && frame.clip.width > 0 && frame.clip.height > 0,
+            "reveal remains valid throughout scaling on a negatively positioned monitor");
+    }
+    // Interrupt an opening at 37%, then close to a DIFFERENT workspace card.
+    // The first frame must keep the sampled crop, not the new destination crop.
+    const auto sampled = overviewRevealFrame(reveal, fullPreview, revealOutput, 0.37);
+    const OverviewEndpoint newDestination{{-400, 600, 160, 100}, edgeViewport({-440, 580, 240, 140}, 0, 16), {-440, 600, 200, 100}};
+    const auto destinationFrame = overviewRevealFrame(newDestination, fullPreview, revealOutput, 0);
+    const auto interruptedReveal = interpolateEdgeFrame(sampled, destinationFrame, overviewTransitionProgress(0.37, 0.37, false));
+    ok &= expect(near(interruptedReveal.clip.x, sampled.clip.x) && near(interruptedReveal.clip.width, sampled.clip.width) &&
+        near(interruptedReveal.viewport.left, sampled.viewport.left), "interrupt keeps sampled crop when closing destination changes");
+    const OverviewEndpoint released{fullPreview, sampled.viewport, sampled.clip};
+    const auto releaseStart = overviewRevealFrame(released, fullPreview, revealOutput, 0);
+    for (const auto& settleTarget : {destinationFrame, EdgeFrame{edgeViewport(revealOutput, 0, 0), revealOutput}}) {
+        const auto first = interpolateEdgeFrame(releaseStart, settleTarget, overviewTransitionProgress(0.37, 0.37, false));
+        ok &= expect(near(first.clip.x, sampled.clip.x) && near(first.clip.y, sampled.clip.y) &&
+            near(first.clip.width, sampled.clip.width) && near(first.clip.height, sampled.clip.height) &&
+            near(first.viewport.box.x, sampled.viewport.box.x) && near(first.viewport.box.y, sampled.viewport.box.y) &&
+            near(first.viewport.box.width, sampled.viewport.box.width) && near(first.viewport.box.height, sampled.viewport.box.height) &&
+            near(first.viewport.left, sampled.viewport.left) && near(first.viewport.right, sampled.viewport.right),
+            "release and layout-settle retain the sampled crop and gradient for both desktop and card destinations");
+    }
+    const auto finished = interpolateEdgeFrame(sampled, destinationFrame, overviewTransitionProgress(0.37, 0, false));
+    ok &= expect(near(finished.clip.x, destinationFrame.clip.x) && near(finished.viewport.right, destinationFrame.viewport.right),
+        "interrupted close reaches the new workspace crop");
+    ok &= expect(near(overviewTransitionProgress(0.37, 0.37, true), 0) && near(overviewTransitionProgress(0.37, 1, true), 1) &&
+        near(overviewTransitionProgress(0.37, 0.685, true), 0.5), "reopening uses only the remaining progress");
+    ok &= expect(near(overviewTransitionProgress(0, 0, false), 1) && near(overviewTransitionProgress(1, 1, true), 1),
+        "zero-length transitions finish without division by zero");
     const auto hardFlight = scrollingFlightFrame({0, 50, 100, 100}, {0, 300, 20, 20}, hard, edgeViewport(cardView.box, 0, 0), 0.5);
     ok &= expect(near(hardFlight.viewport.left, 0) && near(hardFlight.viewport.right, 0), "hard clipping survives flight interpolation");
     ok &= expect(previewLayer(false, false, false, false) == PreviewLayer::Tiled,

@@ -2821,6 +2821,13 @@ std::string OverviewController::overviewStateJson() const {
 
         if (managed.targetMonitor)
             item["monitor"] = managed.targetMonitor->m_name;
+        item["stageOpeningReveal"] = managed.stageOpeningEndpoint.has_value();
+        item["stageClosingReveal"] = managed.stageClosingEndpoint.has_value();
+        if (const auto frame = stageTransitionFrame(managed.window, managed.targetMonitor)) {
+            item["stageTransitionClip"] = rectJson(frame->clip);
+            item["stageTransitionViewport"] = rectJson(frame->viewport.box);
+            item["stageTransitionEdges"] = {frame->viewport.left, frame->viewport.right};
+        }
         if (managed.group) {
             item["groupSize"] = managed.group->size();
             item["groupCurrentIndex"] = managed.group->getCurrentIdx();
@@ -6241,7 +6248,6 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
 
         if (commitDirection == 0) {
             if (!gesture.opening) {
-                m_gestureSession = {};
                 beginClose(CloseMode::Normal, gesture.openness, true);
                 return;
             }
@@ -6289,7 +6295,6 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
     }
 
     if (!gesture.opening && commit) {
-        m_gestureSession = {};
         beginClose(CloseMode::Normal, gesture.openness, true);
         return;
     }
@@ -8458,8 +8463,13 @@ void OverviewController::applyOffscreenOpenAnimationEndpoints(State& state) cons
 void OverviewController::applyOffscreenExitAnimationEndpoints(State& state, const PHLWORKSPACE& activeWorkspaceOverride) const {
     StageController::prepareOverviewExit(state.participatingMonitors, activeWorkspaceOverride);
     for (auto& window : state.windows) {
-        if (const auto destination = StageController::overviewDestination(window.window, activeWorkspaceOverride)) {
-            window.exitGlobal = *destination;
+        window.stageClosingEndpoint.reset();
+        if (const auto destination = StageController::overviewDestination(window.window, activeWorkspaceOverride, window.exitGlobal)) {
+            if (stage::overviewEndpointVisible(*destination)) {
+                window.exitGlobal = destination->window;
+                window.stageClosingEndpoint = destination;
+            } else
+                window.exitGlobal = offscreenAnimationEndpointFor(window, destination->window, activeWorkspaceOverride);
             continue;
         }
         if (!shouldUseOffscreenAnimationEndpoint(window, state, activeWorkspaceOverride))
@@ -9643,6 +9653,13 @@ Rect OverviewController::currentPreviewRect(const ManagedWindow& window) const {
             return *rect;
     }
 
+    const bool opening = m_gestureSession.active ? m_gestureSession.opening : m_state.phase == Phase::Opening;
+    if (window.stageTransitionStart && opening == window.stageTransitionOpening && m_state.phase != Phase::Active) {
+        const double t = m_state.phase == Phase::ClosingSettle ? 0 :
+            stage::overviewTransitionProgress(window.stageTransitionStartProgress, visualProgress(), opening);
+        return lerpRect(window.stageTransitionStart->window, opening ? window.targetGlobal : window.exitGlobal, t);
+    }
+
     if (m_gestureSession.active) {
         if (m_gestureSession.opening)
             return lerpRect(window.stageOpeningGlobal.value_or(window.naturalGlobal), window.targetGlobal, visualProgress());
@@ -9754,6 +9771,33 @@ stage::OverviewPhase OverviewController::stageOverviewPhase(const PHLMONITOR& mo
     if (!isVisible() || !ownsMonitor(monitor))
         return stage::OverviewPhase::Inactive;
     return m_deactivatePending ? stage::OverviewPhase::Releasing : stage::OverviewPhase::Active;
+}
+
+std::optional<stage::EdgeFrame> OverviewController::stageTransitionFrame(const PHLWINDOW& window, const PHLMONITOR& monitor) const {
+    if (nativeWindowRenderActive() || m_stripPreviewContext.active || !window || !monitor || !isVisible() || !ownsMonitor(monitor) ||
+        !shouldApplyOverviewTransform(window) || m_workspaceTransition.active)
+        return std::nullopt;
+    const auto* managed = managedWindowFor(window);
+    if (!managed || managed->targetMonitor != monitor || draggedPreviewRenderRectFor(window) ||
+        (m_dropAnimation && m_dropAnimation->window == window))
+        return std::nullopt;
+    const bool opening = m_gestureSession.active ? m_gestureSession.opening : m_state.phase == Phase::Opening;
+    const auto& endpoint = opening ? managed->stageOpeningEndpoint : managed->stageClosingEndpoint;
+    const double progress = visualProgress();
+    if (progress >= 1.0)
+        return std::nullopt;
+    const Rect output{monitor->m_position.x, monitor->m_position.y, monitor->m_size.x, monitor->m_size.y};
+    const auto transform = windowTransformFor(window, monitor);
+    const Rect current = transform ? transform->targetGlobal : currentPreviewRect(*managed);
+    if (managed->stageTransitionStart && opening == managed->stageTransitionOpening) {
+        const double t = m_state.phase == Phase::ClosingSettle ? 0 :
+            stage::overviewTransitionProgress(managed->stageTransitionStartProgress, progress, opening);
+        const auto from = stage::overviewRevealFrame(*managed->stageTransitionStart, current, output, 0);
+        const auto to = !opening && endpoint ? stage::overviewRevealFrame(*endpoint, current, output, 0) :
+            stage::EdgeFrame{stage::edgeViewport(output, 0, 0), output};
+        return stage::interpolateEdgeFrame(from, to, t);
+    }
+    return endpoint ? std::optional{stage::overviewRevealFrame(*endpoint, current, output, progress)} : std::nullopt;
 }
 
 double OverviewController::visualProgress() const {
@@ -11119,9 +11163,39 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     if (next.windows.empty() && next.stripEntries.empty())
         return;
 
-    if (!wasVisible)
-        for (auto& window : next.windows)
-            window.stageOpeningGlobal = StageController::overviewOrigin(window.window);
+    if (!wasVisible) {
+        for (auto& window : next.windows) {
+            const auto origin = StageController::overviewOrigin(window.window);
+            if (!origin)
+                continue;
+            if (stage::overviewEndpointVisible(*origin)) {
+                window.stageOpeningGlobal = origin->window;
+                window.stageOpeningEndpoint = origin;
+            } else
+                window.stageOpeningGlobal = offscreenAnimationEndpointFor(window, origin->window);
+        }
+    } else {
+        // Reversing a close must reuse the same Stage scene. Querying live Stage
+        // here would sample its suspended/old workspace instead of the exit.
+        for (auto& window : next.windows) {
+            const auto* previous = managedWindowFor(window.window);
+            if (!previous)
+                continue;
+            const bool closing = m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle ||
+                (m_gestureSession.active && !m_gestureSession.opening);
+            window.stageOpeningGlobal = closing ? std::optional{previous->exitGlobal} : previous->stageOpeningGlobal;
+            window.stageOpeningEndpoint = closing ? previous->stageClosingEndpoint : previous->stageOpeningEndpoint;
+            if (previous->stageOpeningEndpoint || previous->stageClosingEndpoint || previous->stageTransitionStart) {
+                const Rect output{window.targetMonitor->m_position.x, window.targetMonitor->m_position.y,
+                                  window.targetMonitor->m_size.x, window.targetMonitor->m_size.y};
+                const auto frame = stageTransitionFrame(window.window, previous->targetMonitor).value_or(
+                    stage::EdgeFrame{stage::edgeViewport(output, 0, 0), output});
+                window.stageTransitionStart = stage::OverviewEndpoint{currentPreviewRect(*previous), frame.viewport, frame.clip};
+                window.stageTransitionStartProgress = fromVisual;
+                window.stageTransitionOpening = true;
+            }
+        }
+    }
 
     if (previousFocusBeforeOpen)
         next.focusBeforeOpen = previousFocusBeforeOpen;
@@ -11316,6 +11390,21 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
     }
 
     const double fromVisual = fromVisualOverride.value_or(visualProgress());
+    std::vector<std::pair<PHLWINDOW, stage::OverviewEndpoint>> stageStarts;
+    if (fromVisual < 1) {
+        for (const auto& managed : m_state.windows) {
+            if (!managed.targetMonitor)
+                continue;
+            const auto mon = managed.targetMonitor;
+            const Rect output{mon->m_position.x, mon->m_position.y, mon->m_size.x, mon->m_size.y};
+            const auto frame = stageTransitionFrame(managed.window, mon).value_or(stage::EdgeFrame{stage::edgeViewport(output, 0, 0), output});
+            stageStarts.emplace_back(managed.window, stage::OverviewEndpoint{currentPreviewRect(managed), frame.viewport, frame.clip});
+        }
+    }
+    // Keep the gesture alive until position, crop and edge widths have all
+    // been sampled. Clearing it at the swipe-end call site exposes the old
+    // phase's progress (often 1), making the first closing frame jump.
+    m_gestureSession = {};
     // Predict and commit the same gesture target, including the legacy fallback.
     // deferFullscreenMutations is only ever set by the two trackpad gesture commit sites.
     const bool gestureClose = mode == CloseMode::Normal && deferFullscreenMutations;
@@ -11487,6 +11576,17 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
         }
     }
 
+    for (auto& managed : m_state.windows) {
+        managed.stageTransitionStart.reset();
+        for (const auto& [window, start] : stageStarts) {
+            if (window != managed.window)
+                continue;
+            managed.stageTransitionStart = start;
+            managed.stageTransitionStartProgress = fromVisual;
+            managed.stageTransitionOpening = false;
+            break;
+        }
+    }
     damageOwnedMonitors();
 }
 
@@ -12254,9 +12354,16 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
 
     const bool sameWindowSet = next.windows.size() == m_state.windows.size() &&
         std::ranges::all_of(next.windows, [&](const ManagedWindow& managed) { return managed.window && previousManagedForItem(managed) != nullptr; });
-    for (auto& window : next.windows)
-        if (const auto* previous = previousManagedForItem(window))
+    for (auto& window : next.windows) {
+        if (const auto* previous = previousManagedForItem(window)) {
             window.stageOpeningGlobal = previous->stageOpeningGlobal;
+            window.stageOpeningEndpoint = previous->stageOpeningEndpoint;
+            window.stageClosingEndpoint = previous->stageClosingEndpoint;
+            window.stageTransitionStart = previous->stageTransitionStart;
+            window.stageTransitionStartProgress = previous->stageTransitionStartProgress;
+            window.stageTransitionOpening = previous->stageTransitionOpening;
+        }
+    }
     const bool sameMonitorSet = next.participatingMonitors.size() == m_state.participatingMonitors.size() &&
         std::ranges::all_of(next.participatingMonitors, [&](const PHLMONITOR& monitor) { return containsHandle(m_state.participatingMonitors, monitor); });
     const bool sameRowGroups = sameWindowSet &&

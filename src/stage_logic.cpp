@@ -231,6 +231,46 @@ double edgeOpacity(const EdgeViewport& viewport, double x, double y) {
         viewport.right > 0 ? smooth(2 * (b.x + b.width - x) / viewport.right) : 1.0);
 }
 
+double overviewTransitionProgress(double start, double current, bool opening) {
+    const double distance = opening ? 1 - start : start;
+    return distance > 1e-9 ? std::clamp((opening ? current - start : start - current) / distance, 0.0, 1.0) : 1.0;
+}
+
+EdgeFrame interpolateEdgeFrame(const EdgeFrame& from, const EdgeFrame& to, double progress) {
+    const double p = std::clamp(sane(progress, 0), 0.0, 1.0);
+    const double t = p * p * (3 - 2 * p);
+    const auto mix = [t](double a, double b) { return a + (b - a) * t; };
+    const auto mixRect = [&](const Rect& a, const Rect& b) {
+        return Rect{mix(a.x, b.x), mix(a.y, b.y), mix(a.width, b.width), mix(a.height, b.height)};
+    };
+    return {edgeViewport(mixRect(from.viewport.box, to.viewport.box), mix(from.viewport.left, to.viewport.left),
+                         mix(from.viewport.right, to.viewport.right)), mixRect(from.clip, to.clip)};
+}
+
+bool overviewEndpointVisible(const OverviewEndpoint& endpoint) {
+    const auto& w = endpoint.window;
+    const auto& c = endpoint.clip;
+    return w.width > 0 && w.height > 0 && c.width > 0 && c.height > 0 &&
+        std::min(w.x + w.width, c.x + c.width) > std::max(w.x, c.x) &&
+        std::min(w.y + w.height, c.y + c.height) > std::max(w.y, c.y);
+}
+
+EdgeFrame overviewRevealFrame(const OverviewEndpoint& endpoint, const Rect& current, const Rect& output, double openness) {
+    const double p = std::clamp(sane(openness, 0), 0.0, 1.0);
+    const double reveal = p * p * (3 - 2 * p);
+    const double sx = current.width / std::max(1.0, endpoint.window.width);
+    const double sy = current.height / std::max(1.0, endpoint.window.height);
+    const auto unfold = [&](const Rect& rect) {
+        const Rect mapped{current.x + (rect.x - endpoint.window.x) * sx,
+                          current.y + (rect.y - endpoint.window.y) * sy, rect.width * sx, rect.height * sy};
+        return Rect{mapped.x + (output.x - mapped.x) * reveal, mapped.y + (output.y - mapped.y) * reveal,
+                    mapped.width + (output.width - mapped.width) * reveal, mapped.height + (output.height - mapped.height) * reveal};
+    };
+    const auto viewport = edgeViewport(unfold(endpoint.viewport.box), endpoint.viewport.left * sx * (1 - reveal),
+                                      endpoint.viewport.right * sx * (1 - reveal));
+    return {viewport, unfold(endpoint.clip)};
+}
+
 ScrollingFlightFrame scrollingFlightFrame(const Rect& from, const Rect& to, const EdgeViewport& fromViewport,
     const EdgeViewport& toViewport, double progress) {
     const double t = transitionProgress(progress, 1);

@@ -293,7 +293,15 @@ Sidebar windows expand from their current card previews (including scroll and
 flight offsets), while active desktop windows retain their desktop origins.
 Timed and gesture opening share these origins; refreshing the Overview layout
 during opening preserves them. Native geometry remains separate from these
-animation-only origins.
+animation-only origins. Partially visible windows carry their actual card/strip
+clip and edge gradient into Overview; these unfold continuously as the window
+expands and return to the prepared destination clip on exit, including when a
+new workspace is selected. Fully clipped windows use offscreen endpoints.
+Interrupted transitions retain the sampled position, clip and gradient before
+heading toward the new endpoint. `hyprctl hymission-overview-state` window diagnostics include
+`stageOpeningReveal`, `stageClosingReveal` and the current Stage transition
+clip, viewport and edge widths.
+
 Fullscreen coverage is per output; composing an in-progress slide clears only
 that output's solitary-client shortcut, without taking ownership of the global
 direct-scanout flag used by overview.

@@ -82,6 +82,21 @@ EdgeViewport edgeViewport(const Rect& box, double left, double right);
 EdgeViewport desktopShadowViewport(const EdgeViewport& viewport, const Rect& output);
 EdgeViewport edgeViewportForWindow(const EdgeViewport& viewport, const Rect& window);
 double edgeOpacity(const EdgeViewport& viewport, double x, double y);
+// Preserve both the gradient's coordinate system and the actual card/strip clip.
+// A window fully outside clip must use an offscreen endpoint, not a reveal.
+struct OverviewEndpoint {
+    Rect window;
+    EdgeViewport viewport;
+    Rect clip;
+};
+struct EdgeFrame {
+    EdgeViewport viewport;
+    Rect clip;
+};
+double overviewTransitionProgress(double start, double current, bool opening);
+EdgeFrame interpolateEdgeFrame(const EdgeFrame& from, const EdgeFrame& to, double progress);
+bool overviewEndpointVisible(const OverviewEndpoint& endpoint);
+EdgeFrame overviewRevealFrame(const OverviewEndpoint& endpoint, const Rect& currentWindow, const Rect& output, double openness);
 struct ScrollingFlightFrame {
     Rect window;
     EdgeViewport viewport;

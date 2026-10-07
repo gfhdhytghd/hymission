@@ -624,6 +624,8 @@ positions, relative sizes and overlap using one workspace-wide scale.
 Previews draw live window surfaces and receive native frame callbacks, with a
 16 ms repaint schedule. Window switches use Stage's animation for clicks, keys
 and swipes; incoming and outgoing window edges remain within the owning output.
+Overview transitions progressively reveal or restore the visible Stage crop and
+edge gradient, including partial cards and exits to a different workspace.
 There are no number/name labels or card/sidebar background fills: the real wallpaper
 shows through the gaps. Card aspect ratios match the reduced desktop
 after the monitor's existing reserved areas have been subtracted.

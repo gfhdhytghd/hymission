@@ -16,7 +16,8 @@ namespace hymission {
 class StageController {
   public:
     StageController(HANDLE handle, std::function<bool()> overviewSuspended,
-                    std::function<stage::OverviewPhase(const PHLMONITOR&)> overviewPhase);
+                    std::function<stage::OverviewPhase(const PHLMONITOR&)> overviewPhase,
+                    std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> overviewFrame);
     ~StageController();
     StageController(const StageController&) = delete;
     StageController& operator=(const StageController&) = delete;
@@ -35,9 +36,9 @@ class StageController {
     // Overview owns the shared hooks while Stage draws its sliding previews.
     static bool renderingPreview();
     static CBox transformPreviewBox(CBox box);
-    static std::optional<Rect> overviewOrigin(const PHLWINDOW& window);
+    static std::optional<stage::OverviewEndpoint> overviewOrigin(const PHLWINDOW& window);
     // Settled card endpoint after overview activates the requested workspace.
-    static std::optional<Rect> overviewDestination(const PHLWINDOW& window, const PHLWORKSPACE& activeWorkspace);
+    static std::optional<stage::OverviewEndpoint> overviewDestination(const PHLWINDOW& window, const PHLWORKSPACE& activeWorkspace, const Rect& desktopWindow);
     static void prepareOverviewExit(const std::vector<PHLMONITOR>& monitors, const PHLWORKSPACE& activeWorkspace);
     static void finishOverview();
 

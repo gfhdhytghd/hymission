@@ -90,6 +90,7 @@ class OverviewController {
     [[nodiscard]] bool            rawWindowRenderActive() const;
     [[nodiscard]] bool            captureInputSuppressed() const;
     [[nodiscard]] stage::OverviewPhase stageOverviewPhase(const PHLMONITOR& monitor) const;
+    [[nodiscard]] std::optional<stage::EdgeFrame> stageTransitionFrame(const PHLWINDOW& window, const PHLMONITOR& monitor) const;
     [[nodiscard]] bool            suspendsStage() const { return isVisible() || rawWindowRenderActive() || captureInputSuppressed(); }
     [[nodiscard]] bool            allowsWorkspaceSwitchInOverviewForGestures() const;
     [[nodiscard]] bool            blocksWorkspaceSwitchInOverviewForGestures() const;
@@ -201,6 +202,11 @@ class OverviewController {
         std::string  title;
         Rect         naturalGlobal;
         std::optional<Rect> stageOpeningGlobal;
+        std::optional<stage::OverviewEndpoint> stageOpeningEndpoint;
+        std::optional<stage::OverviewEndpoint> stageClosingEndpoint;
+        std::optional<stage::OverviewEndpoint> stageTransitionStart;
+        double       stageTransitionStartProgress = 0;
+        bool         stageTransitionOpening = false;
         Rect         exitGlobal;
         Rect         relayoutFromGlobal;
         Rect         targetGlobal;

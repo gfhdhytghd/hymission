@@ -441,6 +441,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         return g_overviewController && g_overviewController->suspendsStage();
     }, [](const PHLMONITOR& monitor) {
         return g_overviewController ? g_overviewController->stageOverviewPhase(monitor) : hymission::stage::OverviewPhase::Inactive;
+    }, [](const PHLWINDOW& window, const PHLMONITOR& monitor) {
+        return g_overviewController ? g_overviewController->stageTransitionFrame(window, monitor) : std::nullopt;
     });
     g_stageController->initialize();
     g_stageStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
