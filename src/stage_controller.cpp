@@ -1713,9 +1713,27 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
                     destination = ensureWorkspace(monitor, card.syntheticId);
                 if (dragged && destination && dragged != destination)
                     swapWorkspaces(dragged, destination);
-            } else if (workspace && card.workspace == workspace)
+            } else if (workspace && card.workspace == workspace) {
+                // Resolve the topmost visible preview before activating: switching
+                // workspaces rebuilds cards and can invalidate this reference.
+                PHLWINDOW clicked;
+                if (!reorderArmed && card.previewsReady) {
+                    const Vector2D origin{sidebar(*screen).x + screen->geometry.padding, screen->base.y + cardTop(*screen, *index)};
+                    const auto point = g_pInputManager->getMouseCoordsInternal();
+                    for (auto it = card.previews.rbegin(); it != card.previews.rend(); ++it) {
+                        const auto window = it->window.lock();
+                        if (!window || !window->m_isMapped || window->isHidden() || window->m_pinned || window->m_workspace != workspace ||
+                            previewLayer(window) == stage::PreviewLayer::Hidden || flying(*screen, window) || thumbnailDrag == window ||
+                            !it->target.copy().translate(origin).containsPoint(point))
+                            continue;
+                        clicked = window;
+                        break;
+                    }
+                }
                 activate(workspace);
-            else if (pressedSynthetic && card.syntheticId == pressedSynthetic && !card.workspace.lock()) {
+                if (clicked && clicked->m_isMapped && !clicked->isHidden() && clicked->m_workspace == workspace)
+                    Desktop::focusState()->fullWindowFocus(clicked, Desktop::FOCUS_REASON_WORKSPACE_CHANGE);
+            } else if (pressedSynthetic && card.syntheticId == pressedSynthetic && !card.workspace.lock()) {
                 if (const auto monitor = screen->monitor.lock())
                     activate(ensureWorkspace(monitor, pressedSynthetic));
             }

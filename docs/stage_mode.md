@@ -187,7 +187,7 @@ rendering is not run alongside the Stage transition. State output includes
 Only inactive workspaces appear; after a switch the new active workspace is
 removed and the old one becomes eligible. With `stage_show_active` enabled, the
 active workspace stays in the sidebar alongside every other workspace and its
-card keeps live previews; clicking it is a no-op. Set `stage_active_glow = 1`
+card keeps live previews; clicking one of its windows focuses that window. Set `stage_active_glow = 1`
 to add a soft glow outline in `focus_selected_color`. Both `stage_show_active`
 and `stage_active_glow` default to `0`. With `stage_empty_slots` set, missing numbered
 workspaces up to that id are listed as synthetic empty slots that
@@ -281,8 +281,10 @@ dragging onto another workspace card keeps it miniature. The original window
 stays in its workspace until release. Dropping on the desktop or a different
 card commits through the normal workspace move/layout path. Dropping in empty
 sidebar space, on the original card, or pressing Escape cancels the move.
-Plain card clicks still switch workspace. `thumbnail_drag_active` reports this
-drag separately from a native desktop-window drag.
+Plain clicks on a window preview switch workspace and focus that window;
+overlapping previews select the topmost visible window. Clicking empty card
+space keeps the usual workspace activation behavior. `thumbnail_drag_active`
+reports this drag separately from a native desktop-window drag.
 
 Overview/raw capture/input suppression, special workspaces and session locking
 suspend stage drawing/input. They do not remove the native reservation.
