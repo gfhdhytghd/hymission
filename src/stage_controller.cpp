@@ -197,6 +197,7 @@ struct StageController::Impl {
         PHLWINDOWREF window;
         CBox selection;
         CBox clip;
+        double rounding = 0;
     };
     struct Flight {
         Preview preview;
@@ -425,7 +426,7 @@ struct StageController::Impl {
     void draw(const PHLMONITOR& monitor);
     void drawFlights(Screen& screen, const PHLMONITOR& monitor);
     void drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, double radius,
-                     std::optional<stage::EdgeViewport> viewport = std::nullopt);
+                     std::optional<stage::EdgeViewport> viewport = std::nullopt, double* captureRounding = nullptr);
     void drawWindowPasses(StageWindowPassElement::Elements& elements, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport,
                           const Rect& clip);
     void captureWindowPasses(Render::IHyprRenderer* renderer, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport, const std::function<void()>& render,
@@ -2241,10 +2242,11 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
                 // the preview but capture the native window by its address.
                 const CBox logicalClip = cardClip.copy().scale(1.0 / monitor->m_scale).translate(monitor->m_position);
                 const CBox visible = target.intersection(logicalClip);
-                if (previewLayer(window) != stage::PreviewLayer::Hidden && visible.w >= 1 && visible.h >= 1)
-                    screen->capturePreviews.push_back({window, target, logicalClip});
+                double renderedRounding = 0;
                 drawPreview(window, monitor, target, cardClip, radius,
-                    scrollingTiled(window) ? std::optional{cardViewport(box)} : std::nullopt);
+                    scrollingTiled(window) ? std::optional{cardViewport(box)} : std::nullopt, &renderedRounding);
+                if (previewLayer(window) != stage::PreviewLayer::Hidden && visible.w >= 1 && visible.h >= 1)
+                    screen->capturePreviews.push_back({window, target, logicalClip, renderedRounding});
             }
             // The glow is centered on the card edges and clipped only by the
             // output: the sidebar clip would cut the desktop-facing edge.
@@ -2673,13 +2675,13 @@ void StageController::Impl::drawWindowPasses(StageWindowPassElement::Elements& e
 }
 
 void StageController::Impl::drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, double radius,
-                                       std::optional<stage::EdgeViewport> viewport) {
+                                       std::optional<stage::EdgeViewport> viewport, double* captureRounding) {
     // Cached cards/flights can outlive a fullscreen change. Do not resurrect a
     // covered window (or its blur) before the next preview collection.
     if (previewLayer(window) == stage::PreviewLayer::Hidden)
         return;
     if (viewport) {
-        edgeEffect.draw(monitor, stage::edgeViewportForWindow(*viewport, rect(target)), clip, [&](const CBox& limit) { drawPreview(window, monitor, target, limit, radius); });
+        edgeEffect.draw(monitor, stage::edgeViewportForWindow(*viewport, rect(target)), clip, [&](const CBox& limit) { drawPreview(window, monitor, target, limit, radius, std::nullopt, captureRounding); });
         return;
     }
     const auto root = window->wlSurface()->resource();
@@ -2757,6 +2759,10 @@ void StageController::Impl::drawPreview(const PHLWINDOW& window, const PHLMONITO
     data.clipBox = clip;
     data.rounding = static_cast<int>(std::lround(radius * monitor->m_scale)) + 1;
     data.dontRound = radius <= 0;
+    // Export the final surface radius after fitting, clamping and physical
+    // pixel quantization, in the logical coordinates used by capture clients.
+    if (captureRounding)
+        *captureRounding = data.dontRound ? 0.0 : data.rounding / monitor->m_scale;
     data.roundingPower = window->roundingPower();
     data.blur = shouldBlur && shouldBlur(g_pHyprRenderer.get(), window);
     data.blockBlurOptimization = true;
@@ -3014,7 +3020,7 @@ std::string StageController::Impl::stateJson() const {
                     previewLayer(window) == stage::PreviewLayer::Hidden)
                     continue;
                 result["captureWindows"].push_back({{"address", std::format("0x{:x}", reinterpret_cast<uintptr_t>(window.get()))},
-                    {"selectionGeometry", geometryJson(preview.selection)}, {"selectionClipGeometry", geometryJson(preview.clip)}});
+                    {"selectionGeometry", geometryJson(preview.selection)}, {"selectionClipGeometry", geometryJson(preview.clip)}, {"selectionRounding", preview.rounding}});
             }
         }
         nlohmann::json cards = nlohmann::json::array();
