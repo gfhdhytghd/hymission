@@ -21,6 +21,13 @@ int main() {
     ok &= expect(near(edgeOpacity(hard, 200, 50), 1) && near(edgeOpacity(hard, 999.9, 549.9), 1), "zero widths retain the entire interior");
     for (const auto& point : {std::pair{199.9, 100.0}, {1000.0, 100.0}, {500.0, 49.9}, {500.0, 550.0}})
         ok &= expect(near(edgeOpacity(hard, point.first, point.second), 0), "zero widths NEVER disable hard clipping");
+    const auto shadowClip = desktopShadowViewport(hard, {0, 0, 1200, 600});
+    ok &= expect(near(edgeOpacity(shadowClip, 500, 45), 1) && near(edgeOpacity(shadowClip, 500, 555), 1),
+        "desktop shadows survive above and below work area");
+    ok &= expect(near(edgeOpacity(shadowClip, 199, 45), 0) && near(edgeOpacity(shadowClip, 1001, 555), 0) &&
+        near(edgeOpacity(shadowClip, 500, -1), 0) && near(edgeOpacity(shadowClip, 500, 601), 0),
+        "desktop shadow clip retains horizontal tape and output boundaries");
+    ok &= expect(near(hard.box.y, 50) && near(hard.box.height, 500), "shadow clip does not alter flight mapping viewport");
     const auto invalidEdges = edgeViewport(viewportBox, -10, std::numeric_limits<double>::quiet_NaN());
     ok &= expect(near(invalidEdges.left, 0) && near(invalidEdges.right, 0), "invalid effect widths become hard clips");
     const auto wideEdges = edgeViewport(viewportBox, 1e8, 1e8);

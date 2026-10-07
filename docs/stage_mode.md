@@ -72,9 +72,11 @@ a band toward the clipped side independently of the smooth blur-strength ramp.
 The revealed background remains unchanged. Floating and
 pinned windows and non-scrolling workspaces retain their existing rendering.
 The bands remain horizontal even for a vertically configured scrolling layout.
+Native desktop clipping uses the output height so shadows may extend above or
+below the work area. Card clips and flight coordinate mapping stay unchanged.
 
 `stage_scrolling_desktop_edge_width = 32` and
-`stage_scrolling_preview_edge_width = 8` set independent widths in displayed
+`stage_scrolling_preview_edge_width = 16` set independent widths in displayed
 logical pixels. Zero or negative values mean **hard clipping**, never unclipped
 rendering. Excessive widths are clamped to the viewport and bilateral bands
 cannot overlap. Shader/resource failures also retain the hard clip. The state

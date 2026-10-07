@@ -2419,7 +2419,7 @@ stage::EdgeViewport StageController::Impl::desktopViewport(const Screen& screen)
 }
 
 stage::EdgeViewport StageController::Impl::cardViewport(const CBox& card) const {
-    const double width = blurFramebufferHook ? setting("stage_scrolling_preview_edge_width", 8) : 0;
+    const double width = blurFramebufferHook ? setting("stage_scrolling_preview_edge_width", 16) : 0;
     return stage::edgeViewport(rect(card), width, width);
 }
 
@@ -2441,6 +2441,10 @@ void StageController::Impl::retargetFlight(Flight& flight, double progress, cons
 
 void StageController::Impl::captureWindowPasses(Render::IHyprRenderer* renderer, const PHLMONITOR& monitor,
                                                const stage::EdgeViewport& viewport, const std::function<void()>& render) {
+    // Layout work-area bounds place windows, but must not trim their vertical
+    // decorations. Keep the scrolling tape's horizontal clip; use the output
+    // height for native desktop drawing only, not card/flight coordinate maps.
+    const auto shadowViewport = stage::desktopShadowViewport(viewport, rect(CBox{monitor->m_position, monitor->m_size}));
     StageWindowPassElement::Elements elements;
     auto& passes = renderer->currentPass().m_passElements;
     const auto first = passes.size();
@@ -2458,12 +2462,12 @@ void StageController::Impl::captureWindowPasses(Render::IHyprRenderer* renderer,
     if (elements.empty())
         return;
     const PHLMONITORREF ref = monitor;
-    renderer->addPassElement(makeUnique<StageWindowPassElement>(std::move(elements), [this, ref, viewport](auto& passes) {
+    renderer->addPassElement(makeUnique<StageWindowPassElement>(std::move(elements), [this, ref, shadowViewport](auto& passes) {
         if (const auto mon = ref.lock())
-            drawWindowPasses(passes, mon, viewport);
+            drawWindowPasses(passes, mon, shadowViewport);
         else
             for (auto& pass : passes) pass->discard();
-    }, box(viewport.box).translate(-monitor->m_position)));
+    }, box(shadowViewport.box).translate(-monitor->m_position)));
 }
 
 void StageController::Impl::drawWindowPasses(StageWindowPassElement::Elements& elements, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport) {

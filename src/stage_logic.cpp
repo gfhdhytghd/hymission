@@ -206,6 +206,13 @@ EdgeViewport edgeViewport(const Rect& box, double left, double right) {
     return {box, left, right};
 }
 
+EdgeViewport desktopShadowViewport(const EdgeViewport& viewport, const Rect& output) {
+    auto result = viewport;
+    result.box.y = output.y;
+    result.box.height = output.height;
+    return result;
+}
+
 EdgeViewport edgeViewportForWindow(const EdgeViewport& viewport, const Rect& window) {
     auto result = viewport;
     if (window.x >= viewport.box.x - 0.01)
