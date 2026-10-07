@@ -28,6 +28,7 @@
 #include <hyprland/src/desktop/state/GlobalWindowController.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/desktop/state/Fadeout.hpp>
+#include <hyprland/src/desktop/state/FadingOutState.hpp>
 #include <hyprland/src/desktop/state/ViewHitTester.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
@@ -415,7 +416,7 @@ struct StageController::Impl {
     void drawWindowPasses(StageWindowPassElement::Elements& elements, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport,
                           const Rect& clip);
     void captureWindowPasses(Render::IHyprRenderer* renderer, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport, const std::function<void()>& render,
-                             std::optional<Rect> overviewClip = std::nullopt);
+                             std::optional<Rect> overviewClip = std::nullopt, bool separateFadeouts = false);
     stage::EdgeViewport desktopViewport(const Screen& screen) const;
     stage::EdgeViewport cardViewport(const CBox& card) const;
     std::pair<Rect, std::optional<stage::EdgeViewport>> flightFrame(const Flight& flight, double progress, const PHLMONITOR& monitor) const;
@@ -605,7 +606,7 @@ struct StageController::Impl {
         if (plane == Desktop::FADEOUT_PLANE_WINDOW_TILED && scrollingWorkspace(workspace) && !self->rendering && !self->capturingWindowPasses &&
             !renderer->m_bRenderingSnapshot && self->enabled && !self->blocked() && screen && screen->geometry.enabled() &&
             !screen->covered && !screen->suspended && !monitor->m_activeSpecialWorkspace) {
-            self->captureWindowPasses(renderer, monitor, self->desktopViewport(*screen), [&] { original(renderer, monitor, plane, workspace); });
+            self->captureWindowPasses(renderer, monitor, self->desktopViewport(*screen), [&] { original(renderer, monitor, plane, workspace); }, std::nullopt, true);
             return;
         }
         original(renderer, monitor, plane, workspace);
@@ -2474,7 +2475,7 @@ void StageController::Impl::retargetFlight(Flight& flight, double progress, cons
 }
 
 void StageController::Impl::captureWindowPasses(Render::IHyprRenderer* renderer, const PHLMONITOR& monitor,
-                                               const stage::EdgeViewport& viewport, const std::function<void()>& render, std::optional<Rect> overviewClip) {
+                                               const stage::EdgeViewport& viewport, const std::function<void()>& render, std::optional<Rect> overviewClip, bool separateFadeouts) {
     // Layout work-area bounds place windows, but must not trim their vertical
     // decorations. Keep the scrolling tape's horizontal clip; use the output
     // height for native desktop drawing only, not card/flight coordinate maps.
@@ -2497,12 +2498,49 @@ void StageController::Impl::captureWindowPasses(Render::IHyprRenderer* renderer,
     if (elements.empty())
         return;
     const PHLMONITORREF ref = monitor;
-    renderer->addPassElement(makeUnique<StageWindowPassElement>(std::move(elements), [this, ref, shadowViewport, clip](auto& passes) {
-        if (const auto mon = ref.lock())
-            drawWindowPasses(passes, mon, shadowViewport, clip);
-        else
-            for (auto& pass : passes) pass->discard();
-    }, box(clip).translate(-monitor->m_position)));
+    const auto enqueue = [&](StageWindowPassElement::Elements batch, const stage::EdgeViewport& edge) {
+        if (batch.empty())
+            return;
+        renderer->addPassElement(makeUnique<StageWindowPassElement>(std::move(batch), [this, ref, edge, clip](auto& passes) {
+            if (const auto mon = ref.lock())
+                drawWindowPasses(passes, mon, edge, clip);
+            else
+                for (auto& pass : passes) pass->discard();
+        }, box(clip).translate(-monitor->m_position)));
+    };
+    if (!separateFadeouts) {
+        enqueue(std::move(elements), shadowViewport);
+        return;
+    }
+    // Native snapshots cover the whole output, even for a small window. Match
+    // the texture to its fadeout and classify the actual animated window body,
+    // not that framebuffer-sized render box. Keep each window's pre-blur/dim
+    // passes together and preserve native order, alpha and animation geometry.
+    StageWindowPassElement::Elements batch;
+    for (auto& element : elements) {
+        const auto* texture = dynamic_cast<CTexPassElement*>(element.get());
+        std::optional<stage::EdgeViewport> edge;
+        if (texture) {
+            for (const auto& fadeout : Desktop::fadingOutState()->fadeouts()) {
+                if (!fadeout)
+                    continue;
+                const auto fb = fadeout->framebuffer();
+                if (fadeout->monitor() != monitor || fadeout->plane() != Desktop::FADEOUT_PLANE_WINDOW_TILED ||
+                    !fb || fb->getTexture() != texture->m_data.tex)
+                    continue;
+                edge = stage::edgeViewportForWindow(shadowViewport, rect(fadeout->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT)));
+                break;
+            }
+        }
+        batch.push_back(std::move(element));
+        if (edge) {
+            enqueue(std::move(batch), *edge);
+            batch.clear();
+        }
+    }
+    // Unknown plugin passes have no trustworthy window geometry. Retain the
+    // hard clip without inventing a blur classification for them.
+    enqueue(std::move(batch), stage::edgeViewport(shadowViewport.box, 0, 0));
 }
 
 void StageController::Impl::drawWindowPasses(StageWindowPassElement::Elements& elements, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport,

@@ -302,6 +302,11 @@ heading toward the new endpoint. `hyprctl hymission-overview-state` window diagn
 `stageOpeningReveal`, `stageClosingReveal` and the current Stage transition
 clip, viewport and edge widths.
 
+On the normal desktop, native closing snapshots are classified individually by
+their animated window bodies. A fully visible closing window keeps sharp edges;
+a window crossing the scrolling boundary retains that edge effect. Native
+close geometry, opacity and draw order remain in use.
+
 Fullscreen coverage is per output; composing an in-progress slide clears only
 that output's solitary-client shortcut, without taking ownership of the global
 direct-scanout flag used by overview.

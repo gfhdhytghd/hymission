@@ -136,6 +136,15 @@ int main() {
         near(overviewTransitionProgress(0.37, 0.685, true), 0.5), "reopening uses only the remaining progress");
     ok &= expect(near(overviewTransitionProgress(0, 0, false), 1) && near(overviewTransitionProgress(1, 1, true), 1),
         "zero-length transitions finish without division by zero");
+    // A native close snapshot covers the output, but classification must use
+    // each animated body independently, even when several snapshots coexist.
+    for (int step = 0; step <= 100; ++step) {
+        const double shrink = 1 - step / 200.0;
+        const auto closingVisible = edgeViewportForWindow(soft, {300, 100, 200 * shrink, 200 * shrink});
+        const auto closingCrossed = edgeViewportForWindow(soft, {190, 100, 200 * shrink, 200 * shrink});
+        ok &= expect(near(closingVisible.left, 0) && near(closingCrossed.left, soft.left),
+            "simultaneous closing windows retain independent edge classification while shrinking");
+    }
     const auto hardFlight = scrollingFlightFrame({0, 50, 100, 100}, {0, 300, 20, 20}, hard, edgeViewport(cardView.box, 0, 0), 0.5);
     ok &= expect(near(hardFlight.viewport.left, 0) && near(hardFlight.viewport.right, 0), "hard clipping survives flight interpolation");
     ok &= expect(previewLayer(false, false, false, false) == PreviewLayer::Tiled,
