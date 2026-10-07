@@ -390,3 +390,28 @@ When leaving fullscreen, incoming windows grow from their thumbnail positions in
 the hidden sidebar just outside the output. When entering fullscreen, outgoing
 windows shrink to those hidden sidebar positions. Only the thumbnail endpoint
 is translated beyond the sidebar edge; rendering stays clipped to this output.
+
+## Window capture integration
+
+`hyprctl hymission-stage-state` exposes `captureVersion: 1` and a bottom-to-top
+`captureWindows` array. Each entry contains the native window `address`, its
+`selectionGeometry` in global logical coordinates, and `selectionClipGeometry`.
+These rectangles come from the last rendered card previews, including card
+scroll, slide offsets, and output clipping. Hidden/fullscreen-covered windows,
+empty cards and clipped-out previews are omitted. Capture clients must retain
+clipping and stacking, and resolve the address again before rendering a window.
+
+HyprCapture consumes this optional capability for Stage window selection. It
+captures the original window without activating its workspace; editor captures
+are centered at a usable display scale without resampling the exported image.
+The existing token-based `hymission-capture-input begin|end` handshake suspends
+Stage interaction while the screenshot UI owns input, preventing a click from
+also activating a workspace.
+
+After updating both plugins, verify window/fusion selection on both sidebar
+sides, overlapping tiled/floating previews, a partially scrolled card, inactive
+workspaces, a fullscreen preview, and a pinned floating window over Stage.
+Confirm editor centering, native output resolution, unchanged workspace/focus,
+and cancellation restoring normal Stage interaction. Repeat with a target
+closing before its deferred capture. Build and offscreen UI tests do not replace
+these checks in the compositor.

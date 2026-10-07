@@ -193,6 +193,11 @@ struct StageController::Impl {
         CBox target;
         CBox natural;
     };
+    struct CapturePreview {
+        PHLWINDOWREF window;
+        CBox selection;
+        CBox clip;
+    };
     struct Flight {
         Preview preview;
         CBox from;
@@ -227,6 +232,7 @@ struct StageController::Impl {
         CBox base;
         stage::Geometry geometry;
         std::vector<Card> cards;
+        std::vector<CapturePreview> capturePreviews;
         double scroll = 0;
         float scale = 1;
         int transform = 0;
@@ -300,6 +306,7 @@ struct StageController::Impl {
 
     HANDLE handle;
     std::function<bool()> overviewSuspended;
+    std::function<bool()> inputSuppressed;
     std::function<stage::OverviewPhase(const PHLMONITOR&)> overviewPhase;
     std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> overviewFrame;
     std::function<std::optional<double>(const PHLMONITOR&)> sidebarProgress;
@@ -400,8 +407,9 @@ struct StageController::Impl {
     }
 
     Impl(HANDLE h, std::function<bool()> suspended, std::function<stage::OverviewPhase(const PHLMONITOR&)> phase,
-         std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> frame, std::function<std::optional<double>(const PHLMONITOR&)> slide) :
-        handle(h), overviewSuspended(std::move(suspended)), overviewPhase(std::move(phase)), overviewFrame(std::move(frame)), sidebarProgress(std::move(slide)) { instance = this; }
+         std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> frame, std::function<std::optional<double>(const PHLMONITOR&)> slide,
+         std::function<bool()> suppressInput) :
+        handle(h), overviewSuspended(std::move(suspended)), inputSuppressed(std::move(suppressInput)), overviewPhase(std::move(phase)), overviewFrame(std::move(frame)), sidebarProgress(std::move(slide)) { instance = this; }
     ~Impl();
     void initialize();
     void request(bool dirty = true);
@@ -679,7 +687,7 @@ bool StageController::Impl::ownsTransition(const PHLWORKSPACE& workspace, bool a
 }
 
 bool StageController::Impl::interactive(const Screen& screen) const {
-    return enabled && !rendering && !blocked() && screen.geometry.enabled() && !screen.covered && !screen.suspended;
+    return enabled && !rendering && !blocked() && !(inputSuppressed && inputSuppressed()) && screen.geometry.enabled() && !screen.covered && !screen.suspended;
 }
 
 StageController::Impl::Screen* StageController::Impl::screenFor(const PHLMONITOR& monitor) {
@@ -1626,7 +1634,7 @@ std::pair<StageController::Impl::Screen*, std::optional<std::size_t>> StageContr
 }
 
 void StageController::Impl::pointer() {
-    if (!enabled || rendering)
+    if (!enabled || rendering || (inputSuppressed && inputSuppressed()))
         return;
     const auto point = g_pInputManager->getMouseCoordsInternal();
     const auto [hoveredScreen, index] = hit(point);
@@ -1737,7 +1745,7 @@ void StageController::Impl::updateDragHover() {
 }
 
 void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
-    if (rendering)
+    if (rendering || (inputSuppressed && inputSuppressed()))
         return;
     if (thumbnailDrag && event.button == BTN_LEFT && event.state == WL_POINTER_BUTTON_STATE_RELEASED) {
         swallowedButtons.erase(event.button);
@@ -2152,6 +2160,7 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
     auto* screen = visualScreenFor(monitor);
     if (!screen || renderBlocked(monitor) || rendering || !g_pHyprOpenGL)
         return;
+    screen->capturePreviews.clear();
     const auto now = Clock::now();
     if (now - screen->lastFrame > std::chrono::seconds(1)) {
         screen->frameSampleStart = now;
@@ -2226,7 +2235,15 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
                     continue;
                 const auto radius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
                     numberSetting("decoration:rounding", 0), preview.target.w, preview.target.h);
-                drawPreview(window, monitor, preview.target.copy().translate(box.pos()), cardClip, radius,
+                const CBox target = preview.target.copy().translate(box.pos());
+                // Export the geometry actually drawn into this frame, including
+                // slide/scroll offsets and card/output clipping. Consumers select
+                // the preview but capture the native window by its address.
+                const CBox logicalClip = cardClip.copy().scale(1.0 / monitor->m_scale).translate(monitor->m_position);
+                const CBox visible = target.intersection(logicalClip);
+                if (previewLayer(window) != stage::PreviewLayer::Hidden && visible.w >= 1 && visible.h >= 1)
+                    screen->capturePreviews.push_back({window, target, logicalClip});
+                drawPreview(window, monitor, target, cardClip, radius,
                     scrollingTiled(window) ? std::optional{cardViewport(box)} : std::nullopt);
             }
             // The glow is centered on the card edges and clipped only by the
@@ -2954,12 +2971,27 @@ std::string StageController::Impl::stateJson() const {
         {"scrolling_edge_blur_hook", blurFramebufferHook != nullptr}, {"scrolling_edge_error", edgeEffect.error()},
         {"drag_hover_active", dragHover.has_value()},
         {"thumbnail_drag_active", !!thumbnailDrag},
+        {"captureVersion", 1}, {"captureWindows", nlohmann::json::array()},
         {"screens", nlohmann::json::array()}};
     for (const auto& screen : screens) {
         const auto monitor = screen.monitor.lock();
         if (!monitor)
             continue;
         const auto& rendered = swipe && swipe->prepared && swipe->monitor == monitor ? swipe->visual : screen;
+        if (enabled && !blocked() && !renderBlocked(monitor) && !rendered.covered && !rendered.suspended &&
+            !monitor->m_activeSpecialWorkspace && rendered.shown > 0) {
+            const auto geometryJson = [](const CBox& r) {
+                return nlohmann::json{{"x", r.x}, {"y", r.y}, {"width", r.w}, {"height", r.h}};
+            };
+            for (const auto& preview : rendered.capturePreviews) {
+                const auto window = preview.window.lock();
+                if (!window || !window->m_isMapped || window->isHidden() || window->m_pinned ||
+                    previewLayer(window) == stage::PreviewLayer::Hidden)
+                    continue;
+                result["captureWindows"].push_back({{"address", std::format("0x{:x}", reinterpret_cast<uintptr_t>(window.get()))},
+                    {"selectionGeometry", geometryJson(preview.selection)}, {"selectionClipGeometry", geometryJson(preview.clip)}});
+            }
+        }
         nlohmann::json cards = nlohmann::json::array();
         for (const auto& card : screen.cards) {
             if (const auto workspace = card.workspace.lock())
@@ -2995,8 +3027,8 @@ std::string StageController::Impl::stateJson() const {
 
 StageController::StageController(HANDLE handle, std::function<bool()> suspended,
                                  std::function<stage::OverviewPhase(const PHLMONITOR&)> phase,
-                                 std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> frame, std::function<std::optional<double>(const PHLMONITOR&)> slide) :
-    m_impl(std::make_unique<Impl>(handle, std::move(suspended), std::move(phase), std::move(frame), std::move(slide))) {}
+                                 std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> frame, std::function<std::optional<double>(const PHLMONITOR&)> slide, std::function<bool()> suppressInput) :
+    m_impl(std::make_unique<Impl>(handle, std::move(suspended), std::move(phase), std::move(frame), std::move(slide), std::move(suppressInput))) {}
 StageController::~StageController() = default;
 void StageController::initialize() { m_impl->initialize(); }
 std::string StageController::stateJson() const { return m_impl->stateJson(); }

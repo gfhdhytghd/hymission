@@ -445,6 +445,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         return g_overviewController ? g_overviewController->stageTransitionFrame(window, monitor) : std::nullopt;
     }, [](const PHLMONITOR& monitor) {
         return g_overviewController ? g_overviewController->stageSidebarProgress(monitor) : std::nullopt;
+    }, [] {
+        return g_overviewController && g_overviewController->captureInputSuppressed();
     });
     g_stageController->initialize();
     g_stageStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{

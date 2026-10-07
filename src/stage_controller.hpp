@@ -18,7 +18,8 @@ class StageController {
     StageController(HANDLE handle, std::function<bool()> overviewSuspended,
                     std::function<stage::OverviewPhase(const PHLMONITOR&)> overviewPhase,
                     std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> overviewFrame,
-                    std::function<std::optional<double>(const PHLMONITOR&)> sidebarProgress);
+                    std::function<std::optional<double>(const PHLMONITOR&)> sidebarProgress,
+                    std::function<bool()> inputSuppressed = {});
     ~StageController();
     StageController(const StageController&) = delete;
     StageController& operator=(const StageController&) = delete;
