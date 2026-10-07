@@ -175,9 +175,9 @@ class OverviewOverlayPassElement final : public IPassElement {
 class OverviewShadowPassElement final : public IPassElement {
   public:
     OverviewShadowPassElement(CBox box, int round, float roundingPower, int range, CHyprColor color, float alpha,
-                              PHLWINDOW cutoutWindow = {}, CBox cutoutSource = {}, CBox cutoutTarget = {}) :
+                              PHLWINDOW cutoutWindow = {}, CBox cutoutSource = {}, CBox cutoutTarget = {}, float cutoutRadius = 0) :
         m_box(box), m_round(round), m_roundingPower(roundingPower), m_range(range), m_color(color), m_alpha(alpha),
-        m_cutoutWindow(cutoutWindow), m_cutoutSource(cutoutSource), m_cutoutTarget(cutoutTarget) {
+        m_cutoutWindow(cutoutWindow), m_cutoutSource(cutoutSource), m_cutoutTarget(cutoutTarget), m_cutoutRadius(cutoutRadius) {
     }
 
     std::vector<UP<IPassElement>> draw() override {
@@ -201,7 +201,12 @@ class OverviewShadowPassElement final : public IPassElement {
             // the shadow and its window cutout together exactly once.
             CBox nativeBox = m_box;
             nativeBox.translate(-m_cutoutTarget.pos()).scale(1.0 / scale).translate(m_cutoutSource.pos());
-            g_pHyprOpenGL->renderRoundedShadow(nativeBox, m_round, m_roundingPower, m_range, m_color, m_alpha);
+            // Native shadow exclusion scales window rounding with renderModif,
+            // while overview surfaces retain their displayed corner radius.
+            const float nativeRadius = m_cutoutRadius / (state.pMonitor->m_scale * scale);
+            StageController::withWindowRounding(window, nativeRadius, [&] {
+                g_pHyprOpenGL->renderRoundedShadow(nativeBox, m_round, m_roundingPower, m_range, m_color, m_alpha);
+            });
         } else
             g_pHyprOpenGL->renderRoundedShadow(m_box, m_round, m_roundingPower, m_range, m_color, m_alpha);
         return {};
@@ -233,6 +238,7 @@ class OverviewShadowPassElement final : public IPassElement {
     PHLWINDOWREF m_cutoutWindow;
     CBox       m_cutoutSource;
     CBox       m_cutoutTarget;
+    float      m_cutoutRadius = 0;
 };
 
 namespace {
@@ -4307,6 +4313,7 @@ void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, co
     else {
         PHLWINDOW cutoutWindow;
         CBox cutoutSource, cutoutTarget;
+        float cutoutRadius = 0;
         // Stage wraps these passes in a deferred transparent layer. Preserve
         // the owner and map native shadow exclusion into that layer's preview.
         // Other overview paths retain their existing rendering.
@@ -4318,10 +4325,14 @@ void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, co
                 cutoutSource.translate(window->m_workspace->m_renderOffset->value());
             cutoutSource.translate(window->m_floatingOffset - monitor->m_position).scale(monitor->m_scale);
             cutoutTarget = toBox(rectToMonitorRenderLocal(previewRect, monitor));
+            // Match transformSurfaceRenderDataForWindow, including its size cap.
+            const int surfaceRadius = static_cast<int>(window->rounding() * monitor->m_scale);
+            const int maxRadius = std::max(0, static_cast<int>(std::floor(std::min(previewRect.width, previewRect.height) * 0.5)));
+            cutoutRadius = std::min(maxRadius, std::max(0, static_cast<int>(std::lround(surfaceRadius * roundingScale))));
         }
         g_pHyprRenderer->m_renderPass.add(makeUnique<OverviewShadowPassElement>(
             shadowBox, shadowRound, static_cast<float>(roundingPower), renderRange, shadowColor, previewAlpha,
-            cutoutWindow, cutoutSource, cutoutTarget));
+            cutoutWindow, cutoutSource, cutoutTarget, cutoutRadius));
     }
 }
 

@@ -336,6 +336,8 @@ struct StageController::Impl {
     SwipeBeginFn swipeBeginOriginal = nullptr;
     bool drawingDecoration = false;
     float decorationRadius = 0;
+    PHLWINDOWREF roundingWindow;
+    float roundingOverride = 0;
     CBox decorationClip;
     struct SurfaceTransform {
         CBox source;
@@ -635,6 +637,8 @@ struct StageController::Impl {
         auto* self = instance;
         // Native decorations query a pre-scale radius; surfaces receive their
         // final displayed radius directly without changing the real window.
+        if (self->roundingWindow.lock().get() == window)
+            return self->roundingOverride;
         return self->drawingDecoration ? self->decorationRadius : reinterpret_cast<RoundingFn>(self->roundingHook->m_original)(window);
     }
     static PHLWINDOW windowAtThunk(const Desktop::CViewHitTester* tester, const Vector2D& position, uint16_t properties, PHLWINDOW ignore) {
@@ -3222,6 +3226,23 @@ void StageController::endTrackpadWorkspaceSwipe(bool cancelled) {
 
 bool StageController::renderingPreview() {
     return Impl::instance && Impl::instance->rendering && Impl::instance->surfaceTransform.has_value();
+}
+
+void StageController::withWindowRounding(const PHLWINDOW& window, float radius, const std::function<void()>& draw) {
+    auto* self = Impl::instance;
+    if (!self || !self->hooksReady) {
+        draw();
+        return;
+    }
+    const auto savedWindow = self->roundingWindow;
+    const auto savedRadius = self->roundingOverride;
+    Hyprutils::Utils::CScopeGuard restore{[&] {
+        self->roundingWindow = savedWindow;
+        self->roundingOverride = savedRadius;
+    }};
+    self->roundingWindow = window;
+    self->roundingOverride = radius;
+    draw();
 }
 
 CBox StageController::transformPreviewBox(CBox box) {

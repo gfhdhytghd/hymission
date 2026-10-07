@@ -36,6 +36,8 @@ class StageController {
     static void setOverviewRendering(bool active);
     // Overview owns the shared hooks while Stage draws its sliding previews.
     static bool renderingPreview();
+    // Scope a native shadow cutout radius without changing window rules.
+    static void withWindowRounding(const PHLWINDOW& window, float radius, const std::function<void()>& draw);
     static CBox transformPreviewBox(CBox box);
     static std::optional<stage::OverviewEndpoint> overviewOrigin(const PHLWINDOW& window);
     // Settled card endpoint after overview activates the requested workspace.
