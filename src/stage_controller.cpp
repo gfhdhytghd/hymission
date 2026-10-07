@@ -2648,6 +2648,15 @@ void StageController::Impl::drawWindowPasses(StageWindowPassElement::Elements& e
             }};
             if (ownClip) {
                 *ownClip = savedClip.empty() ? limit : savedClip.intersection(limit);
+                if (const auto* rectangle = dynamic_cast<CRectPassElement*>(element.get()); rectangle && rectangle->m_data.blur) {
+                    // Native rect blur samples a full-output texture. Its texture
+                    // draw uses clipBox instead of the box-limited damage, so a
+                    // Stage-wide clip would paint blur outside a closing window
+                    // (including stale pixels outside the blur's updated area).
+                    auto blurBox = rectangle->m_data.box;
+                    state.renderModif.applyToBox(blurBox);
+                    *ownClip = ownClip->intersection(blurBox);
+                }
                 if (ownClip->empty()) {
                     element->discard();
                     continue; // An empty native clip means UNCLIPPED, not invisible.
