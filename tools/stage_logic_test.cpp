@@ -34,7 +34,7 @@ int main() {
     ok &= expect(near(wideEdges.left, 400) && near(wideEdges.right, 400), "large bilateral bands do not overlap");
     const auto soft = edgeViewport(viewportBox, 64, 0);
     const auto mirrored = edgeViewport(viewportBox, 0, 64);
-    ok &= expect(near(edgeOpacity(soft, 200, 100), 0.5) && near(edgeOpacity(soft, 232, 100), 1) &&
+    ok &= expect(near(edgeOpacity(soft, 200, 100), 0) && near(edgeOpacity(soft, 216, 100), 0.5) && near(edgeOpacity(soft, 232, 100), 1) &&
         near(edgeOpacity(soft, 264, 100), 1) && near(edgeOpacity(soft, 999, 100), 1), "desktop fades only at the sidebar boundary");
     for (int d = 1; d < 800; ++d)
         ok &= expect(near(edgeOpacity(soft, 200 + d, 100), edgeOpacity(mirrored, 1000 - d, 100)), "right sidebar mirrors the desktop edge");

@@ -92,6 +92,7 @@ int main() {
     bool ok = true;
     int cases = 0;
     int antiAliasSamples = 0;
+    int boundarySamples = 0;
     for (int transform = 0; transform < 8; ++transform) {
       for (const float fraction : {0.F, 0.25F, 0.75F}) {
         const auto tr = static_cast<Hyprutils::Math::eTransform>(transform);
@@ -169,7 +170,7 @@ int main() {
                     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
                     glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, blended.data());
                     glDisable(GL_BLEND);
-                    bool clipped = true, clean = true, opaqueCenter = true, mirrored = true, composited = true, noGrid = true;
+                    bool clipped = true, clean = true, opaqueCenter = true, mirrored = true, composited = true, noGrid = true, continuousEdge = true;
                     int fading = 0, blurred = 0;
                     for (int y = 0; y < H; ++y)
                         for (int x = 0; x < W; ++x) {
@@ -184,6 +185,12 @@ int main() {
                                 clipped &= pixels[i] == 0 && pixels[i + 1] == 0 && pixels[i + 2] == 0 && pixels[i + 3] == 0;
                             else {
                                 clean &= pixels[i] == 0 && pixels[i + 1] <= pixels[i + 3] && pixels[i + 3] <= alpha;
+                                // The first interior pixel must approach transparency,
+                                // not jump from zero outside to a half-opaque hard line.
+                                if ((left && m.x - viewX <= 0.75) || (right && viewX + viewW - m.x <= 0.75)) {
+                                    ++boundarySamples;
+                                    continuousEdge &= pixels[i + 3] <= 8;
+                                }
                                 const bool edge = (left && m.x < viewX + left) || (right && m.x > viewX + viewW - right);
                                 if (pattern == 2 && edge) {
                                     const float distance = left && m.x < viewX + left ? m.x - viewX : viewX + viewW - m.x;
@@ -203,11 +210,11 @@ int main() {
                                 }
                             }
                         }
-                    const bool passed = noGrid && clipped && clean && opaqueCenter && mirrored && composited && (mode == 0 || fading > 0) && (pattern != 2 || mode == 0 || blurred > 0);
+                    const bool passed = continuousEdge && noGrid && clipped && clean && opaqueCenter && mirrored && composited && (mode == 0 || fading > 0) && (pattern != 2 || mode == 0 || blurred > 0);
                     if (!passed)
                         std::cerr << "FAIL transform=" << transform << " scale=" << scale << " mode=" << mode << " pattern=" << pattern
                             << " fraction=" << fraction << " clip=" << clipped << " clean=" << clean << " center=" << opaqueCenter
-                            << " noGrid=" << noGrid << " mirror=" << mirrored << " composite=" << composited << " fade=" << fading << " blur=" << blurred << '\n';
+                            << " continuousEdge=" << continuousEdge << " noGrid=" << noGrid << " mirror=" << mirrored << " composite=" << composited << " fade=" << fading << " blur=" << blurred << '\n';
                     ok &= passed;
                     ++cases;
                 }
@@ -215,7 +222,7 @@ int main() {
         }
       }
     }
-    ok &= glGetError() == GL_NO_ERROR && antiAliasSamples > 0;
+    ok &= glGetError() == GL_NO_ERROR && antiAliasSamples > 0 && boundarySamples > 0;
     std::cout << cases << " GPU cases; anti-alias samples: " << antiAliasSamples << "; renderer: " << glGetString(GL_RENDERER) << '\n';
     glDeleteFramebuffers(1, &framebuffer);
     glDeleteTextures(6, textures);

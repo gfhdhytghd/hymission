@@ -53,9 +53,10 @@ void main() {
     float l = uWidths.x > 0.0 ? smoothstep(0.0, uWidths.x, m.x - uViewport.x) : 1.0;
     float r = uWidths.y > 0.0 ? smoothstep(0.0, uWidths.y, uViewport.x + uViewport.z - m.x) : 1.0;
     float strength = 1.0 - min(l, r);
-    // Move opacity toward the clipped edge, independently of blur strength.
-    float fadeL = uWidths.x > 0.0 ? smoothstep(0.0, uWidths.x, m.x - uViewport.x + uWidths.x * 0.5) : 1.0;
-    float fadeR = uWidths.y > 0.0 ? smoothstep(0.0, uWidths.y, uViewport.x + uViewport.z - m.x + uWidths.y * 0.5) : 1.0;
+    // Compress opacity into the outer half-band; retain zero at the clip
+    // boundary to avoid a hard line alongside the unchanged blur ramp.
+    float fadeL = uWidths.x > 0.0 ? smoothstep(0.0, uWidths.x * 0.5, m.x - uViewport.x) : 1.0;
+    float fadeR = uWidths.y > 0.0 ? smoothstep(0.0, uWidths.y * 0.5, uViewport.x + uViewport.z - m.x) : 1.0;
     float alpha = uPass == 0 ? 1.0 : min(fadeL, fadeR);
     float width = l < r ? uWidths.x : uWidths.y;
     float radius = min(uMaxRadius, width * 0.5) * strength;

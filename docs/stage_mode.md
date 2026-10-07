@@ -67,8 +67,10 @@ Inside these clips, a fixed band progressively blurs the window content and
 fades it to transparency. The desktop has one band facing the sidebar (left by
 default, mirrored when Smartisan changes sides); each scrolling card has both
 left and right bands. Only windows crossing a viewport edge receive that edge
-effect; a fully visible window keeps its own edge sharp. Opacity is shifted half
-a band toward the clipped side independently of the smooth blur-strength ramp.
+effect; a fully visible window keeps its own edge sharp. Opacity rises from zero
+at the clip to full opacity halfway through the band,
+independently of the smooth blur-strength ramp. Compressing this fade instead of
+translating it keeps the clip boundary continuous.
 The revealed background remains unchanged. Floating and
 pinned windows and non-scrolling workspaces retain their existing rendering.
 The bands remain horizontal even for a vertically configured scrolling layout.

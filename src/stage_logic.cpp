@@ -227,8 +227,8 @@ double edgeOpacity(const EdgeViewport& viewport, double x, double y) {
     if (x < b.x || x >= b.x + b.width || y < b.y || y >= b.y + b.height || b.width <= 0 || b.height <= 0)
         return 0;
     const auto smooth = [](double t) { t = std::clamp(t, 0.0, 1.0); return t * t * (3 - 2 * t); };
-    return std::min(viewport.left > 0 ? smooth((x - b.x) / viewport.left + 0.5) : 1.0,
-        viewport.right > 0 ? smooth((b.x + b.width - x) / viewport.right + 0.5) : 1.0);
+    return std::min(viewport.left > 0 ? smooth(2 * (x - b.x) / viewport.left) : 1.0,
+        viewport.right > 0 ? smooth(2 * (b.x + b.width - x) / viewport.right) : 1.0);
 }
 
 ScrollingFlightFrame scrollingFlightFrame(const Rect& from, const Rect& to, const EdgeViewport& fromViewport,
