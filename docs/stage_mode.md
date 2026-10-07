@@ -296,7 +296,10 @@ during opening preserves them. Native geometry remains separate from these
 animation-only origins. Partially visible windows carry their actual card/strip
 clip and edge gradient into Overview; these unfold continuously as the window
 expands and return to the prepared destination clip on exit, including when a
-new workspace is selected. Fully clipped windows use offscreen endpoints.
+new workspace is selected. On the card's outside edge (left for a left sidebar,
+right for a right sidebar), the fade and clip retain the card edge's x coordinate
+through reveal and reversal; their y coordinates may move. The desktop-facing
+seam retains its existing transition. Fully clipped windows use offscreen endpoints.
 Interrupted transitions retain the sampled position, clip and gradient before
 heading toward the new endpoint. `hyprctl hymission-overview-state` window diagnostics include
 `stageOpeningReveal`, `stageClosingReveal` and the current Stage transition

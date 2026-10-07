@@ -73,10 +73,14 @@ Rect desktopArea(const Rect& base, const Geometry& geometry, bool right);
 
 // The viewport is always a hard clip, including when both effect widths are 0.
 // Widths are measured at the displayed size, independently of window geometry.
+enum class FixedOuterEdge { None, Left, Right };
 struct EdgeViewport {
     Rect box;
     double left = 0;
     double right = 0;
+    // Overview card reveal only; desktop seams keep their moving viewport.
+    FixedOuterEdge fixedOuterEdge = FixedOuterEdge::None;
+    double fixedOuterX = 0;
 };
 EdgeViewport edgeViewport(const Rect& box, double left, double right);
 EdgeViewport desktopShadowViewport(const EdgeViewport& viewport, const Rect& output);

@@ -2987,8 +2987,12 @@ std::optional<stage::OverviewEndpoint> StageController::Impl::cardEndpoint(const
             if (preview.window != window)
                 continue;
             const Rect target = rect(preview.target.copy().translate(cardBox.pos()));
-            const auto viewport = scrollingTiled(window) ? stage::edgeViewportForWindow(cardViewport(cardBox), target) :
+            auto viewport = scrollingTiled(window) ? stage::edgeViewportForWindow(cardViewport(cardBox), target) :
                 stage::edgeViewport(rect(cardBox), 0, 0);
+            if (screen.right ? viewport.right > 0 : viewport.left > 0) {
+                viewport.fixedOuterEdge = screen.right ? stage::FixedOuterEdge::Right : stage::FixedOuterEdge::Left;
+                viewport.fixedOuterX = screen.right ? cardBox.x + cardBox.w : cardBox.x;
+            }
             const CBox clip = cardBox.intersection(strip).intersection(output);
             return stage::OverviewEndpoint{target, viewport, previewLayer(window) == stage::PreviewLayer::Hidden ? Rect{} : rect(clip)};
         }

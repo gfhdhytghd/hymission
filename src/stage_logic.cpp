@@ -236,6 +236,24 @@ double overviewTransitionProgress(double start, double current, bool opening) {
     return distance > 1e-9 ? std::clamp((opening ? current - start : start - current) / distance, 0.0, 1.0) : 1.0;
 }
 
+static EdgeFrame pinOuterEdge(EdgeFrame frame, const EdgeViewport& anchor) {
+    if (anchor.fixedOuterEdge == FixedOuterEdge::None)
+        return frame;
+    const auto pin = [&](Rect& box) {
+        if (anchor.fixedOuterEdge == FixedOuterEdge::Left) {
+            const double right = box.x + box.width;
+            box.x = anchor.fixedOuterX;
+            box.width = std::max(0.0, right - box.x);
+        } else
+            box.width = std::max(0.0, anchor.fixedOuterX - box.x);
+    };
+    pin(frame.viewport.box);
+    pin(frame.clip);
+    frame.viewport.fixedOuterEdge = anchor.fixedOuterEdge;
+    frame.viewport.fixedOuterX = anchor.fixedOuterX;
+    return frame;
+}
+
 EdgeFrame interpolateEdgeFrame(const EdgeFrame& from, const EdgeFrame& to, double progress) {
     const double p = std::clamp(sane(progress, 0), 0.0, 1.0);
     const double t = p * p * (3 - 2 * p);
@@ -243,8 +261,11 @@ EdgeFrame interpolateEdgeFrame(const EdgeFrame& from, const EdgeFrame& to, doubl
     const auto mixRect = [&](const Rect& a, const Rect& b) {
         return Rect{mix(a.x, b.x), mix(a.y, b.y), mix(a.width, b.width), mix(a.height, b.height)};
     };
-    return {edgeViewport(mixRect(from.viewport.box, to.viewport.box), mix(from.viewport.left, to.viewport.left),
-                         mix(from.viewport.right, to.viewport.right)), mixRect(from.clip, to.clip)};
+    const EdgeFrame frame{edgeViewport(mixRect(from.viewport.box, to.viewport.box), mix(from.viewport.left, to.viewport.left),
+                                      mix(from.viewport.right, to.viewport.right)), mixRect(from.clip, to.clip)};
+    // Releasing/reversing a gesture retains the sampled outer edge, even when
+    // the other endpoint is the unrestricted overview output.
+    return pinOuterEdge(frame, from.viewport.fixedOuterEdge != FixedOuterEdge::None ? from.viewport : to.viewport);
 }
 
 bool overviewEndpointVisible(const OverviewEndpoint& endpoint) {
@@ -268,7 +289,7 @@ EdgeFrame overviewRevealFrame(const OverviewEndpoint& endpoint, const Rect& curr
     };
     const auto viewport = edgeViewport(unfold(endpoint.viewport.box), endpoint.viewport.left * sx * (1 - reveal),
                                       endpoint.viewport.right * sx * (1 - reveal));
-    return {viewport, unfold(endpoint.clip)};
+    return pinOuterEdge({viewport, unfold(endpoint.clip)}, endpoint.viewport);
 }
 
 ScrollingFlightFrame scrollingFlightFrame(const Rect& from, const Rect& to, const EdgeViewport& fromViewport,

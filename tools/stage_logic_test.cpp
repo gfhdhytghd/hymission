@@ -110,6 +110,38 @@ int main() {
         ok &= expect(std::isfinite(frame.clip.x) && frame.clip.width > 0 && frame.clip.height > 0,
             "reveal remains valid throughout scaling on a negatively positioned monitor");
     }
+    // The card's outside fade stays at its original x as the window unfolds.
+    // Vertical motion and the opposite (desktop seam) edge keep their path.
+    for (const bool right : {false, true}) {
+        auto baseline = reveal;
+        auto preview = fullPreview;
+        if (right) {
+            const auto mirror = [&](hymission::Rect& r) { r.x = 2 * revealOutput.x + revealOutput.width - r.x - r.width; };
+            mirror(baseline.window);
+            mirror(baseline.viewport.box);
+            mirror(baseline.clip);
+            mirror(preview);
+        }
+        auto anchored = baseline;
+        anchored.viewport.fixedOuterEdge = right ? FixedOuterEdge::Right : FixedOuterEdge::Left;
+        anchored.viewport.fixedOuterX = right ? baseline.viewport.box.x + baseline.viewport.box.width : baseline.viewport.box.x;
+        for (int step = 0; step <= 100; ++step) {
+            const double p = step / 100.0;
+            const auto moving = overviewRevealFrame(baseline, preview, revealOutput, p);
+            const auto fixed = overviewRevealFrame(anchored, preview, revealOutput, p);
+            const auto outerX = [right](const hymission::Rect& r) { return right ? r.x + r.width : r.x; };
+            const auto seamX = [right](const hymission::Rect& r) { return right ? r.x : r.x + r.width; };
+            ok &= expect(near(outerX(fixed.viewport.box), anchored.viewport.fixedOuterX) &&
+                near(outerX(fixed.clip), anchored.viewport.fixedOuterX), "outer fade and clip retain card x on both sides");
+            ok &= expect(near(seamX(fixed.viewport.box), seamX(moving.viewport.box)) && near(fixed.clip.y, moving.clip.y) &&
+                near(fixed.clip.height, moving.clip.height), "pinning outer x preserves seam and vertical reveal");
+            const EdgeFrame full{edgeViewport(revealOutput, 0, 0), revealOutput};
+            const auto released = interpolateEdgeFrame(fixed, full, p);
+            const auto reversed = interpolateEdgeFrame(full, fixed, 1 - p);
+            ok &= expect(near(outerX(released.viewport.box), anchored.viewport.fixedOuterX) &&
+                near(outerX(reversed.viewport.box), anchored.viewport.fixedOuterX), "release and reverse retain the fixed outer x");
+        }
+    }
     // Interrupt an opening at 37%, then close to a DIFFERENT workspace card.
     // The first frame must keep the sampled crop, not the new destination crop.
     const auto sampled = overviewRevealFrame(reveal, fullPreview, revealOutput, 0.37);
