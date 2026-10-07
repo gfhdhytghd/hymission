@@ -185,8 +185,13 @@ class OverviewShadowPassElement final : public IPassElement {
             return {};
 
         auto& state = g_pHyprRenderer->m_renderData;
+        const auto savedClip = state.clipBox;
+        Hyprutils::Utils::CScopeGuard restoreClip{[&] { state.clipBox = savedClip; }};
         const auto window = m_cutoutWindow.lock();
         if (window && m_cutoutSource.w > 0 && m_cutoutSource.h > 0 && m_cutoutTarget.w > 0 && m_cutoutTarget.h > 0) {
+            // The body keeps its Stage card crop; its outer shadow needs the
+            // full output or the first expanding frame acquires straight cuts.
+            state.clipBox = CBox{Vector2D{}, state.pMonitor->m_transformedSize};
             const auto savedWindow = state.currentWindow;
             const auto savedModif = state.renderModif;
             Hyprutils::Utils::CScopeGuard restore{[&] { state.currentWindow = savedWindow; state.renderModif = savedModif; }};
@@ -4307,15 +4312,15 @@ void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, co
         0, static_cast<int>(std::lround((static_cast<double>(window->rounding()) * roundingScale * decorationScale + borderSize - correctionOffset) * renderScale)));
     const int renderRange = std::max(1, static_cast<int>(std::lround(shadowRange * renderScale)));
 
-    const float previewAlpha = managedPreviewAlphaFor(window, alpha);
+    const float previewAlpha = managedPreviewAlphaFor(window, alpha) * static_cast<float>(easeInOutCubic(visualProgress()));
     if (immediate)
         g_pHyprOpenGL->renderRoundedShadow(shadowBox, shadowRound, static_cast<float>(roundingPower), renderRange, shadowColor, previewAlpha);
     else {
         PHLWINDOW cutoutWindow;
         CBox cutoutSource, cutoutTarget;
         float cutoutRadius = 0;
-        // Stage wraps these passes in a deferred transparent layer. Preserve
-        // the owner and map native shadow exclusion into that layer's preview.
+        // Preserve the owner and map native shadow exclusion into the preview.
+        // Stage submits this shadow outside its cropped window-content layer.
         // Other overview paths retain their existing rendering.
         if (stageTransitionFrame(window, monitor)) {
             cutoutWindow = window;

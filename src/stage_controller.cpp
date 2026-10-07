@@ -2568,6 +2568,22 @@ void StageController::Impl::captureWindowPasses(Render::IHyprRenderer* renderer,
                 for (auto& pass : passes) pass->discard();
         }, box(clip).translate(-monitor->m_position)));
     };
+    if (overviewClip) {
+        // Overview's outer shadow is a separate decoration, not window content.
+        // Keep native pass order, but do not put it inside the card's hard crop
+        // or edge-gradient framebuffer. Its pass owns its output clipping.
+        StageWindowPassElement::Elements batch;
+        for (auto& element : elements) {
+            if (element->passName() && std::string_view{element->passName()} == "OverviewShadowPassElement") {
+                enqueue(std::move(batch), shadowViewport);
+                batch.clear();
+                renderer->addPassElement(std::move(element));
+            } else
+                batch.push_back(std::move(element));
+        }
+        enqueue(std::move(batch), shadowViewport);
+        return;
+    }
     if (!separateFadeouts) {
         enqueue(std::move(elements), shadowViewport);
         return;
