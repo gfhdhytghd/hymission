@@ -300,6 +300,9 @@ new workspace is selected. On the card's outside edge (left for a left sidebar,
 right for a right sidebar), the fade and clip retain the card edge's x coordinate
 through reveal and reversal; their y coordinates may move. The desktop-facing
 seam retains its existing transition. Fully clipped windows use offscreen endpoints.
+Gesture rollback prepares the original workspace's Stage destination before
+timed closing begins, including the `recommand` return-to-desktop branch.
+Cancelling a close reuses its prepared scene when reopening.
 Interrupted transitions retain the sampled position, clip and gradient before
 heading toward the new endpoint. `hyprctl hymission-overview-state` window diagnostics include
 `stageOpeningReveal`, `stageClosingReveal` and the current Stage transition

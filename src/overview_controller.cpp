@@ -6270,6 +6270,54 @@ void OverviewController::updateTrackpadGesture(const IPointer::SSwipeUpdateEvent
     damageOwnedMonitors();
 }
 
+void OverviewController::settleGestureAnimation(bool opening, double openness) {
+    // Sample before clearing gesture ownership: the phase's stored progress
+    // can differ from the last finger frame, including at zero openness.
+    std::vector<std::pair<PHLWINDOW, stage::OverviewEndpoint>> samples;
+    for (auto& managed : m_state.windows) {
+        const auto mon = managed.targetMonitor;
+        if (!mon)
+            continue;
+        const Rect output{mon->m_position.x, mon->m_position.y, mon->m_size.x, mon->m_size.y};
+        const auto frame = stageTransitionFrame(managed.window, mon).value_or(stage::EdgeFrame{stage::edgeViewport(output, 0, 0), output});
+        samples.emplace_back(managed.window, stage::OverviewEndpoint{currentPreviewRect(managed), frame.viewport, frame.clip});
+        if (opening && !m_gestureSession.opening) {
+            // Cancel a close along its prepared Stage scene, not an older
+            // opening scene from before the user selected another workspace.
+            managed.stageOpeningGlobal = managed.exitGlobal;
+            managed.stageOpeningEndpoint = managed.stageClosingEndpoint;
+        }
+    }
+    m_gestureSession = {};
+    m_deactivatePending = false;
+    if (!opening) {
+        clearPostCloseDispatcher();
+        m_state.pendingExitFocus = m_state.focusBeforeOpen;
+        m_state.closeMode = m_state.focusBeforeOpen ? CloseMode::Normal : CloseMode::Abort;
+        if (m_state.focusBeforeOpen && m_state.focusBeforeOpen->m_isMapped)
+            commitOverviewExitFocus(m_state.focusBeforeOpen);
+        for (auto& managed : m_state.windows)
+            managed.exitGlobal = liveGlobalRectForWindow(managed.window);
+        applyOffscreenExitAnimationEndpoints(m_state, m_state.pendingExitFocus ? m_state.pendingExitFocus->m_workspace : PHLWORKSPACE{});
+    }
+    for (auto& managed : m_state.windows) {
+        for (const auto& [window, sample] : samples) {
+            if (window != managed.window)
+                continue;
+            managed.stageTransitionStart = sample;
+            managed.stageTransitionStartProgress = openness;
+            managed.stageTransitionOpening = opening;
+            break;
+        }
+    }
+    m_state.phase = opening ? Phase::Opening : Phase::Closing;
+    m_state.animationProgress = 0.0;
+    m_state.animationFromVisual = openness;
+    m_state.animationToVisual = opening ? 1.0 : 0.0;
+    m_state.animationStart = {};
+    damageOwnedMonitors();
+}
+
 void OverviewController::endTrackpadGesture(bool cancelled) {
     if (!m_gestureSession.active)
         return;
@@ -6294,18 +6342,7 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
                 return;
             }
 
-            m_gestureSession = {};
-            clearPostCloseDispatcher();
-            m_state.pendingExitFocus = m_state.focusBeforeOpen;
-            m_state.closeMode = m_state.focusBeforeOpen ? CloseMode::Normal : CloseMode::Abort;
-            if (m_state.focusBeforeOpen && m_state.focusBeforeOpen->m_isMapped)
-                commitOverviewExitFocus(m_state.focusBeforeOpen);
-            m_state.phase = Phase::Closing;
-            m_state.animationProgress = 0.0;
-            m_state.animationFromVisual = gesture.openness;
-            m_state.animationToVisual = 0.0;
-            m_state.animationStart = {};
-            damageOwnedMonitors();
+            settleGestureAnimation(false, gesture.openness);
             return;
         }
 
@@ -6315,14 +6352,7 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
             return;
         }
 
-        m_gestureSession = {};
-        m_deactivatePending = false;
-        m_state.phase = Phase::Opening;
-        m_state.animationProgress = 0.0;
-        m_state.animationFromVisual = gesture.openness;
-        m_state.animationToVisual = 1.0;
-        m_state.animationStart = {};
-        damageOwnedMonitors();
+        settleGestureAnimation(true, gesture.openness);
         return;
     }
 
@@ -6341,37 +6371,7 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
         return;
     }
 
-    m_gestureSession = {};
-
-    m_deactivatePending = false;
-    if (gesture.opening) {
-        if (commit) {
-            m_state.phase = Phase::Opening;
-            m_state.animationProgress = 0.0;
-            m_state.animationFromVisual = gesture.openness;
-            m_state.animationToVisual = 1.0;
-            m_state.animationStart = {};
-        } else {
-            clearPostCloseDispatcher();
-            m_state.pendingExitFocus = m_state.focusBeforeOpen;
-            m_state.closeMode = m_state.focusBeforeOpen ? CloseMode::Normal : CloseMode::Abort;
-            if (m_state.focusBeforeOpen && m_state.focusBeforeOpen->m_isMapped)
-                commitOverviewExitFocus(m_state.focusBeforeOpen);
-            m_state.phase = Phase::Closing;
-            m_state.animationProgress = 0.0;
-            m_state.animationFromVisual = gesture.openness;
-            m_state.animationToVisual = 0.0;
-            m_state.animationStart = {};
-        }
-    } else {
-        m_state.phase = Phase::Opening;
-        m_state.animationProgress = 0.0;
-        m_state.animationFromVisual = gesture.openness;
-        m_state.animationToVisual = 1.0;
-        m_state.animationStart = {};
-    }
-
-    damageOwnedMonitors();
+    settleGestureAnimation(!gesture.opening || commit, gesture.openness);
 }
 
 bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction, const IPointer::SSwipeUpdateEvent& event, float deltaScale) {

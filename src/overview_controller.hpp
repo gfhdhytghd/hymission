@@ -674,6 +674,7 @@ class OverviewController {
     void                       applyOffscreenOpenAnimationEndpoints(State& state) const;
     void                       applyOffscreenExitAnimationEndpoints(State& state, const PHLWORKSPACE& activeWorkspaceOverride = {}) const;
     void                       prepareGestureCloseExitGeometry();
+    void                       settleGestureAnimation(bool opening, double openness);
     [[nodiscard]] double       overviewBorderOutsetForWindow(const PHLWINDOW& window) const;
     [[nodiscard]] Rect         overviewBorderOuterRectForWindow(const PHLWINDOW& window, const Rect& contentRect) const;
     [[nodiscard]] Rect         overviewContentRectForBorderOuter(const PHLWINDOW& window, const Rect& outerRect) const;
