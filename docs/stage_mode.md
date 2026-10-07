@@ -71,8 +71,10 @@ effect; a fully visible window keeps its own edge sharp. Opacity rises from zero
 at the clip to full opacity halfway through the band,
 independently of the smooth blur-strength ramp. Compressing this fade instead of
 translating it keeps the clip boundary continuous.
-The revealed background remains unchanged. Floating and
-pinned windows and non-scrolling workspaces retain their existing rendering.
+The revealed background remains unchanged. Unpinned floating windows use the
+same desktop boundary and edge effect in every layout. Pinned floating windows
+render above Stage and retain native pointer input over it, without clipping.
+Special/fullscreen windows and non-scrolling tiled windows retain native policy.
 The bands remain horizontal even for a vertically configured scrolling layout.
 Native desktop clipping uses the output height so shadows may extend above or
 below the work area. Card clips and flight coordinate mapping stay unchanged.

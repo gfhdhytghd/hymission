@@ -79,6 +79,13 @@ int main() {
     ok &= expect(!overviewSidebarSlides(false, OverviewPhase::Active), "forceall never duplicates overview-owned sidebar windows");
     ok &= expect(!overviewSidebarSlides(true, OverviewPhase::Releasing) && !overviewSidebarSlides(true, OverviewPhase::Inactive),
         "sidebar slide yields to the prepared and normal desktop scenes on release");
+    for (const bool scrolling : {false, true}) {
+        ok &= expect(desktopEdgeApplies(false, true, scrolling, false, false), "unpinned floats clip in every layout");
+        ok &= expect(!desktopEdgeApplies(true, true, scrolling, false, false), "pinned floats remain above the strip without clipping");
+        ok &= expect(!desktopEdgeApplies(false, true, scrolling, true, false) && !desktopEdgeApplies(false, true, scrolling, false, true),
+            "special and fullscreen windows retain native policy");
+    }
+    ok &= expect(!desktopEdgeApplies(false, false, false, false, false), "non-scrolling tiled windows retain native rendering");
     // Overview starts with exactly the Stage pixels, including a partially
     // clipped tape window and a card clipped by the scrolling sidebar itself.
     const hymission::Rect revealOutput{-1920, 0, 1920, 1080};

@@ -24,6 +24,10 @@ constexpr bool overviewSidebarSlides(bool onlyActiveWorkspace, OverviewPhase pha
     return onlyActiveWorkspace && phase == OverviewPhase::Active;
 }
 
+constexpr bool desktopEdgeApplies(bool pinned, bool floating, bool scrolling, bool special, bool fullscreen) {
+    return !pinned && !special && !fullscreen && (floating || scrolling);
+}
+
 // All dimensions are logical pixels. Width/height have already had the bar's
 // reserved area removed; desktop gaps belong to the native layout, not here.
 struct Settings {

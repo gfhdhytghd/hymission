@@ -30,6 +30,7 @@
 #include <hyprland/src/desktop/state/Fadeout.hpp>
 #include <hyprland/src/desktop/state/FadingOutState.hpp>
 #include <hyprland/src/desktop/state/ViewHitTester.hpp>
+#include <hyprland/src/desktop/state/ViewState.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
 #include <hyprland/src/protocols/core/Compositor.hpp>
@@ -304,6 +305,7 @@ struct StageController::Impl {
     std::function<std::optional<double>(const PHLMONITOR&)> sidebarProgress;
     std::vector<Screen> overviewExitScreens;
     bool finishingOverview = false;
+    bool stagePassQueued = false;
     std::vector<Screen> screens;
     std::vector<PHLWINDOWREF> livePreviewWindows;
     std::optional<Swipe> swipe;
@@ -580,6 +582,11 @@ struct StageController::Impl {
                 (self->dragHover && self->dragHover->window == window)))
             return;
         const auto original = reinterpret_cast<RenderWindowFn>(self->renderWindowHook->m_original);
+        // Native pinned floats are collected last. Put Stage immediately
+        // before their first pass (including shadows/popups), never redraw them.
+        if (window && window->m_pinned && window->m_isFloating && !standalone && !ignorePosition &&
+            !self->rendering && !self->capturingWindowPasses && !renderer->m_bRenderingSnapshot)
+            self->renderStage(RENDER_POST_WINDOWS);
         if (overviewRendering && !standalone && !self->rendering && !self->capturingWindowPasses && !renderer->m_bRenderingSnapshot && self->overviewFrame) {
             if (const auto frame = self->overviewFrame(window, monitor)) {
                 self->captureWindowPasses(renderer, monitor, frame->viewport, [&] {
@@ -590,8 +597,9 @@ struct StageController::Impl {
         }
         if (!standalone && !ignorePosition && !self->rendering && !self->capturingWindowPasses && !renderer->m_bRenderingSnapshot &&
             self->enabled && !self->blocked() && screen && screen->geometry.enabled() && !screen->covered && !screen->suspended &&
-            !monitor->m_activeSpecialWorkspace && scrollingTiled(window)) {
-            const CBox bounds{window->positionAnimation()->value() + window->m_workspace->m_renderOffset->value(), window->sizeAnimation()->value()};
+            !monitor->m_activeSpecialWorkspace && window && stage::desktopEdgeApplies(window->m_pinned, window->m_isFloating,
+                scrollingWorkspace(window->m_workspace), window->onSpecialWorkspace(), Fullscreen::controller()->isFullscreen(window))) {
+            const CBox bounds{window->positionAnimation()->value() + window->m_workspace->m_renderOffset->value() + window->m_floatingOffset, window->sizeAnimation()->value()};
             const auto viewport = stage::edgeViewportForWindow(self->desktopViewport(*screen), rect(bounds));
             self->captureWindowPasses(renderer, monitor, viewport, [&] {
                 original(renderer, window, monitor, time, decorate, mode, ignorePosition, standalone);
@@ -631,11 +639,12 @@ struct StageController::Impl {
     }
     static PHLWINDOW windowAtThunk(const Desktop::CViewHitTester* tester, const Vector2D& position, uint16_t properties, PHLWINDOW ignore) {
         auto* self = instance;
-        // The sidebar is above windows, including floats partially under it.
-        // This also prevents native dragEnd from grouping into a hidden deco.
+        const auto candidate = reinterpret_cast<WindowAtFn>(self->hitHook->m_original)(tester, position, properties, ignore);
+        if (candidate && candidate->m_pinned && candidate->m_isFloating)
+            return candidate;
         if (self->hit(position).first)
             return nullptr;
-        return reinterpret_cast<WindowAtFn>(self->hitHook->m_original)(tester, position, properties, ignore);
+        return candidate;
     }
 };
 
@@ -1576,6 +1585,15 @@ void StageController::Impl::motion() {
 }
 
 std::pair<StageController::Impl::Screen*, std::optional<std::size_t>> StageController::Impl::hit(const Vector2D& point) {
+    // Use native input regions/stacking, including transparent input holes.
+    // Call the original directly to avoid re-entering our windowAt hook.
+    if (hitHook) {
+        const auto tester = Desktop::viewState()->hitTest();
+        const auto top = reinterpret_cast<WindowAtFn>(hitHook->m_original)(&tester, point,
+            Desktop::View::ALLOW_FLOATING | Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS, nullptr);
+        if (top && top->m_pinned && top->m_isFloating)
+            return {nullptr, std::nullopt};
+    }
     for (auto& screen : screens) {
         if (!interactive(screen))
             continue;
@@ -2102,7 +2120,9 @@ void StageController::Impl::correctFloating(const PHLMONITOR& monitor, const CBo
 }
 
 void StageController::Impl::renderStage(eRenderStage stage) {
-    if (!enabled || rendering)
+    if (stage == RENDER_PRE && !rendering && !g_pHyprRenderer->m_bRenderingSnapshot)
+        stagePassQueued = false;
+    if (!enabled || rendering || stagePassQueued)
         return;
     const auto monitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
     if (renderBlocked(monitor))
@@ -2114,6 +2134,7 @@ void StageController::Impl::renderStage(eRenderStage stage) {
     if (!screen || !screen->geometry.enabled() || monitor->m_activeSpecialWorkspace || screen->shown <= 0)
         return;
     if (stage == (progress ? RENDER_PRE_WINDOWS : RENDER_POST_WINDOWS)) {
+        stagePassQueued = true;
         const PHLMONITORREF ref = monitor;
         g_pHyprRenderer->m_renderPass.add(makeUnique<StagePassElement>([this, ref] {
             if (const auto mon = ref.lock())
