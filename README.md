@@ -2,6 +2,8 @@
 
 `hymission` is a Hyprland plugin that provides a Mission Control-style overview with live compositor-side previews, scope-aware collection, trackpad gestures, and a workspace strip for active-workspace overview mode.
 
+See the [changelog](https://gfhdhytghd.github.io/hymission/) for release history and unreleased changes.
+
 > [!IMPORTANT]
 > This README focuses on installation, public usage, and user-facing configuration. The behavioral contract lives in [`docs/spec.md`](docs/spec.md).
 

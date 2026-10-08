@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Changelog · hymission</title>
+<meta name="description" content="Release history for hymission, a Mission Control-style overview and Stage workspace sidebar for Hyprland.">
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://gfhdhytghd.github.io/hymission/">
+<meta property="og:title" content="hymission changelog">
+<meta property="og:description" content="Release history for hymission, a Mission Control-style overview and Stage workspace sidebar for Hyprland.">
+<meta property="og:url" content="https://gfhdhytghd.github.io/hymission/">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2358a6ff'/%3E%3Cpath d='M9 12V9h3M20 9h3v3M23 20v3h-3M12 23H9v-3' fill='none' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --text: #1b1f24;
+    --muted: #57606a;
+    --border: #d8dee4;
+    --accent: #0a5fd1;
+    --accent-soft: #e4efff;
+    --pending: #8a5a00;
+    --pending-soft: #fff4d6;
+    --code-bg: #eef1f4;
+    --shadow: 0 1px 2px rgb(27 31 36 / 6%), 0 4px 16px rgb(27 31 36 / 5%);
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --surface: #151b23;
+      --text: #e6edf3;
+      --muted: #9da7b3;
+      --border: #2d3540;
+      --accent: #6cb6ff;
+      --accent-soft: #15273d;
+      --pending: #e3b341;
+      --pending-soft: #2c230f;
+      --code-bg: #212a35;
+      --shadow: 0 1px 2px rgb(0 0 0 / 30%);
+    }
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 1.5rem; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Ubuntu, Cantarell, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  a { color: var(--accent); text-underline-offset: 0.15em; }
+  a:hover { text-decoration-thickness: 2px; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  code {
+    font: 0.88em/1.4 ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 5px;
+    overflow-wrap: anywhere;
+  }
+  .skip {
+    position: absolute; left: 1rem; top: -4rem;
+    background: var(--surface); padding: 0.5rem 1rem; border-radius: 8px; z-index: 10;
+  }
+  .skip:focus { top: 1rem; }
+
+  header.site {
+    border-bottom: 1px solid var(--border);
+    background:
+      radial-gradient(60rem 20rem at 10% -40%, var(--accent-soft), transparent 70%),
+      var(--surface);
+  }
+  .wrap { max-width: 72rem; margin: 0 auto; padding: 0 1.25rem; }
+  .hero { padding-top: 3rem; padding-bottom: 2.25rem; }
+  .eyebrow {
+    margin: 0 0 0.5rem; color: var(--accent); font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.8rem;
+  }
+  .hero h1 { margin: 0; font-size: clamp(2rem, 5vw, 2.9rem); line-height: 1.1; letter-spacing: -0.02em; }
+  .hero p.lede { margin: 0.9rem 0 1.4rem; color: var(--muted); max-width: 42rem; font-size: 1.08rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 0; padding: 0; list-style: none; }
+  .button {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0.5rem 0.95rem; border-radius: 999px; font-weight: 600; font-size: 0.95rem;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text); text-decoration: none;
+  }
+  .button:hover { border-color: var(--accent); }
+  .button.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+
+  .layout {
+    display: grid; gap: 2.5rem; padding-top: 2.25rem; padding-bottom: 4rem;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  @media (min-width: 62rem) {
+    .layout { grid-template-columns: 13rem minmax(0, 1fr); }
+    nav.toc { position: sticky; top: 1.5rem; align-self: start; max-height: calc(100vh - 3rem); overflow: auto; }
+  }
+  nav.toc h2 {
+    font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--muted); margin: 0 0 0.6rem;
+  }
+  nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.15rem; }
+  nav.toc a {
+    display: flex; justify-content: space-between; gap: 0.75rem;
+    padding: 0.3rem 0.6rem; border-radius: 8px; text-decoration: none; color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  nav.toc a:hover { background: var(--accent-soft); }
+  nav.toc a span { color: var(--muted); font-size: 0.85rem; }
+  @media (max-width: 61.99rem) {
+    nav.toc ol { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    nav.toc a { border: 1px solid var(--border); background: var(--surface); padding: 0.25rem 0.7rem; }
+    nav.toc a span { display: none; }
+  }
+
+  .timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.25rem; }
+  article.entry {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 1.4rem 1.5rem 1.2rem;
+  }
+  article.entry.unreleased { border-style: dashed; border-color: var(--pending); background: linear-gradient(var(--pending-soft), var(--surface) 9rem); }
+  article.entry:target { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .entry-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem 0.9rem; }
+  .entry-head h2 { margin: 0; font-size: 1.5rem; letter-spacing: -0.01em; }
+  .entry-head h2 a { color: inherit; text-decoration: none; }
+  .entry-head h2 a:hover { text-decoration: underline; }
+  .meta { display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center; color: var(--muted); font-size: 0.92rem; }
+  .badge {
+    display: inline-block; padding: 0.05rem 0.6rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600;
+    background: var(--accent-soft); color: var(--accent); white-space: nowrap;
+  }
+  .badge.latest { background: var(--accent); color: var(--surface); }
+  .badge.pending { background: var(--pending-soft); color: var(--pending); border: 1px solid var(--pending); }
+  .headline { margin: 0.45rem 0 0; font-size: 1.08rem; font-weight: 600; }
+  .summary { margin: 0.45rem 0 0; color: var(--muted); }
+  .entry h3 {
+    margin: 1.15rem 0 0.35rem; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+  }
+  .entry ul { margin: 0; padding-left: 1.2rem; }
+  .entry li { margin: 0.25rem 0; }
+  .entry li::marker { color: var(--accent); }
+  .entry-foot {
+    margin-top: 1.1rem; padding-top: 0.8rem; border-top: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; font-size: 0.92rem;
+  }
+  footer.site { border-top: 1px solid var(--border); color: var(--muted); font-size: 0.9rem; padding: 1.5rem 0 2.5rem; }
+  footer.site p { margin: 0.3rem 0; }
+  @media (max-width: 30rem) {
+    .hero { padding-top: 2.25rem; padding-bottom: 1.75rem; }
+    article.entry { padding: 1.1rem 1.05rem 1rem; }
+  }
+  @media print {
+    nav.toc, .actions, .skip { display: none; }
+    article.entry { box-shadow: none; break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#changelog">Skip to changelog</a>
+<header class="site">
+  <div class="wrap hero">
+    <p class="eyebrow">Changelog</p>
+    <h1>hymission</h1>
+    <p class="lede">Release history of the hymission overview and Stage workspace sidebar plugin for Hyprland. Each version tag names the plugin version followed by the Hyprland release it was built for.</p>
+    <ul class="actions">
+      <li><a class="button primary" href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.8.0-v0.56.2">Latest: v0.8.0-v0.56.2</a></li>
+      <li><a class="button" href="https://github.com/gfhdhytghd/hymission#installation">Installation</a></li>
+      <li><a class="button" href="https://github.com/gfhdhytghd/hymission/releases">All GitHub releases</a></li>
+      <li><a class="button" href="https://github.com/gfhdhytghd/hymission">Source code</a></li>
+    </ul>
+  </div>
+</header>
+<div class="wrap layout">
+  <nav class="toc" aria-labelledby="toc-title">
+    <h2 id="toc-title">Versions</h2>
+    <ol>
+      <li><a href="#unreleased">Unreleased <span>next</span></a></li>
+      <li><a href="#v0-8-0-v0-56-2">0.8.0 <span>2026-09-12</span></a></li>
+      <li><a href="#v0-7-1-v0-56-2">0.7.1 <span>2026-09-06</span></a></li>
+      <li><a href="#v0-7-0-v0-56-2">0.7.0 <span>2026-09-04</span></a></li>
+      <li><a href="#v0-6-0-v0-56-2">0.6.0 <span>2026-08-11</span></a></li>
+      <li><a href="#v0-5-0-v0-56-0">0.5.0 <span>2026-07-27</span></a></li>
+      <li><a href="#v0-4-3-v0-56-0">0.4.3 <span>2026-07-20</span></a></li>
+      <li><a href="#v0-4-2-v0-55-4">0.4.2 <span>2026-06-20</span></a></li>
+      <li><a href="#v0-4-1-v0-55-4">0.4.1 <span>2026-06-19</span></a></li>
+      <li><a href="#v0-4-0-v0-55-2">0.4.0 <span>2026-06-07</span></a></li>
+      <li><a href="#v0-3-3-0-55-0">0.3.3 <span>2026-05-16</span></a></li>
+      <li><a href="#v0-3-0-0-54-3">0.3.0 <span>2026-04-27</span></a></li>
+      <li><a href="#v0-2-1-0-54-3">0.2.1 <span>2026-04-26</span></a></li>
+      <li><a href="#v0-2-0-0-54-1">0.2.0 <span>2026-03-09</span></a></li>
+      <li><a href="#v0-1-2-v0-54-1">0.1.2 <span>2026-03-09</span></a></li>
+      <li><a href="#v0-1-1-v0-54-1">0.1.1 <span>2026-03-08</span></a></li>
+      <li><a href="#v0-1-0-v0-54">0.1.0 <span>2026-03-07</span></a></li>
+      <li><a href="#v0-0-1">0.0.1 <span>2026-03-07</span></a></li>
+    </ol>
+  </nav>
+  <main id="changelog" tabindex="-1">
+    <ol class="timeline" aria-label="Releases, newest first">
+      <li>
+        <article class="entry unreleased" id="unreleased" aria-labelledby="unreleased-title">
+          <div class="entry-head">
+            <h2 id="unreleased-title"><a href="#unreleased">Unreleased</a></h2>
+            <div class="meta"><span class="badge pending">Not yet released</span><span>Since v0.8.0-v0.56.2</span></div>
+          </div>
+          <p class="summary">Stage rendering, gestures, window interaction, and capture integration since 0.8.0. These changes are not part of a published release.</p>
+          <h3>Stage sidebar</h3>
+          <ul>
+            <li>Optionally keep the active workspace visible, reserve empty workspace slots, show card backdrops, and distribute cards evenly (<a href="https://github.com/gfhdhytghd/hymission/issues/45">#45</a>). Active-card glow is opt-in and disabled by default.</li>
+            <li>Click a window preview to activate its workspace and focus that window. Floating windows dragged within their own Stage card now retain the dropped position.</li>
+          </ul>
+          <h3>Rendering</h3>
+          <ul>
+            <li>Clip scrolling windows and unpinned floating windows at Stage boundaries with progressive blur and fading. Configure desktop and preview bands independently with <code>stage_scrolling_desktop_edge_width</code> and <code>stage_scrolling_preview_edge_width</code>.</li>
+            <li>Keep pinned floating windows above Stage with native pointer input, and respect window stacking and fullscreen occlusion in previews.</li>
+            <li>Preserve live backdrop blur, shadow cutouts, rounded corners, and edge gradients through overview transitions. Correct clipping of closing windows and shadow rendering beyond Stage content.</li>
+          </ul>
+          <h3>Gestures and overview</h3>
+          <ul>
+            <li>Synchronize sidebar movement and returning cards with workspace swipe progress, including fullscreen transitions, pauses, reversal, and cancellation.</li>
+            <li>Return overview windows directly to their Stage cards and retain the intended workspace across compact gesture handoffs. Preserve geometry and clipping when releasing or interrupting a gesture.</li>
+            <li>Fix duplicate sidebar movement and workspace-strip wallpaper rendering. Ignore empty overview opens, limit workspace creation during a single swipe, and correct hover-only preview expansion.</li>
+          </ul>
+          <h3>Capture integration</h3>
+          <ul>
+            <li>Expose rendered Stage window geometry, clipping, stacking, and rounded corners to HyprCapture. Separate screenshot input suppression from rendering so selection does not also activate a workspace.</li>
+            <li>Avoid render-hook conflicts with Viewflow and transform its shadows with overview previews.</li>
+          </ul>
+          <h3>Validation</h3>
+          <ul>
+            <li>Add an offscreen Stage edge-rendering regression test and extend Stage and overview logic coverage. The current CMake build and all five tests pass; updated compositor-session behavior still requires live verification.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/compare/v0.8.0-v0.56.2...master">Compare v0.8.0-v0.56.2…master</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-8-0-v0-56-2" aria-labelledby="v0-8-0-v0-56-2-title">
+          <div class="entry-head">
+            <h2 id="v0-8-0-v0-56-2-title"><a href="#v0-8-0-v0-56-2">0.8.0</a></h2>
+            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-09-12T18:12:39Z">Sep 12, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.8.0-v0.56.2</code></div>
+          </div>
+          <p class="headline">Stage workspace sidebar and overview navigation</p>
+          <h3>Stage workspace sidebar</h3>
+          <ul>
+            <li>Add an optional persistent workspace sidebar with live window previews, native gap integration, background blur, and animated workspace transitions. Stage mode is disabled by default.</li>
+            <li>Add Smartisan mode, alternating the sidebar side on workspace switches.</li>
+            <li>Support trackpad workspace transitions and dragging windows between sidebar previews, desktops, and workspace cards, with animated drop feedback.</li>
+            <li>Open overview from sidebar preview positions and preserve floating-window placement during drops.</li>
+          </ul>
+          <h3>Overview and navigation</h3>
+          <ul>
+            <li>Add optional Vim navigation with h/j/k/l and forward/backward selection cycling with Tab/Shift+Tab.</li>
+            <li>Add workspace_strip_force_show and configurable workspace-strip refresh intervals.</li>
+            <li>Restore the pre-overview window on gesture close by default; set gesture_close_restores_focus = 0 for the previous hover-target behavior. Click and Return activate the selected window.</li>
+            <li>Fix cross-workspace gesture exit geometry, confirmed selection focus, and scrolling position after overview teardown.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.8.0-v0.56.2">Release notes for v0.8.0-v0.56.2 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.7.1-v0.56.2...v0.8.0-v0.56.2">Compare with v0.7.1-v0.56.2</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-7-1-v0-56-2" aria-labelledby="v0-7-1-v0-56-2-title">
+          <div class="entry-head">
+            <h2 id="v0-7-1-v0-56-2-title"><a href="#v0-7-1-v0-56-2">0.7.1</a></h2>
+            <div class="meta"><time datetime="2026-09-06T03:35:35Z">Sep 6, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.7.1-v0.56.2</code></div>
+          </div>
+          <p class="headline">Reliable search startup, shutdown, and system appearance</p>
+          <h3>Search fixes</h3>
+          <ul>
+            <li>Install <code>hymission-search-input</code> into <code>~/.local/bin</code> during hyprpm builds and locate it directly at runtime. Fixes <a href="https://github.com/gfhdhytghd/hymission/issues/38">#38</a>.</li>
+            <li>Show the search bar immediately when search starts, avoiding an unmapped transparent GTK window that cannot receive its first key.</li>
+            <li>Keep keyboard focus on the search helper and buffer keys while its surface is becoming ready.</li>
+            <li>Prevent desktop freezes when closing search: reset inherited signal state, retire helper processes asynchronously, and force termination after a 250 ms grace period.</li>
+          </ul>
+          <h3>Appearance</h3>
+          <ul>
+            <li>Follow the system light/dark preference using libadwaita.</li>
+            <li>Render transparent rounded corners without the rectangular window background, with space for the shadow.</li>
+            <li>Correct the plugin-reported version to 0.7.1.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.7.1-v0.56.2">Release notes for v0.7.1-v0.56.2 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.7.0-v0.56.2...v0.7.1-v0.56.2">Compare with v0.7.0-v0.56.2</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-7-0-v0-56-2" aria-labelledby="v0-7-0-v0-56-2-title">
+          <div class="entry-head">
+            <h2 id="v0-7-0-v0-56-2-title"><a href="#v0-7-0-v0-56-2">0.7.0</a></h2>
+            <div class="meta"><time datetime="2026-09-04T02:34:55Z">Sep 4, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.7.0-v0.56.2</code></div>
+          </div>
+          <p class="headline">Window search, wheel navigation, and rotated-monitor rendering</p>
+          <h3>Window navigation</h3>
+          <ul>
+            <li>Add overview window-title search.</li>
+            <li>Add mouse-wheel selection cycling.</li>
+          </ul>
+          <h3>Rendering fixes</h3>
+          <ul>
+            <li>Fix onlycurrentworkspace previews and workspace-strip thumbnails on rotated and vertical monitors.</li>
+            <li>Fix hidden bar snapshot orientation, aspect ratio, and animation position on rotated outputs.</li>
+            <li>Keep arbitrary-size offscreen rendering in framebuffer-local export coordinates and avoid monitor-sized blur framebuffer interference.</li>
+            <li>Suppress conflicting Hyprglass window glass while overview is active.</li>
+          </ul>
+          <h3>Documentation</h3>
+          <ul>
+            <li>Fix the duplicated hypr path in the Lua configuration guide.</li>
+            <li>Add Lua configuration mode, Omarchy 4, and troubleshooting documentation.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.7.0-v0.56.2">Release notes for v0.7.0-v0.56.2 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.6.0-v0.56.2...v0.7.0-v0.56.2">Compare with v0.6.0-v0.56.2</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-6-0-v0-56-2" aria-labelledby="v0-6-0-v0-56-2-title">
+          <div class="entry-head">
+            <h2 id="v0-6-0-v0-56-2-title"><a href="#v0-6-0-v0-56-2">0.6.0</a></h2>
+            <div class="meta"><time datetime="2026-08-11T07:48:00Z">Aug 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.6.0-v0.56.2</code></div>
+          </div>
+          <p class="headline">Grouped windows and keyboard picking improvements</p>
+          <h3>Grouped windows</h3>
+          <ul>
+            <li>Add <code>grouped_windows_policy</code> with expanded and collapsed overview modes.</li>
+            <li>Support collapsed group tabs, member switching, selection persistence, and whole-group dragging.</li>
+            <li>Render inactive group members correctly in expanded overviews and suppress conflicting groupbar behavior while overview is active.</li>
+          </ul>
+          <h3>Keyboard picking and overview polish</h3>
+          <ul>
+            <li>Extend spatial keyboard picking across the ANSI punctuation area and allow labels to be hidden while picking remains active.</li>
+            <li>Separate hover expansion from selection and remove collapsed-tab switching flicker.</li>
+            <li>Keep multi-surface drag previews rigid and latch preview geometry per frame.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.6.0-v0.56.2">Release notes for v0.6.0-v0.56.2 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.5.0-v0.56.0...v0.6.0-v0.56.2">Compare with v0.5.0-v0.56.0</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-5-0-v0-56-0" aria-labelledby="v0-5-0-v0-56-0-title">
+          <div class="entry-head">
+            <h2 id="v0-5-0-v0-56-0-title"><a href="#v0-5-0-v0-56-0">0.5.0</a></h2>
+            <div class="meta"><time datetime="2026-07-27T07:55:24Z">Jul 27, 2026</time><span class="badge">Hyprland 0.56.0</span><code>v0.5.0-v0.56.0</code></div>
+          </div>
+          <p class="headline">Direct and spatial keyboard window picking</p>
+          <h3>Keyboard window picking</h3>
+          <ul>
+            <li>Added sequential keyboard pick labels with configurable direct activation.</li>
+            <li>Added spatial mode that maps the physical ANSI alphanumeric grid to window positions across participating monitors.</li>
+            <li>Spatial badges automatically follow the active XKB keyboard layout while activation remains tied to stable physical keycodes.</li>
+            <li>Dense overviews support deterministic two-key routes such as FF and FR.</li>
+          </ul>
+          <h3>Overview polish and fixes</h3>
+          <ul>
+            <li>Improved workspace-strip window drag and drop transitions.</li>
+            <li>Added reverse toggle-switch cycling and Lua configuration integration.</li>
+            <li>Fixed fullscreen overview behavior and isolated closing windows from overview transforms.</li>
+            <li>Vendored the JSON dependency for reliable clean builds.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.5.0-v0.56.0">Release notes for v0.5.0-v0.56.0 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.4.3-v0.56.0...v0.5.0-v0.56.0">Compare with v0.4.3-v0.56.0</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-4-3-v0-56-0" aria-labelledby="v0-4-3-v0-56-0-title">
+          <div class="entry-head">
+            <h2 id="v0-4-3-v0-56-0-title"><a href="#v0-4-3-v0-56-0">0.4.3</a></h2>
+            <div class="meta"><time datetime="2026-07-20T16:11:22Z">Jul 20, 2026</time><span class="badge">Hyprland 0.56.0</span><code>v0.4.3-v0.56.0</code></div>
+          </div>
+          <p class="headline">Hyprland 0.56.0 compatibility</p>
+          <h3>Hyprland v0.56.0 compatibility</h3>
+          <ul>
+            <li>Adapted Hymission to Hyprland v0.56.0 state, fullscreen, animation, pointer, workspace, and rendering APIs.</li>
+            <li>Fixed the v0.56 shouldRenderWindow hook lookup so the overview controller initializes correctly.</li>
+            <li>hyprpm builds now clear stale CMake cache entries before detecting headers.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.4.3-v0.56.0">Release notes for v0.4.3-v0.56.0 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.4.2-v0.55.4...v0.4.3-v0.56.0">Compare with v0.4.2-v0.55.4</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-4-2-v0-55-4" aria-labelledby="v0-4-2-v0-55-4-title">
+          <div class="entry-head">
+            <h2 id="v0-4-2-v0-55-4-title"><a href="#v0-4-2-v0-55-4">0.4.2</a></h2>
+            <div class="meta"><time datetime="2026-06-20T07:21:44Z">Jun 20, 2026</time><span class="badge">Hyprland 0.55.4</span><code>v0.4.2-v0.55.4</code></div>
+          </div>
+          <p class="headline">Thumbnail layouts, workspace drag and drop, and capture hooks</p>
+          <h3>Changes</h3>
+          <ul>
+            <li>Add thumbnail layout and scoped layout engine overrides.</li>
+            <li>Support thumbnail workspace drag/drop and relayout refreshes.</li>
+            <li>Improve thumbnail hover, new-window placement, and workspace movement behavior.</li>
+            <li>Add overview capture hooks and capture command argument handling.</li>
+            <li>Update README load instructions.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.4.2-v0.55.4">Release notes for v0.4.2-v0.55.4 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.4.1-v0.55.4...v0.4.2-v0.55.4">Compare with v0.4.1-v0.55.4</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-4-1-v0-55-4" aria-labelledby="v0-4-1-v0-55-4-title">
+          <div class="entry-head">
+            <h2 id="v0-4-1-v0-55-4-title"><a href="#v0-4-1-v0-55-4">0.4.1</a></h2>
+            <div class="meta"><time datetime="2026-06-19T20:31:49Z">Jun 19, 2026</time><span class="badge">Hyprland 0.55.4</span><code>v0.4.1-v0.55.4</code></div>
+          </div>
+          <p class="headline">Configurable scrolling preview gaps and window decorations</p>
+          <h3>Changes</h3>
+          <ul>
+            <li>Add configurable <code>niri_scrolling_preview_gap</code> for niri direct scrolling-layout overview previews.</li>
+            <li>Add overview window border rendering and decoration controls.</li>
+            <li>Enforce configured overview gaps while preserving niri overview layout behavior.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.4.1-v0.55.4">Release notes for v0.4.1-v0.55.4 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.4.0-v0.55.2...v0.4.1-v0.55.4">Compare with v0.4.0-v0.55.2</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-4-0-v0-55-2" aria-labelledby="v0-4-0-v0-55-2-title">
+          <div class="entry-head">
+            <h2 id="v0-4-0-v0-55-2-title"><a href="#v0-4-0-v0-55-2">0.4.0</a></h2>
+            <div class="meta"><time datetime="2026-06-07T11:51:19Z">Jun 7, 2026</time><span class="badge">Hyprland 0.55.2</span><code>v0.4.0-v0.55.2</code></div>
+          </div>
+          <p class="headline">Cross-workspace animations and gesture focus handoff</p>
+          <h3>Changes</h3>
+          <ul>
+            <li>Fix multi-workspace overview open and close animations so non-current workspace windows enter and leave from off-screen instead of flashing on the active workspace.</li>
+            <li>Preserve the selected/focused window when crossing from global overview through the recommand gesture into workspace overview.</li>
+            <li>Synchronize the real active workspace during recommand retargeting so the underlying scene matches the workspace overview.</li>
+            <li>Notify workspace bars after exiting global overview to a window on another workspace so the active workspace number updates correctly.</li>
+            <li>Improve overview ergonomics around hover retargeting, close buttons, reserved layer areas, floating window activation, and damage tracking.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.4.0-v0.55.2">Release notes for v0.4.0-v0.55.2 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.3.3-0.55.0...v0.4.0-v0.55.2">Compare with v0.3.3-0.55.0</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-3-3-0-55-0" aria-labelledby="v0-3-3-0-55-0-title">
+          <div class="entry-head">
+            <h2 id="v0-3-3-0-55-0-title"><a href="#v0-3-3-0-55-0">0.3.3</a></h2>
+            <div class="meta"><time datetime="2026-05-16T14:27:58Z">May 16, 2026</time><span class="badge">Hyprland 0.55.0</span><code>v0.3.3-0.55.0</code></div>
+          </div>
+          <p class="headline">Reliable all-workspace rendering and exit focus</p>
+          <h3>Changes</h3>
+          <ul>
+            <li>Fix all-workspace overview rendering after workspace switches by keeping managed workspaces renderable during overview.</li>
+            <li>Make overview exit focus the hovered, Tab-selected, or clicked window, including cross-workspace targets.</li>
+            <li>Avoid native workspace animation and offscreen opening frames that could cause full-screen black flashes in overview.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.3.3-0.55.0">Release notes for v0.3.3-0.55.0 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.3.0-0.54.3...v0.3.3-0.55.0">Compare with v0.3.0-0.54.3</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-3-0-0-54-3" aria-labelledby="v0-3-0-0-54-3-title">
+          <div class="entry-head">
+            <h2 id="v0-3-0-0-54-3-title"><a href="#v0-3-0-0-54-3">0.3.0</a></h2>
+            <div class="meta"><time datetime="2026-04-27T00:52:27Z">Apr 27, 2026</time><span class="badge">Hyprland 0.54.3</span><code>v0.3.0-0.54.3</code></div>
+          </div>
+          <p class="headline">Optional niri mode and improved overview layouts</p>
+          <h3>Changes</h3>
+          <ul>
+            <li>Add opt-in niri scroll mode and niri-style workspace strip behavior.</li>
+            <li>Improve niri overview geometry for scrolling-layout and floating previews.</li>
+            <li>Refine natural layout packing, scaling, edge fill, and multi-workspace overview behavior.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.3.0-0.54.3">Release notes for v0.3.0-0.54.3 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.2.1-0.54.3...v0.3.0-0.54.3">Compare with v0.2.1-0.54.3</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-2-1-0-54-3" aria-labelledby="v0-2-1-0-54-3-title">
+          <div class="entry-head">
+            <h2 id="v0-2-1-0-54-3-title"><a href="#v0-2-1-0-54-3">0.2.1</a></h2>
+            <div class="meta"><time datetime="2026-04-26T19:26:41Z">Apr 26, 2026</time><span class="badge">Hyprland 0.54.3</span><code>v0.2.1-0.54.3</code></div>
+          </div>
+          <p class="headline">Hyprland 0.54.3 release</p>
+          <h3>Release notes</h3>
+          <ul>
+            <li>The original release provides a source comparison without a written feature summary. Use the comparison below to inspect the changes.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.2.1-0.54.3">Release notes for v0.2.1-0.54.3 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.2.0-0.54.1...v0.2.1-0.54.3">Compare with v0.2.0-0.54.1</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-2-0-0-54-1" aria-labelledby="v0-2-0-0-54-1-title">
+          <div class="entry-head">
+            <h2 id="v0-2-0-0-54-1-title"><a href="#v0-2-0-0-54-1">0.2.0</a></h2>
+            <div class="meta"><time datetime="2026-03-09T07:31:33Z">Mar 9, 2026</time><span class="badge">Hyprland 0.54.1</span><code>v0.2.0-0.54.1</code></div>
+          </div>
+          <p class="headline">Toggle switch sessions with reliable modifier release</p>
+          <h3>Window switching</h3>
+          <ul>
+            <li>Add optional toggle switch sessions: repeated <code>hymission:toggle</code> calls cycle through windows; releasing the configured modifier activates the selection.</li>
+            <li>Preserve overview ordering and track modifier release across multiple keyboards, focus changes, and missed key events.</li>
+            <li>Configure with <code>toggle_switch_mode</code>, <code>switch_toggle_auto_next</code>, and <code>switch_release_key</code>; open, close, and gesture behavior remain separate.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.2.0-0.54.1">Release notes for v0.2.0-0.54.1 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.1.2-v0.54.1...v0.2.0-0.54.1">Compare with v0.1.2-v0.54.1</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-1-2-v0-54-1" aria-labelledby="v0-1-2-v0-54-1-title">
+          <div class="entry-head">
+            <h2 id="v0-1-2-v0-54-1-title"><a href="#v0-1-2-v0-54-1">0.1.2</a></h2>
+            <div class="meta"><time datetime="2026-03-09T00:22:31Z">Mar 9, 2026</time><span class="badge">Hyprland 0.54.1</span><code>v0.1.2-v0.54.1</code></div>
+          </div>
+          <p class="headline">Animated workspace bar handoff</p>
+          <h3>Changes</h3>
+          <ul>
+            <li>add animated workspace-strip bar handoff proxies for exclusive bars</li>
+            <li>fix right-edge cropping for monitor-sized bar snapshots</li>
+            <li>align default config values with the current live setup</li>
+            <li>bump the plugin/build version to 0.1.2</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.1.2-v0.54.1">Release notes for v0.1.2-v0.54.1 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.1.1-v0.54.1...v0.1.2-v0.54.1">Compare with v0.1.1-v0.54.1</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-1-1-v0-54-1" aria-labelledby="v0-1-1-v0-54-1-title">
+          <div class="entry-head">
+            <h2 id="v0-1-1-v0-54-1-title"><a href="#v0-1-1-v0-54-1">0.1.1</a></h2>
+            <div class="meta"><time datetime="2026-03-08T08:09:49Z">Mar 8, 2026</time><span class="badge">Hyprland 0.54.1</span><code>v0.1.1-v0.54.1</code></div>
+          </div>
+          <p class="headline">Gesture handling and configurable empty workspace slots</p>
+          <h3>Highlights</h3>
+          <ul>
+            <li>Visible <code>hymission:toggle,*</code> overview can now exit in either swipe direction.</li>
+            <li><code>recommand</code> only keeps its continuous two-stage transfer in the side-changing direction; the other direction now just exits back to hidden.</li>
+            <li>Hidden-start gestures stay locked to a single opening/cancel session until finger lift, so one touch sequence no longer chains into a fresh visible-start return or cross-side handoff.</li>
+            <li>Added <code>workspace_strip_empty_mode</code> with <code>existing</code> as the default and optional <code>continuous</code> synthetic gap slots.</li>
+            <li>Synthetic empty strip slots now prefer monitor background / wallpaper layers, while the trailing new-workspace slot keeps its dedicated <code>+</code> card styling.</li>
+            <li>Overview rebuilds now retry briefly when a newly relevant window has not reached usable geometry yet.</li>
+            <li>Added a standalone mission layout regression test binary and fixed row-height contamination, candidate-search early exits, negative scale clamps, and aspect-ratio preservation regressions.</li>
+            <li>Synced README, spec, workspace-strip plan notes, and a new dev log for this release.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.1.1-v0.54.1">Release notes for v0.1.1-v0.54.1 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.1.0-v0.54...v0.1.1-v0.54.1">Compare with v0.1.0-v0.54</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-1-0-v0-54" aria-labelledby="v0-1-0-v0-54-title">
+          <div class="entry-head">
+            <h2 id="v0-1-0-v0-54-title"><a href="#v0-1-0-v0-54">0.1.0</a></h2>
+            <div class="meta"><time datetime="2026-03-07T18:44:41Z">Mar 7, 2026</time><span class="badge">Hyprland 0.54</span><code>v0.1.0-v0.54</code></div>
+          </div>
+          <p class="headline">Workspace strip and two-sided overview gestures</p>
+          <h3>Highlights</h3>
+          <ul>
+            <li>Added the first workspace strip implementation for active-workspace overview mode, including strip previews, click-to-switch behavior, and overview-local workspace transitions.</li>
+            <li>Added gesture-only <code>recommand</code> mode for <code>hymission:toggle</code>, so one swipe direction can open <code>forceall</code> while the opposite direction opens <code>onlycurrentworkspace</code>.</li>
+            <li>Refined the two-stage gesture handoff so switching from one <code>recommand</code> side to the other must pass through hidden state and a small transfer gap instead of flipping immediately.</li>
+            <li>Fixed <code>forceall</code> animation origins and restore targets so windows from other workspaces fly in from, and return to, their off-screen workspace positions.</li>
+            <li>Updated strip motion so it now slides out on close instead of only sliding in on open.</li>
+            <li>Improved workspace-switch handling, strip input fallback behavior, and release-facing documentation.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.1.0-v0.54">Release notes for v0.1.0-v0.54 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.0.1...v0.1.0-v0.54">Compare with v0.0.1</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-0-1" aria-labelledby="v0-0-1-title">
+          <div class="entry-head">
+            <h2 id="v0-0-1-title"><a href="#v0-0-1">0.0.1</a></h2>
+            <div class="meta"><time datetime="2026-03-07T05:16:53Z">Mar 7, 2026</time><span class="badge">Hyprland not specified</span><code>v0.0.1</code></div>
+          </div>
+          <p class="headline">Initial published release</p>
+          <h3>Release notes</h3>
+          <ul>
+            <li>Initial published release. The original release has no written notes and does not specify a target Hyprland version.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.0.1">Release notes for v0.0.1 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/tree/v0.0.1">Browse source at v0.0.1</a></div>
+        </article>
+      </li>
+    </ol>
+  </main>
+</div>
+<footer class="site">
+  <div class="wrap">
+    <p>Dates are the GitHub release publication dates in UTC. Hyprland plugins are ABI-sensitive, so build hymission against the same Hyprland version you run.</p>
+    <p>Generated from <a href="https://github.com/gfhdhytghd/hymission/blob/master/docs/changelog/releases.json"><code>docs/changelog/releases.json</code></a>.</p>
+  </div>
+</footer>
+</body>
+</html>

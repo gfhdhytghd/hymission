@@ -1,0 +1,399 @@
+{
+  "project": "hymission",
+  "repository": "gfhdhytghd/hymission",
+  "site_url": "https://gfhdhytghd.github.io/hymission/",
+  "unreleased": {
+    "since": "v0.8.0-v0.56.2",
+    "summary": "Stage rendering, gestures, window interaction, and capture integration since 0.8.0. These changes are not part of a published release.",
+    "sections": [
+      {
+        "title": "Stage sidebar",
+        "items": [
+          "Optionally keep the active workspace visible, reserve empty workspace slots, show card backdrops, and distribute cards evenly (#45). Active-card glow is opt-in and disabled by default.",
+          "Click a window preview to activate its workspace and focus that window. Floating windows dragged within their own Stage card now retain the dropped position."
+        ]
+      },
+      {
+        "title": "Rendering",
+        "items": [
+          "Clip scrolling windows and unpinned floating windows at Stage boundaries with progressive blur and fading. Configure desktop and preview bands independently with `stage_scrolling_desktop_edge_width` and `stage_scrolling_preview_edge_width`.",
+          "Keep pinned floating windows above Stage with native pointer input, and respect window stacking and fullscreen occlusion in previews.",
+          "Preserve live backdrop blur, shadow cutouts, rounded corners, and edge gradients through overview transitions. Correct clipping of closing windows and shadow rendering beyond Stage content."
+        ]
+      },
+      {
+        "title": "Gestures and overview",
+        "items": [
+          "Synchronize sidebar movement and returning cards with workspace swipe progress, including fullscreen transitions, pauses, reversal, and cancellation.",
+          "Return overview windows directly to their Stage cards and retain the intended workspace across compact gesture handoffs. Preserve geometry and clipping when releasing or interrupting a gesture.",
+          "Fix duplicate sidebar movement and workspace-strip wallpaper rendering. Ignore empty overview opens, limit workspace creation during a single swipe, and correct hover-only preview expansion."
+        ]
+      },
+      {
+        "title": "Capture integration",
+        "items": [
+          "Expose rendered Stage window geometry, clipping, stacking, and rounded corners to HyprCapture. Separate screenshot input suppression from rendering so selection does not also activate a workspace.",
+          "Avoid render-hook conflicts with Viewflow and transform its shadows with overview previews."
+        ]
+      },
+      {
+        "title": "Validation",
+        "items": [
+          "Add an offscreen Stage edge-rendering regression test and extend Stage and overview logic coverage. The current CMake build and all five tests pass; updated compositor-session behavior still requires live verification."
+        ]
+      }
+    ]
+  },
+  "releases": [
+    {
+      "tag": "v0.8.0-v0.56.2",
+      "version": "0.8.0",
+      "hyprland": "0.56.2",
+      "published_at": "2026-09-12T18:12:39Z",
+      "headline": "Stage workspace sidebar and overview navigation",
+      "sections": [
+        {
+          "title": "Stage workspace sidebar",
+          "items": [
+            "Add an optional persistent workspace sidebar with live window previews, native gap integration, background blur, and animated workspace transitions. Stage mode is disabled by default.",
+            "Add Smartisan mode, alternating the sidebar side on workspace switches.",
+            "Support trackpad workspace transitions and dragging windows between sidebar previews, desktops, and workspace cards, with animated drop feedback.",
+            "Open overview from sidebar preview positions and preserve floating-window placement during drops."
+          ]
+        },
+        {
+          "title": "Overview and navigation",
+          "items": [
+            "Add optional Vim navigation with h/j/k/l and forward/backward selection cycling with Tab/Shift+Tab.",
+            "Add workspace_strip_force_show and configurable workspace-strip refresh intervals.",
+            "Restore the pre-overview window on gesture close by default; set gesture_close_restores_focus = 0 for the previous hover-target behavior. Click and Return activate the selected window.",
+            "Fix cross-workspace gesture exit geometry, confirmed selection focus, and scrolling position after overview teardown."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.7.1-v0.56.2",
+      "version": "0.7.1",
+      "hyprland": "0.56.2",
+      "published_at": "2026-09-06T03:35:35Z",
+      "headline": "Reliable search startup, shutdown, and system appearance",
+      "sections": [
+        {
+          "title": "Search fixes",
+          "items": [
+            "Install `hymission-search-input` into `~/.local/bin` during hyprpm builds and locate it directly at runtime. Fixes #38.",
+            "Show the search bar immediately when search starts, avoiding an unmapped transparent GTK window that cannot receive its first key.",
+            "Keep keyboard focus on the search helper and buffer keys while its surface is becoming ready.",
+            "Prevent desktop freezes when closing search: reset inherited signal state, retire helper processes asynchronously, and force termination after a 250 ms grace period."
+          ]
+        },
+        {
+          "title": "Appearance",
+          "items": [
+            "Follow the system light/dark preference using libadwaita.",
+            "Render transparent rounded corners without the rectangular window background, with space for the shadow.",
+            "Correct the plugin-reported version to 0.7.1."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.7.0-v0.56.2",
+      "version": "0.7.0",
+      "hyprland": "0.56.2",
+      "published_at": "2026-09-04T02:34:55Z",
+      "headline": "Window search, wheel navigation, and rotated-monitor rendering",
+      "sections": [
+        {
+          "title": "Window navigation",
+          "items": [
+            "Add overview window-title search.",
+            "Add mouse-wheel selection cycling."
+          ]
+        },
+        {
+          "title": "Rendering fixes",
+          "items": [
+            "Fix onlycurrentworkspace previews and workspace-strip thumbnails on rotated and vertical monitors.",
+            "Fix hidden bar snapshot orientation, aspect ratio, and animation position on rotated outputs.",
+            "Keep arbitrary-size offscreen rendering in framebuffer-local export coordinates and avoid monitor-sized blur framebuffer interference.",
+            "Suppress conflicting Hyprglass window glass while overview is active."
+          ]
+        },
+        {
+          "title": "Documentation",
+          "items": [
+            "Fix the duplicated hypr path in the Lua configuration guide.",
+            "Add Lua configuration mode, Omarchy 4, and troubleshooting documentation."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.6.0-v0.56.2",
+      "version": "0.6.0",
+      "hyprland": "0.56.2",
+      "published_at": "2026-08-11T07:48:00Z",
+      "headline": "Grouped windows and keyboard picking improvements",
+      "sections": [
+        {
+          "title": "Grouped windows",
+          "items": [
+            "Add `grouped_windows_policy` with expanded and collapsed overview modes.",
+            "Support collapsed group tabs, member switching, selection persistence, and whole-group dragging.",
+            "Render inactive group members correctly in expanded overviews and suppress conflicting groupbar behavior while overview is active."
+          ]
+        },
+        {
+          "title": "Keyboard picking and overview polish",
+          "items": [
+            "Extend spatial keyboard picking across the ANSI punctuation area and allow labels to be hidden while picking remains active.",
+            "Separate hover expansion from selection and remove collapsed-tab switching flicker.",
+            "Keep multi-surface drag previews rigid and latch preview geometry per frame."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.5.0-v0.56.0",
+      "version": "0.5.0",
+      "hyprland": "0.56.0",
+      "published_at": "2026-07-27T07:55:24Z",
+      "headline": "Direct and spatial keyboard window picking",
+      "sections": [
+        {
+          "title": "Keyboard window picking",
+          "items": [
+            "Added sequential keyboard pick labels with configurable direct activation.",
+            "Added spatial mode that maps the physical ANSI alphanumeric grid to window positions across participating monitors.",
+            "Spatial badges automatically follow the active XKB keyboard layout while activation remains tied to stable physical keycodes.",
+            "Dense overviews support deterministic two-key routes such as FF and FR."
+          ]
+        },
+        {
+          "title": "Overview polish and fixes",
+          "items": [
+            "Improved workspace-strip window drag and drop transitions.",
+            "Added reverse toggle-switch cycling and Lua configuration integration.",
+            "Fixed fullscreen overview behavior and isolated closing windows from overview transforms.",
+            "Vendored the JSON dependency for reliable clean builds."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.4.3-v0.56.0",
+      "version": "0.4.3",
+      "hyprland": "0.56.0",
+      "published_at": "2026-07-20T16:11:22Z",
+      "headline": "Hyprland 0.56.0 compatibility",
+      "sections": [
+        {
+          "title": "Hyprland v0.56.0 compatibility",
+          "items": [
+            "Adapted Hymission to Hyprland v0.56.0 state, fullscreen, animation, pointer, workspace, and rendering APIs.",
+            "Fixed the v0.56 shouldRenderWindow hook lookup so the overview controller initializes correctly.",
+            "hyprpm builds now clear stale CMake cache entries before detecting headers."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.4.2-v0.55.4",
+      "version": "0.4.2",
+      "hyprland": "0.55.4",
+      "published_at": "2026-06-20T07:21:44Z",
+      "headline": "Thumbnail layouts, workspace drag and drop, and capture hooks",
+      "sections": [
+        {
+          "title": "Changes",
+          "items": [
+            "Add thumbnail layout and scoped layout engine overrides.",
+            "Support thumbnail workspace drag/drop and relayout refreshes.",
+            "Improve thumbnail hover, new-window placement, and workspace movement behavior.",
+            "Add overview capture hooks and capture command argument handling.",
+            "Update README load instructions."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.4.1-v0.55.4",
+      "version": "0.4.1",
+      "hyprland": "0.55.4",
+      "published_at": "2026-06-19T20:31:49Z",
+      "headline": "Configurable scrolling preview gaps and window decorations",
+      "sections": [
+        {
+          "title": "Changes",
+          "items": [
+            "Add configurable `niri_scrolling_preview_gap` for niri direct scrolling-layout overview previews.",
+            "Add overview window border rendering and decoration controls.",
+            "Enforce configured overview gaps while preserving niri overview layout behavior."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.4.0-v0.55.2",
+      "version": "0.4.0",
+      "hyprland": "0.55.2",
+      "published_at": "2026-06-07T11:51:19Z",
+      "headline": "Cross-workspace animations and gesture focus handoff",
+      "sections": [
+        {
+          "title": "Changes",
+          "items": [
+            "Fix multi-workspace overview open and close animations so non-current workspace windows enter and leave from off-screen instead of flashing on the active workspace.",
+            "Preserve the selected/focused window when crossing from global overview through the recommand gesture into workspace overview.",
+            "Synchronize the real active workspace during recommand retargeting so the underlying scene matches the workspace overview.",
+            "Notify workspace bars after exiting global overview to a window on another workspace so the active workspace number updates correctly.",
+            "Improve overview ergonomics around hover retargeting, close buttons, reserved layer areas, floating window activation, and damage tracking."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.3.3-0.55.0",
+      "version": "0.3.3",
+      "hyprland": "0.55.0",
+      "published_at": "2026-05-16T14:27:58Z",
+      "headline": "Reliable all-workspace rendering and exit focus",
+      "sections": [
+        {
+          "title": "Changes",
+          "items": [
+            "Fix all-workspace overview rendering after workspace switches by keeping managed workspaces renderable during overview.",
+            "Make overview exit focus the hovered, Tab-selected, or clicked window, including cross-workspace targets.",
+            "Avoid native workspace animation and offscreen opening frames that could cause full-screen black flashes in overview."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.3.0-0.54.3",
+      "version": "0.3.0",
+      "hyprland": "0.54.3",
+      "published_at": "2026-04-27T00:52:27Z",
+      "headline": "Optional niri mode and improved overview layouts",
+      "sections": [
+        {
+          "title": "Changes",
+          "items": [
+            "Add opt-in niri scroll mode and niri-style workspace strip behavior.",
+            "Improve niri overview geometry for scrolling-layout and floating previews.",
+            "Refine natural layout packing, scaling, edge fill, and multi-workspace overview behavior."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.2.1-0.54.3",
+      "version": "0.2.1",
+      "hyprland": "0.54.3",
+      "published_at": "2026-04-26T19:26:41Z",
+      "headline": "Hyprland 0.54.3 release",
+      "sections": [
+        {
+          "title": "Release notes",
+          "items": [
+            "The original release provides a source comparison without a written feature summary. Use the comparison below to inspect the changes."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.2.0-0.54.1",
+      "version": "0.2.0",
+      "hyprland": "0.54.1",
+      "published_at": "2026-03-09T07:31:33Z",
+      "headline": "Toggle switch sessions with reliable modifier release",
+      "sections": [
+        {
+          "title": "Window switching",
+          "items": [
+            "Add optional toggle switch sessions: repeated `hymission:toggle` calls cycle through windows; releasing the configured modifier activates the selection.",
+            "Preserve overview ordering and track modifier release across multiple keyboards, focus changes, and missed key events.",
+            "Configure with `toggle_switch_mode`, `switch_toggle_auto_next`, and `switch_release_key`; open, close, and gesture behavior remain separate."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.1.2-v0.54.1",
+      "version": "0.1.2",
+      "hyprland": "0.54.1",
+      "published_at": "2026-03-09T00:22:31Z",
+      "headline": "Animated workspace bar handoff",
+      "sections": [
+        {
+          "title": "Changes",
+          "items": [
+            "add animated workspace-strip bar handoff proxies for exclusive bars",
+            "fix right-edge cropping for monitor-sized bar snapshots",
+            "align default config values with the current live setup",
+            "bump the plugin/build version to 0.1.2"
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.1.1-v0.54.1",
+      "version": "0.1.1",
+      "hyprland": "0.54.1",
+      "published_at": "2026-03-08T08:09:49Z",
+      "headline": "Gesture handling and configurable empty workspace slots",
+      "sections": [
+        {
+          "title": "Highlights",
+          "items": [
+            "Visible `hymission:toggle,*` overview can now exit in either swipe direction.",
+            "`recommand` only keeps its continuous two-stage transfer in the side-changing direction; the other direction now just exits back to hidden.",
+            "Hidden-start gestures stay locked to a single opening/cancel session until finger lift, so one touch sequence no longer chains into a fresh visible-start return or cross-side handoff.",
+            "Added `workspace_strip_empty_mode` with `existing` as the default and optional `continuous` synthetic gap slots.",
+            "Synthetic empty strip slots now prefer monitor background / wallpaper layers, while the trailing new-workspace slot keeps its dedicated `+` card styling.",
+            "Overview rebuilds now retry briefly when a newly relevant window has not reached usable geometry yet.",
+            "Added a standalone mission layout regression test binary and fixed row-height contamination, candidate-search early exits, negative scale clamps, and aspect-ratio preservation regressions.",
+            "Synced README, spec, workspace-strip plan notes, and a new dev log for this release."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.1.0-v0.54",
+      "version": "0.1.0",
+      "hyprland": "0.54",
+      "published_at": "2026-03-07T18:44:41Z",
+      "headline": "Workspace strip and two-sided overview gestures",
+      "sections": [
+        {
+          "title": "Highlights",
+          "items": [
+            "Added the first workspace strip implementation for active-workspace overview mode, including strip previews, click-to-switch behavior, and overview-local workspace transitions.",
+            "Added gesture-only `recommand` mode for `hymission:toggle`, so one swipe direction can open `forceall` while the opposite direction opens `onlycurrentworkspace`.",
+            "Refined the two-stage gesture handoff so switching from one `recommand` side to the other must pass through hidden state and a small transfer gap instead of flipping immediately.",
+            "Fixed `forceall` animation origins and restore targets so windows from other workspaces fly in from, and return to, their off-screen workspace positions.",
+            "Updated strip motion so it now slides out on close instead of only sliding in on open.",
+            "Improved workspace-switch handling, strip input fallback behavior, and release-facing documentation."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.0.1",
+      "version": "0.0.1",
+      "hyprland": null,
+      "published_at": "2026-03-07T05:16:53Z",
+      "headline": "Initial published release",
+      "sections": [
+        {
+          "title": "Release notes",
+          "items": [
+            "Initial published release. The original release has no written notes and does not specify a target Hyprland version."
+          ]
+        }
+      ]
+    }
+  ]
+}

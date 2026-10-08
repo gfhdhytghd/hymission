@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Changelog · {{PROJECT}}</title>
+<meta name="description" content="Release history for {{PROJECT}}, a Mission Control-style overview and Stage workspace sidebar for Hyprland.">
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="{{SITE_URL}}">
+<meta property="og:title" content="{{PROJECT}} changelog">
+<meta property="og:description" content="Release history for {{PROJECT}}, a Mission Control-style overview and Stage workspace sidebar for Hyprland.">
+<meta property="og:url" content="{{SITE_URL}}">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2358a6ff'/%3E%3Cpath d='M9 12V9h3M20 9h3v3M23 20v3h-3M12 23H9v-3' fill='none' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --text: #1b1f24;
+    --muted: #57606a;
+    --border: #d8dee4;
+    --accent: #0a5fd1;
+    --accent-soft: #e4efff;
+    --pending: #8a5a00;
+    --pending-soft: #fff4d6;
+    --code-bg: #eef1f4;
+    --shadow: 0 1px 2px rgb(27 31 36 / 6%), 0 4px 16px rgb(27 31 36 / 5%);
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --surface: #151b23;
+      --text: #e6edf3;
+      --muted: #9da7b3;
+      --border: #2d3540;
+      --accent: #6cb6ff;
+      --accent-soft: #15273d;
+      --pending: #e3b341;
+      --pending-soft: #2c230f;
+      --code-bg: #212a35;
+      --shadow: 0 1px 2px rgb(0 0 0 / 30%);
+    }
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 1.5rem; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Ubuntu, Cantarell, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  a { color: var(--accent); text-underline-offset: 0.15em; }
+  a:hover { text-decoration-thickness: 2px; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  code {
+    font: 0.88em/1.4 ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 5px;
+    overflow-wrap: anywhere;
+  }
+  .skip {
+    position: absolute; left: 1rem; top: -4rem;
+    background: var(--surface); padding: 0.5rem 1rem; border-radius: 8px; z-index: 10;
+  }
+  .skip:focus { top: 1rem; }
+
+  header.site {
+    border-bottom: 1px solid var(--border);
+    background:
+      radial-gradient(60rem 20rem at 10% -40%, var(--accent-soft), transparent 70%),
+      var(--surface);
+  }
+  .wrap { max-width: 72rem; margin: 0 auto; padding: 0 1.25rem; }
+  .hero { padding-top: 3rem; padding-bottom: 2.25rem; }
+  .eyebrow {
+    margin: 0 0 0.5rem; color: var(--accent); font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.8rem;
+  }
+  .hero h1 { margin: 0; font-size: clamp(2rem, 5vw, 2.9rem); line-height: 1.1; letter-spacing: -0.02em; }
+  .hero p.lede { margin: 0.9rem 0 1.4rem; color: var(--muted); max-width: 42rem; font-size: 1.08rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 0; padding: 0; list-style: none; }
+  .button {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0.5rem 0.95rem; border-radius: 999px; font-weight: 600; font-size: 0.95rem;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text); text-decoration: none;
+  }
+  .button:hover { border-color: var(--accent); }
+  .button.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+
+  .layout {
+    display: grid; gap: 2.5rem; padding-top: 2.25rem; padding-bottom: 4rem;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  @media (min-width: 62rem) {
+    .layout { grid-template-columns: 13rem minmax(0, 1fr); }
+    nav.toc { position: sticky; top: 1.5rem; align-self: start; max-height: calc(100vh - 3rem); overflow: auto; }
+  }
+  nav.toc h2 {
+    font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--muted); margin: 0 0 0.6rem;
+  }
+  nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.15rem; }
+  nav.toc a {
+    display: flex; justify-content: space-between; gap: 0.75rem;
+    padding: 0.3rem 0.6rem; border-radius: 8px; text-decoration: none; color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  nav.toc a:hover { background: var(--accent-soft); }
+  nav.toc a span { color: var(--muted); font-size: 0.85rem; }
+  @media (max-width: 61.99rem) {
+    nav.toc ol { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    nav.toc a { border: 1px solid var(--border); background: var(--surface); padding: 0.25rem 0.7rem; }
+    nav.toc a span { display: none; }
+  }
+
+  .timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.25rem; }
+  article.entry {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 1.4rem 1.5rem 1.2rem;
+  }
+  article.entry.unreleased { border-style: dashed; border-color: var(--pending); background: linear-gradient(var(--pending-soft), var(--surface) 9rem); }
+  article.entry:target { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .entry-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem 0.9rem; }
+  .entry-head h2 { margin: 0; font-size: 1.5rem; letter-spacing: -0.01em; }
+  .entry-head h2 a { color: inherit; text-decoration: none; }
+  .entry-head h2 a:hover { text-decoration: underline; }
+  .meta { display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center; color: var(--muted); font-size: 0.92rem; }
+  .badge {
+    display: inline-block; padding: 0.05rem 0.6rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600;
+    background: var(--accent-soft); color: var(--accent); white-space: nowrap;
+  }
+  .badge.latest { background: var(--accent); color: var(--surface); }
+  .badge.pending { background: var(--pending-soft); color: var(--pending); border: 1px solid var(--pending); }
+  .headline { margin: 0.45rem 0 0; font-size: 1.08rem; font-weight: 600; }
+  .summary { margin: 0.45rem 0 0; color: var(--muted); }
+  .entry h3 {
+    margin: 1.15rem 0 0.35rem; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+  }
+  .entry ul { margin: 0; padding-left: 1.2rem; }
+  .entry li { margin: 0.25rem 0; }
+  .entry li::marker { color: var(--accent); }
+  .entry-foot {
+    margin-top: 1.1rem; padding-top: 0.8rem; border-top: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; font-size: 0.92rem;
+  }
+  footer.site { border-top: 1px solid var(--border); color: var(--muted); font-size: 0.9rem; padding: 1.5rem 0 2.5rem; }
+  footer.site p { margin: 0.3rem 0; }
+  @media (max-width: 30rem) {
+    .hero { padding-top: 2.25rem; padding-bottom: 1.75rem; }
+    article.entry { padding: 1.1rem 1.05rem 1rem; }
+  }
+  @media print {
+    nav.toc, .actions, .skip { display: none; }
+    article.entry { box-shadow: none; break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#changelog">Skip to changelog</a>
+<header class="site">
+  <div class="wrap hero">
+    <p class="eyebrow">Changelog</p>
+    <h1>{{PROJECT}}</h1>
+    <p class="lede">Release history of the {{PROJECT}} overview and Stage workspace sidebar plugin for Hyprland. Each version tag names the plugin version followed by the Hyprland release it was built for.</p>
+    <ul class="actions">
+      <li><a class="button primary" href="{{LATEST_URL}}">Latest: {{LATEST_TAG}}</a></li>
+      <li><a class="button" href="{{REPO_URL}}#installation">Installation</a></li>
+      <li><a class="button" href="{{REPO_URL}}/releases">All GitHub releases</a></li>
+      <li><a class="button" href="{{REPO_URL}}">Source code</a></li>
+    </ul>
+  </div>
+</header>
+<div class="wrap layout">
+  <nav class="toc" aria-labelledby="toc-title">
+    <h2 id="toc-title">Versions</h2>
+    <ol>
+{{NAV}}
+    </ol>
+  </nav>
+  <main id="changelog" tabindex="-1">
+    <ol class="timeline" aria-label="Releases, newest first">
+{{ENTRIES}}
+    </ol>
+  </main>
+</div>
+<footer class="site">
+  <div class="wrap">
+    <p>Dates are the GitHub release publication dates in UTC. Hyprland plugins are ABI-sensitive, so build hymission against the same Hyprland version you run.</p>
+    <p>Generated from <a href="{{REPO_URL}}/blob/master/docs/changelog/releases.json"><code>docs/changelog/releases.json</code></a>.</p>
+  </div>
+</footer>
+</body>
+</html>
