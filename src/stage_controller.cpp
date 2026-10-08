@@ -210,6 +210,7 @@ struct StageController::Impl {
         std::optional<stage::EdgeViewport> fromViewport;
         std::optional<stage::EdgeViewport> toViewport;
         bool edgeTransfer = false;
+        bool desktopDecorations = false;
     };
     struct DragHover {
         PHLWINDOWREF window;
@@ -224,6 +225,7 @@ struct StageController::Impl {
         stage::EdgeViewport toViewport;
         bool onDesktop = false;
         bool edgeTransfer = false;
+        bool tiled = false;
     };
     struct Card {
         PHLWORKSPACEREF workspace;
@@ -325,6 +327,9 @@ struct StageController::Impl {
     std::optional<Swipe> swipe;
     std::optional<DragHover> dragHover;
     PHLWINDOWREF thumbnailDrag;
+    nlohmann::json dropTrace = nlohmann::json::array();
+    Clock::time_point dropTraceStart;
+    std::string dropPhase;
     uint64_t swipeBegins = 0;
     uint64_t swipeUpdates = 0;
     uint64_t swipeEnds = 0;
@@ -432,7 +437,7 @@ struct StageController::Impl {
     void draw(const PHLMONITOR& monitor);
     void drawFlights(Screen& screen, const PHLMONITOR& monitor);
     void drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, double radius,
-                     std::optional<stage::EdgeViewport> viewport = std::nullopt, double* captureRounding = nullptr);
+                     std::optional<stage::EdgeViewport> viewport = std::nullopt, double* captureRounding = nullptr, bool forceDecorations = false);
     void drawWindowPasses(StageWindowPassElement::Elements& elements, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport,
                           const Rect& clip);
     void captureWindowPasses(Render::IHyprRenderer* renderer, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport, const std::function<void()>& render,
@@ -470,6 +475,7 @@ struct StageController::Impl {
     void updateDragHover();
     stage::ScrollingFlightFrame dragHoverFrame() const;
     void clearDragHover();
+    void traceDrop(const char* phase, const PHLWINDOW& window, const PHLWORKSPACE& destination, bool begin = false);
     void finishDrop(const PHLWORKSPACE& destination, const PHLWINDOW& window, const CBox& dropOrigin,
                     float dropRadius, const Vector2D& dropPoint, const Vector2D& grabOffset,
                     std::optional<Vector2D> floatingCenter, std::optional<stage::EdgeViewport> originViewport, bool edgeTransfer);
@@ -531,6 +537,11 @@ struct StageController::Impl {
     }
     static void changeWorkspaceThunk(Monitor::CMonitor* monitor, const PHLWORKSPACE& workspace, bool internal, bool noMouseMove, bool noFocus) {
         auto* self = instance;
+        if (!self->dropTrace.empty() && self->dropTrace.size() < 24 &&
+            Clock::now() - self->dropTraceStart < std::chrono::seconds(2)) {
+            self->dropTrace.push_back({{"event", "workspace_request"}, {"phase", self->dropPhase},
+                {"from", monitor->m_activeWorkspace ? monitor->m_activeWorkspace->m_id : -1}, {"to", workspace ? workspace->m_id : -1}});
+        }
         if (self->swipe && self->swipe->monitor == monitor->m_self && (!self->swipe->released || self->swipe->target != workspace))
             self->clearSwipe();
         reinterpret_cast<ChangeWorkspaceFn>(self->changeWorkspaceHook->m_original)(monitor, workspace, internal, noMouseMove, noFocus);
@@ -599,9 +610,11 @@ struct StageController::Impl {
                 (self->dragHover && self->dragHover->window == window)))
             return;
         const auto original = reinterpret_cast<RenderWindowFn>(self->renderWindowHook->m_original);
-        // Native pinned floats are collected last. Put Stage immediately
-        // before their first pass (including shadows/popups), never redraw them.
-        if (window && window->m_pinned && window->m_isFloating && !standalone && !ignorePosition &&
+        const auto* drag = g_layoutManager->dragController().get();
+        const bool tiledDrag = drag && drag->mode() == MBIND_MOVE && drag->draggingTiled() && drag->target() && drag->target()->window() == window;
+        // Pinned floats and temporarily floated tiled drags stay above Stage,
+        // including their decorations. Never redraw their native content.
+        if (window && ((window->m_pinned && window->m_isFloating) || tiledDrag) && !standalone && !ignorePosition &&
             !self->rendering && !self->capturingWindowPasses && !renderer->m_bRenderingSnapshot)
             self->renderStage(RENDER_POST_WINDOWS);
         if (overviewRendering && !standalone && !self->rendering && !self->capturingWindowPasses && !renderer->m_bRenderingSnapshot && self->overviewFrame) {
@@ -614,7 +627,7 @@ struct StageController::Impl {
         }
         if (!standalone && !ignorePosition && !self->rendering && !self->capturingWindowPasses && !renderer->m_bRenderingSnapshot &&
             self->enabled && !self->blocked() && screen && screen->geometry.enabled() && !screen->covered && !screen->suspended &&
-            !monitor->m_activeSpecialWorkspace && window && stage::desktopEdgeApplies(window->m_pinned, window->m_isFloating,
+            !monitor->m_activeSpecialWorkspace && window && !tiledDrag && stage::desktopEdgeApplies(window->m_pinned, window->m_isFloating,
                 scrollingWorkspace(window->m_workspace), window->onSpecialWorkspace(), Fullscreen::controller()->isFullscreen(window))) {
             const CBox bounds{window->positionAnimation()->value() + window->m_workspace->m_renderOffset->value() + window->m_floatingOffset, window->sizeAnimation()->value()};
             const auto viewport = stage::edgeViewportForWindow(self->desktopViewport(*screen), rect(bounds));
@@ -1698,11 +1711,28 @@ void StageController::Impl::clearDragHover() {
     dragHover.reset();
 }
 
+void StageController::Impl::traceDrop(const char* phase, const PHLWINDOW& window, const PHLWORKSPACE& destination, bool begin) {
+    if (!window || !destination)
+        return;
+    if (begin) {
+        dropTrace = nlohmann::json::array();
+        dropTraceStart = Clock::now();
+    }
+    dropPhase = phase;
+    const auto monitor = destination->m_monitor.lock();
+    dropTrace.push_back({{"event", phase}, {"window_workspace", window->m_workspace ? window->m_workspace->m_id : -1},
+        {"destination", destination->m_id}, {"active", monitor && monitor->m_activeWorkspace ? monitor->m_activeWorkspace->m_id : -1},
+        {"follow", setting("stage_drop_follow", 0)}, {"floating", window->m_isFloating}});
+}
+
 void StageController::Impl::updateDragHover() {
     const auto* drag = g_layoutManager->dragController().get();
     const auto dragged = drag && drag->mode() == MBIND_MOVE && drag->target() ? drag->target()->window() : nullptr;
     const auto window = thumbnailDrag ? thumbnailDrag.lock() : dragged ? dragged :
         dragHover && dragHover->returningToNative ? dragHover->window.lock() : nullptr;
+    // Native move drags temporarily float tiled windows; retain their original policy.
+    const bool tiled = window && ((dragHover && dragHover->window == window && dragHover->tiled) ||
+        (dragged == window && drag->draggingTiled()) || !window->m_isFloating);
     const auto pointer = g_pInputManager->getMouseCoordsInternal();
     auto [screen, index] = hit(pointer);
     bool onDesktop = false;
@@ -1736,7 +1766,7 @@ void StageController::Impl::updateDragHover() {
                 dragHover->start = Clock::now();
                 dragHover->returningToNative = true;
                 dragHover->onDesktop = true;
-                dragHover->edgeTransfer = true;
+                dragHover->edgeTransfer = !tiled;
             }
             if (const auto oldMonitor = dragHover->monitor.lock())
                 g_pHyprRenderer->damageMonitor(oldMonitor);
@@ -1784,7 +1814,8 @@ void StageController::Impl::updateDragHover() {
         dragHover = DragHover{window, monitor, workspace, syntheticId, box(from.window), target, Clock::now()};
         dragHover->fromViewport = from.viewport;
         dragHover->onDesktop = onDesktop;
-        dragHover->edgeTransfer = fromDesktop != onDesktop;
+        dragHover->edgeTransfer = !tiled && fromDesktop != onDesktop;
+        dragHover->tiled = tiled;
     } else
         dragHover->to = target;
     dragHover->toViewport = onDesktop ? desktopViewport(*screen) : cardViewport(card);
@@ -1892,6 +1923,7 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
                 cancelDrop = false;
                 clearDragHover();
                 dragHover = DragHover{window, screen->monitor, card.workspace, card.syntheticId, box, box, Clock::now()};
+                dragHover->tiled = !window->m_isFloating;
                 dragHover->fromViewport = dragHover->toViewport = cardViewport(CBox{origin, {screen->geometry.cardWidth, screen->geometry.cardHeight}});
                 g_pSeatManager->setPointerFocus(nullptr, {});
                 armMotion();
@@ -1940,6 +1972,7 @@ void StageController::Impl::finishThumbnailDrag() {
         destination = ensureWorkspace(monitor, syntheticId);
     const auto frame = dragHoverFrame();
     const bool edgeTransfer = dragHover && dragHover->edgeTransfer;
+    const bool tiled = dragHover && dragHover->tiled;
     const CBox from = box(frame.window);
     Vector2D center = edgeTransfer ? dragHover->to.middle() : from.middle();
     if (const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal()); screen && index) {
@@ -1955,6 +1988,7 @@ void StageController::Impl::finishThumbnailDrag() {
     if (!window || !destination || !monitor || blocked() || cancelDrop)
         return;
     const bool toDesktop = destination->isVisible();
+    traceDrop("thumbnail_release", window, destination, true);
     finishDrop(destination, window, from, stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
         numberSetting("decoration:rounding", 0), from.w, from.h), center, {}, center, frame.viewport, edgeTransfer);
     if (!toDesktop || window->m_workspace != destination)
@@ -1969,9 +2003,12 @@ void StageController::Impl::finishThumbnailDrag() {
             CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
         screen->flights.push_back({Preview{window, target, target}, from, target,
             static_cast<float>(stage::previewRounding(-1, numberSetting("decoration:rounding", 0), from.w, from.h)), window->rounding()});
-        screen->flights.back().fromViewport = frame.viewport;
-        screen->flights.back().toViewport = desktopViewport(*screen);
-        screen->flights.back().edgeTransfer = true;
+        if (!tiled) {
+            screen->flights.back().fromViewport = frame.viewport;
+            screen->flights.back().toViewport = desktopViewport(*screen);
+            screen->flights.back().edgeTransfer = true;
+        }
+        screen->flights.back().desktopDecorations = true;
         screen->flightStart = Clock::now();
         screen->flightDuration = std::clamp(setting("stage_transition_ms", 300), 0L, 2000L);
         updatePreviewLiveness();
@@ -2079,7 +2116,9 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
     updateDragHover();
     if (destination || cancelDrop || !dragHover || !dragHover->returningToNative)
         clearDragHover();
+    traceDrop("native_drag_end", window, destination, true);
     reinterpret_cast<DragEndFn>(dragHook->m_original)(drag);
+    traceDrop("native_drag_ended", window, destination);
     finishDrop(destination, window, dropOrigin, dropRadius, dropPoint, grabOffset, floatingCenter, originViewport, edgeTransfer);
 }
 
@@ -2095,8 +2134,10 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
     if (destination && window && window->m_isMapped && (!sameWorkspace || (layoutTarget && layoutTarget->floating())) &&
         State::workspaceState()->query().id(destination->m_id).run() == destination && destination->m_monitor) {
         const auto monitor = destination->m_monitor.lock();
+        traceDrop("move_window", window, destination);
         if (!sameWorkspace)
             Desktop::globalWindowController()->moveWindowToWorkspace(window, destination);
+        traceDrop("place_window", window, destination);
         if (const auto target = window->layoutTarget(); target && target->space() == destination->m_space) {
             if (target->floating()) {
                 const auto size = target->position().size();
@@ -2111,6 +2152,7 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
         if (auto* screen = screenFor(monitor))
             correctFloating(monitor, desktop(*screen));
         const bool followDrop = !sameWorkspace && setting("stage_drop_follow", 0);
+        traceDrop("restore_focus", window, destination);
         if (followDrop) {
             activate(destination);
             Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_WORKSPACE_CHANGE);
@@ -2180,6 +2222,7 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
     }
     lastDragged.reset();
     cancelDrop = false;
+    traceDrop("complete", window, destination);
     request();
 }
 
@@ -2411,9 +2454,9 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
             const double radius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
                 numberSetting("decoration:rounding", 0), box.w, box.h);
             if (!dragHover->edgeTransfer)
-                drawPreview(window, monitor, box, clip, radius);
+                drawPreview(window, monitor, box, clip, radius, std::nullopt, nullptr, dragHover->onDesktop);
             else if (stage::overviewEndpointVisible({frame.window, frame.viewport, frame.viewport.box}))
-                drawPreview(window, monitor, box, clip, radius, frame.viewport);
+                drawPreview(window, monitor, box, clip, radius, frame.viewport, nullptr, dragHover->onDesktop);
         }
     }
 }
@@ -2751,13 +2794,13 @@ void StageController::Impl::drawWindowPasses(StageWindowPassElement::Elements& e
 }
 
 void StageController::Impl::drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, double radius,
-                                       std::optional<stage::EdgeViewport> viewport, double* captureRounding) {
+                                       std::optional<stage::EdgeViewport> viewport, double* captureRounding, bool forceDecorations) {
     // Cached cards/flights can outlive a fullscreen change. Do not resurrect a
     // covered window (or its blur) before the next preview collection.
     if (previewLayer(window) == stage::PreviewLayer::Hidden)
         return;
     if (viewport) {
-        edgeEffect.draw(monitor, stage::edgeViewportForWindow(*viewport, rect(target)), clip, [&](const CBox& limit) { drawPreview(window, monitor, target, limit, radius, std::nullopt, captureRounding); });
+        edgeEffect.draw(monitor, stage::edgeViewportForWindow(*viewport, rect(target)), clip, [&](const CBox& limit) { drawPreview(window, monitor, target, limit, radius, std::nullopt, captureRounding, forceDecorations); });
         return;
     }
     const auto root = window->wlSurface()->resource();
@@ -2766,8 +2809,10 @@ void StageController::Impl::drawPreview(const PHLWINDOW& window, const PHLMONITO
     const CBox source{window->positionAnimation()->value(), window->sizeAnimation()->value()};
     if (source.w <= 0 || source.h <= 0)
         return;
-    const bool decorations = setting("stage_window_decorations", 0) != 0;
-    const CBox footprint = decorations ? window->getFullWindowBoundingBox() : source;
+    const bool includeDecorationBounds = setting("stage_window_decorations", 0) != 0;
+    const bool decorations = includeDecorationBounds || forceDecorations;
+    // Enabling desktop decorations must not rescale the already sampled content.
+    const CBox footprint = includeDecorationBounds ? window->getFullWindowBoundingBox() : source;
     if (footprint.w <= 0 || footprint.h <= 0)
         return;
     const double scale = std::min(target.w / footprint.w, target.h / footprint.h);
@@ -2892,7 +2937,7 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
         if (flight.edgeTransfer && viewport && !stage::overviewEndpointVisible({frame, *viewport, viewport->box}))
             continue; // Do not leave a shadow visible during the hidden size change.
         drawPreview(window, monitor, box(frame), clip,
-            flight.fromRadius + (flight.toRadius - flight.fromRadius) * stage::transitionProgress(p, 1), viewport);
+            flight.fromRadius + (flight.toRadius - flight.fromRadius) * stage::transitionProgress(p, 1), viewport, nullptr, flight.desktopDecorations);
     }
     g_pHyprRenderer->m_renderData.clipBox = previousClip;
 }
@@ -3080,6 +3125,7 @@ std::string StageController::Impl::stateJson() const {
         {"scrolling_edge_blur_hook", blurFramebufferHook != nullptr}, {"scrolling_edge_error", edgeEffect.error()},
         {"drag_hover_active", dragHover.has_value()},
         {"thumbnail_drag_active", !!thumbnailDrag},
+        {"last_drop_trace", dropTrace},
         {"captureVersion", 1}, {"captureWindows", nlohmann::json::array()},
         {"screens", nlohmann::json::array()}};
     for (const auto& screen : screens) {

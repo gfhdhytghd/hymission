@@ -276,11 +276,21 @@ preview movement and drop-settling animation. Reversing a desktop/card transfer
 starts from the current visual and clip. The native drag and
 workspace remain unchanged until release. Escape cancels the preview/drop.
 Ordinary workspace-switch animations are unchanged.
+Originally tiled windows retain direct drag transitions above the Stage strip;
+the compositor's temporary floating state during a move does not enable edge
+transfers. When a dragged preview returns to the desktop, native decorations
+are drawn immediately, independently of `stage_window_decorations` (which still
+controls resting card previews). Release continuation retains these decorations.
 With the default `stage_drop_follow = 0`, release continues from that preview
 into the window's actual destination slot, suppressing the card copy until the
 flight completes. Disabled animations update immediately; follow mode uses the
 normal workspace-switch animation after release. `drag_hover_active` exposes
 the hover-preview state.
+`last_drop_trace` records the latest release's native drag-end, move, placement
+and focus phases, along with workspace-change requests during the release and
+the following two seconds. It contains workspace IDs and policy flags, not
+window titles, and can be read through `hymission-stage-state` for unexpected
+follow behavior.
 
 Win/Super + left-drag on a window inside a sidebar card picks the topmost
 preview under the pointer. Dragging into the current desktop enlarges it;
