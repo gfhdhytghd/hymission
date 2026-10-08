@@ -1,7 +1,8 @@
 # Drag transfers through fixed Stage edges
 
-Scope: Stage drag-in/drag-out and their release continuation only. Ordinary
-workspace switch/swipe flights retain their existing interpolation.
+Scope (corrected after review): desktop-to-Stage and Stage-to-desktop drag
+transfers and their release continuation only. Stage-to-Stage dragging and
+ordinary workspace switch/swipe flights retain their original interpolation.
 
 The previous drag preview scaled across the desktop/card boundary. With edge
 clipping enabled this produced an awkward moving crop. Drag transfers now use
@@ -12,9 +13,10 @@ two equal phases on the existing `stage_transition_ms` timeline:
 
 Each phase retains that region's viewport, hard clip and edge-effect widths.
 Size changes happen while hidden; fully clipped frames do not draw a residual
-shadow. Left/right sidebars are mirrored. Transfers between vertically aligned
-cards use their facing top/bottom edges. Moving within one region settles
-directly. Already hidden columns remain hidden.
+shadow. Left/right sidebars are mirrored. Stage-to-Stage previews retain direct
+movement without the new region clipping; their release flights also retain
+the original path and floating-window placement. Already hidden columns remain
+hidden during desktop/card transfers.
 
 Interruptions sample both the displayed box and viewport. Returning to the
 desktop follows live native geometry, including release before completion.

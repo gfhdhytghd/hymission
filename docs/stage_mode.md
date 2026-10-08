@@ -266,13 +266,14 @@ original mouse grab offset. Dropping on the current workspace does not
 issue a second move. Escape cancels sidebar delivery; no resize or application
 data drag is interpreted as a window move.
 
-Dragging a window over a destination card slides its live visual out through
+Dragging a window between the desktop and a Stage card slides its live visual out through
 the source region's facing edge, then in through the destination region's facing
 edge. Each half keeps that region's clip and window size fixed; the size changes
 while hidden between the halves. The whole transfer uses `stage_transition_ms`.
 Leaving a card uses the same two-phase return to the native dragged window.
-Moving within one card only adjusts placement, while reversing or moving to
-another card starts from the current visual and clip. The native drag and
+Moving within Stage, including between cards, retains the original direct
+preview movement and drop-settling animation. Reversing a desktop/card transfer
+starts from the current visual and clip. The native drag and
 workspace remain unchanged until release. Escape cancels the preview/drop.
 Ordinary workspace-switch animations are unchanged.
 With the default `stage_drop_follow = 0`, release continues from that preview

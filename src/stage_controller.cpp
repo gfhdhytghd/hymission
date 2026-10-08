@@ -222,6 +222,8 @@ struct StageController::Impl {
         bool returningToNative = false;
         stage::EdgeViewport fromViewport;
         stage::EdgeViewport toViewport;
+        bool onDesktop = false;
+        bool edgeTransfer = false;
     };
     struct Card {
         PHLWORKSPACEREF workspace;
@@ -470,7 +472,7 @@ struct StageController::Impl {
     void clearDragHover();
     void finishDrop(const PHLWORKSPACE& destination, const PHLWINDOW& window, const CBox& dropOrigin,
                     float dropRadius, const Vector2D& dropPoint, const Vector2D& grabOffset,
-                    std::optional<Vector2D> floatingCenter, std::optional<stage::EdgeViewport> originViewport);
+                    std::optional<Vector2D> floatingCenter, std::optional<stage::EdgeViewport> originViewport, bool edgeTransfer);
     void finishThumbnailDrag();
     void button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info);
     void axis(const IPointer::SAxisEvent& event, Event::SCallbackInfo& info);
@@ -1679,6 +1681,9 @@ stage::ScrollingFlightFrame StageController::Impl::dragHoverFrame() const {
         return {};
     const double duration = numberSetting("animations:enabled", 1) ? std::clamp(setting("stage_transition_ms", 300), 0L, 2000L) : 0;
     const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - dragHover->start).count();
+    if (!dragHover->edgeTransfer)
+        return {stage::transitionBoxWithin(rect(dragHover->from), rect(dragHover->to), duration > 0 ? elapsed / duration : 1,
+            flightBounds(monitor)), stage::edgeViewport(flightBounds(monitor), 0, 0)};
     return stage::edgeTransferFrame(rect(dragHover->from), rect(dragHover->to), dragHover->fromViewport, dragHover->toViewport,
         duration > 0 ? elapsed / duration : 1);
 }
@@ -1727,9 +1732,11 @@ void StageController::Impl::updateDragHover() {
             const auto from = dragHoverFrame();
             if (!dragHover->returningToNative) {
                 dragHover->from = box(from.window);
-                dragHover->fromViewport = from.viewport;
+                dragHover->fromViewport = dragHover->edgeTransfer ? from.viewport : dragHover->toViewport;
                 dragHover->start = Clock::now();
                 dragHover->returningToNative = true;
+                dragHover->onDesktop = true;
+                dragHover->edgeTransfer = true;
             }
             if (const auto oldMonitor = dragHover->monitor.lock())
                 g_pHyprRenderer->damageMonitor(oldMonitor);
@@ -1767,12 +1774,17 @@ void StageController::Impl::updateDragHover() {
     const CBox target{std::clamp(pointer.x - size.x / 2, card.x, card.x + card.w - size.x),
         std::clamp(pointer.y - size.y / 2, card.y, card.y + card.h - size.y), size.x, size.y};
     if (!dragHover || dragHover->returningToNative || dragHover->window != window || dragHover->workspace != workspace || dragHover->syntheticId != syntheticId || dragHover->monitor != monitor) {
+        const bool fromDesktop = !dragHover || dragHover->window != window || dragHover->onDesktop;
         const auto* nativeScreen = screenFor(window->m_monitor.lock());
-        const auto from = dragHover && dragHover->window == window ? dragHoverFrame() :
+        auto from = dragHover && dragHover->window == window ? dragHoverFrame() :
             stage::ScrollingFlightFrame{rect(native), nativeScreen ? desktopViewport(*nativeScreen) : stage::edgeViewport(flightBounds(monitor), 0, 0)};
+        if (dragHover && dragHover->window == window && !dragHover->edgeTransfer && fromDesktop != onDesktop)
+            from.viewport = dragHover->toViewport;
         clearDragHover();
         dragHover = DragHover{window, monitor, workspace, syntheticId, box(from.window), target, Clock::now()};
         dragHover->fromViewport = from.viewport;
+        dragHover->onDesktop = onDesktop;
+        dragHover->edgeTransfer = fromDesktop != onDesktop;
     } else
         dragHover->to = target;
     dragHover->toViewport = onDesktop ? desktopViewport(*screen) : cardViewport(card);
@@ -1927,8 +1939,9 @@ void StageController::Impl::finishThumbnailDrag() {
     if (!destination && syntheticId > 0)
         destination = ensureWorkspace(monitor, syntheticId);
     const auto frame = dragHoverFrame();
+    const bool edgeTransfer = dragHover && dragHover->edgeTransfer;
     const CBox from = box(frame.window);
-    Vector2D center = dragHover ? dragHover->to.middle() : from.middle();
+    Vector2D center = edgeTransfer ? dragHover->to.middle() : from.middle();
     if (const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal()); screen && index) {
         const auto area = desktop(*screen);
         const auto mapped = stage::mapPreviewCenter(
@@ -1943,7 +1956,7 @@ void StageController::Impl::finishThumbnailDrag() {
         return;
     const bool toDesktop = destination->isVisible();
     finishDrop(destination, window, from, stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
-        numberSetting("decoration:rounding", 0), from.w, from.h), center, {}, center, frame.viewport);
+        numberSetting("decoration:rounding", 0), from.w, from.h), center, {}, center, frame.viewport, edgeTransfer);
     if (!toDesktop || window->m_workspace != destination)
         return;
     forceRefresh = true;
@@ -2020,6 +2033,7 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
     std::optional<Vector2D> floatingCenter;
     CBox dropOrigin;
     std::optional<stage::EdgeViewport> originViewport;
+    bool edgeTransfer = false;
     float dropRadius = 0;
     // Keybind handling clears the native threshold flag after starting a drag.
     // With a zero threshold, motion never sets it again: dragging is immediate.
@@ -2050,10 +2064,11 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
                     const auto frame = dragHoverFrame();
                     dropOrigin = box(frame.window);
                     originViewport = frame.viewport;
+                    edgeTransfer = dragHover->edgeTransfer;
                     dropRadius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
                         numberSetting("decoration:rounding", 0), dropOrigin.w, dropOrigin.h);
                 }
-                const auto placement = dragHover && dragHover->window == window ? dragHover->to.middle() : dropOrigin.middle();
+                const auto placement = edgeTransfer ? dragHover->to.middle() : dropOrigin.middle();
                 const auto center = stage::mapPreviewCenter(
                     {band.x + geometry.padding, screen->base.y + cardTop(*screen, *index), geometry.cardWidth, geometry.cardHeight},
                     {area.x, area.y, area.w, area.h}, placement.x, placement.y);
@@ -2065,12 +2080,12 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
     if (destination || cancelDrop || !dragHover || !dragHover->returningToNative)
         clearDragHover();
     reinterpret_cast<DragEndFn>(dragHook->m_original)(drag);
-    finishDrop(destination, window, dropOrigin, dropRadius, dropPoint, grabOffset, floatingCenter, originViewport);
+    finishDrop(destination, window, dropOrigin, dropRadius, dropPoint, grabOffset, floatingCenter, originViewport, edgeTransfer);
 }
 
 void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PHLWINDOW& window, const CBox& dropOrigin,
                                      float dropRadius, const Vector2D& dropPoint, const Vector2D& grabOffset,
-                                     std::optional<Vector2D> floatingCenter, std::optional<stage::EdgeViewport> originViewport) {
+                                     std::optional<Vector2D> floatingCenter, std::optional<stage::EdgeViewport> originViewport, bool edgeTransfer) {
     // Use the compositor's normal move path after its drag controller has
     // restored tiling/floating and completed the pointer grab.
     const bool sameWorkspace = destination && window && window->m_workspace == destination;
@@ -2118,6 +2133,15 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
                 const auto card = std::ranges::find_if(screen->cards, [&](const auto& c) { return c.workspace == destination; });
                 if (card != screen->cards.end()) {
                     if (const auto target = window->layoutTarget(); target && target->floating()) {
+                        if (!edgeTransfer) {
+                            const auto area = desktop(*screen);
+                            const auto center = stage::mapPreviewCenter(
+                                {sidebar(*screen).x + screen->geometry.padding,
+                                 screen->base.y + cardTop(*screen, std::distance(screen->cards.begin(), card)),
+                                 screen->geometry.cardWidth, screen->geometry.cardHeight},
+                                {area.x, area.y, area.w, area.h}, dropOrigin.middle().x, dropOrigin.middle().y);
+                            floatingCenter = Vector2D{center.first, center.second};
+                        }
                         // Keep the mapped pointer placement after releasing frozen
                         // geometry; the animated source may now be outside its clip.
                         target->setPositionGlobal(CBox{floatingCenter.value_or(dropPoint) - target->position().size() / 2,
@@ -2137,10 +2161,13 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
                             screen->base.y + cardTop(*screen, std::distance(screen->cards.begin(), card))});
                         screen->flights.push_back({*preview, dropOrigin, target, dropRadius, static_cast<float>(stage::previewRounding(
                             numberSetting("plugin:hymission:stage_window_rounding", -1), numberSetting("decoration:rounding", 0), target.w, target.h)), true});
-                        screen->flights.back().fromViewport = originViewport.value_or(desktopViewport(*screen));
-                        screen->flights.back().toViewport = cardViewport(CBox{sidebar(*screen).x + screen->geometry.padding,
-                            screen->base.y + cardTop(*screen, std::distance(screen->cards.begin(), card)), screen->geometry.cardWidth, screen->geometry.cardHeight});
-                        screen->flights.back().edgeTransfer = true;
+                        if (edgeTransfer || scrollingTiled(window)) {
+                            screen->flights.back().fromViewport = edgeTransfer ? originViewport.value_or(desktopViewport(*screen)) :
+                                stage::edgeViewport(rect(dropOrigin), 0, 0);
+                            screen->flights.back().toViewport = cardViewport(CBox{sidebar(*screen).x + screen->geometry.padding,
+                                screen->base.y + cardTop(*screen, std::distance(screen->cards.begin(), card)), screen->geometry.cardWidth, screen->geometry.cardHeight});
+                        }
+                        screen->flights.back().edgeTransfer = edgeTransfer;
                         screen->flightStart = Clock::now();
                         screen->flightDuration = duration;
                         updatePreviewLiveness();
@@ -2383,7 +2410,9 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
             const auto clip = physical(CBox{bounds.x, bounds.y, bounds.width, bounds.height});
             const double radius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
                 numberSetting("decoration:rounding", 0), box.w, box.h);
-            if (stage::overviewEndpointVisible({frame.window, frame.viewport, frame.viewport.box}))
+            if (!dragHover->edgeTransfer)
+                drawPreview(window, monitor, box, clip, radius);
+            else if (stage::overviewEndpointVisible({frame.window, frame.viewport, frame.viewport.box}))
                 drawPreview(window, monitor, box, clip, radius, frame.viewport);
         }
     }
