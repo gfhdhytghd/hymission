@@ -218,6 +218,7 @@ struct StageController::Impl {
         CBox from;
         CBox to;
         Clock::time_point start;
+        bool returningToNative = false;
     };
     struct Card {
         PHLWORKSPACEREF workspace;
@@ -1675,6 +1676,10 @@ CBox StageController::Impl::dragHoverBox() const {
         return {};
     const double duration = numberSetting("animations:enabled", 1) ? std::clamp(setting("stage_transition_ms", 300), 0L, 2000L) : 0;
     const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - dragHover->start).count();
+    if (dragHover->returningToNative) {
+        const auto box = stage::transitionBox(rect(dragHover->from), rect(dragHover->to), duration > 0 ? elapsed / duration : 1);
+        return {box.x, box.y, box.width, box.height};
+    }
     const auto box = stage::transitionBoxWithin({dragHover->from.x, dragHover->from.y, dragHover->from.w, dragHover->from.h},
         {dragHover->to.x, dragHover->to.y, dragHover->to.w, dragHover->to.h}, duration > 0 ? elapsed / duration : 1,
         flightBounds(monitor));
@@ -1693,7 +1698,9 @@ void StageController::Impl::clearDragHover() {
 
 void StageController::Impl::updateDragHover() {
     const auto* drag = g_layoutManager->dragController().get();
-    const auto window = thumbnailDrag ? thumbnailDrag.lock() : drag && drag->mode() == MBIND_MOVE && drag->target() ? drag->target()->window() : nullptr;
+    const auto dragged = drag && drag->mode() == MBIND_MOVE && drag->target() ? drag->target()->window() : nullptr;
+    const auto window = thumbnailDrag ? thumbnailDrag.lock() : dragged ? dragged :
+        dragHover && dragHover->returningToNative ? dragHover->window.lock() : nullptr;
     const auto pointer = g_pInputManager->getMouseCoordsInternal();
     auto [screen, index] = hit(pointer);
     bool onDesktop = false;
@@ -1708,11 +1715,38 @@ void StageController::Impl::updateDragHover() {
         }
     }
     const bool inGap = thumbnailDrag && screen && !index && !onDesktop;
-    if (!enabled || blocked() || cancelDrop || !window || !window->m_isMapped || window->m_pinned || !screen || (!index && !onDesktop && !inGap) ||
-        (!thumbnailDrag && screen->cards[*index].workspace == window->m_workspace)) {
+    if (!enabled || blocked() || cancelDrop || !window || !window->m_isMapped || window->m_pinned) {
         clearDragHover();
         if (!enabled || blocked() || !window || !window->m_isMapped)
             thumbnailDrag.reset();
+        return;
+    }
+    if (!screen || (!index && !onDesktop && !inGap) ||
+        (!thumbnailDrag && (!dragged || (index && screen->cards[*index].workspace == window->m_workspace)))) {
+        // Keep ownership of the visual until it has grown back to the moving
+        // native window. Sampling first also preserves a mid-entry reversal.
+        auto* nativeScreen = screenFor(window->m_monitor.lock());
+        if (!thumbnailDrag && dragHover && dragHover->window == window && nativeScreen && interactive(*nativeScreen)) {
+            const auto from = dragHoverBox();
+            if (!dragHover->returningToNative) {
+                dragHover->from = from;
+                dragHover->start = Clock::now();
+                dragHover->returningToNative = true;
+            }
+            if (const auto oldMonitor = dragHover->monitor.lock())
+                g_pHyprRenderer->damageMonitor(oldMonitor);
+            dragHover->monitor = window->m_monitor;
+            dragHover->to = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() :
+                CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
+            const double duration = numberSetting("animations:enabled", 1) ? std::clamp(setting("stage_transition_ms", 300), 0L, 2000L) : 0;
+            if (std::chrono::duration<double, std::milli>(Clock::now() - dragHover->start).count() >= duration)
+                clearDragHover();
+            else {
+                damage(*nativeScreen);
+                armMotion();
+            }
+        } else
+            clearDragHover();
         return;
     }
     const auto monitor = screen->monitor.lock();
@@ -1733,7 +1767,7 @@ void StageController::Impl::updateDragHover() {
     const Vector2D size = native.size() * fit;
     const CBox target{std::clamp(pointer.x - size.x / 2, card.x, card.x + card.w - size.x),
         std::clamp(pointer.y - size.y / 2, card.y, card.y + card.h - size.y), size.x, size.y};
-    if (!dragHover || dragHover->window != window || dragHover->workspace != workspace || dragHover->syntheticId != syntheticId || dragHover->monitor != monitor) {
+    if (!dragHover || dragHover->returningToNative || dragHover->window != window || dragHover->workspace != workspace || dragHover->syntheticId != syntheticId || dragHover->monitor != monitor) {
         const CBox from = dragHover && dragHover->window == window ? dragHoverBox() : native;
         clearDragHover();
         dragHover = DragHover{window, monitor, workspace, syntheticId, from, target, Clock::now()};
@@ -2019,7 +2053,9 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
             }
         }
     }
-    clearDragHover();
+    updateDragHover();
+    if (destination || cancelDrop || !dragHover || !dragHover->returningToNative)
+        clearDragHover();
     reinterpret_cast<DragEndFn>(dragHook->m_original)(drag);
     finishDrop(destination, window, dropOrigin, dropRadius, dropPoint, grabOffset, floatingCenter);
 }
