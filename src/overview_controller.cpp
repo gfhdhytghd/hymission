@@ -7643,7 +7643,9 @@ bool OverviewController::activateHooks() {
             m_rendererDrawElementOriginal = nullptr;
         }
     }
-    if (m_renderLayerHook) {
+    // Stage may already have activated this hook to capture its wallpapers.
+    // Re-hooking an active source fails and must not remove that shared hook.
+    if (m_renderLayerHook && !m_renderLayerOriginal) {
         if (m_renderLayerHook->hook()) {
             m_renderLayerOriginal = reinterpret_cast<RenderLayerFn>(m_renderLayerHook->m_original);
         } else {
