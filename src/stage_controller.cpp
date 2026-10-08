@@ -2029,10 +2029,15 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
                                      std::optional<Vector2D> floatingCenter) {
     // Use the compositor's normal move path after its drag controller has
     // restored tiling/floating and completed the pointer grab.
-    if (destination && window && window->m_isMapped && window->m_workspace != destination &&
+    const bool sameWorkspace = destination && window && window->m_workspace == destination;
+    const auto layoutTarget = window ? window->layoutTarget() : nullptr;
+    // A thumbnail drag can reposition a floating window within its own card.
+    // Tiled windows still require a different workspace for a Stage drop.
+    if (destination && window && window->m_isMapped && (!sameWorkspace || (layoutTarget && layoutTarget->floating())) &&
         State::workspaceState()->query().id(destination->m_id).run() == destination && destination->m_monitor) {
         const auto monitor = destination->m_monitor.lock();
-        Desktop::globalWindowController()->moveWindowToWorkspace(window, destination);
+        if (!sameWorkspace)
+            Desktop::globalWindowController()->moveWindowToWorkspace(window, destination);
         if (const auto target = window->layoutTarget(); target && target->space() == destination->m_space) {
             if (target->floating()) {
                 const auto size = target->position().size();
@@ -2046,7 +2051,8 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
         }
         if (auto* screen = screenFor(monitor))
             correctFloating(monitor, desktop(*screen));
-        if (setting("stage_drop_follow", 0)) {
+        const bool followDrop = !sameWorkspace && setting("stage_drop_follow", 0);
+        if (followDrop) {
             activate(destination);
             Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_WORKSPACE_CHANGE);
         } else if (!destination->isVisible() && Desktop::focusState()->window() == window) {
@@ -2058,7 +2064,7 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
             Desktop::focusState()->fullWindowFocus(focus, Desktop::FOCUS_REASON_WORKSPACE_CHANGE);
         }
         const double duration = std::clamp(setting("stage_transition_ms", 300), 0L, 2000L);
-        if (!setting("stage_drop_follow", 0) && !destination->isVisible() && duration > 0 && numberSetting("animations:enabled", 1) && !blocked()) {
+        if (!followDrop && !destination->isVisible() && duration > 0 && numberSetting("animations:enabled", 1) && !blocked()) {
             // Resolve the destination layout and sidebar before constructing the
             // flight. The source was saved before native dragEnd restored tiling.
             lastDragged.reset();
