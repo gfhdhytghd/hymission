@@ -61,6 +61,59 @@ int main() {
     ok &= expect(rightClipped.right == mirrored.right && edgeViewportForWindow(mirrored, {800, 50, 200, 300}).right == 0,
         "crossing classification mirrors with the sidebar");
     const auto cardView = edgeViewport({20, 300, 160, 100}, 16, 16);
+    // Drag transfers use two stationary clips, with no visible scaling between them.
+    const auto sameRect = [](const hymission::Rect& a, const hymission::Rect& b) {
+        return near(a.x, b.x) && near(a.y, b.y) && near(a.width, b.width) && near(a.height, b.height);
+    };
+    const auto visible = [](const ScrollingFlightFrame& f) {
+        const auto& w = f.window;
+        const auto& v = f.viewport.box;
+        return w.x < v.x + v.width && w.x + w.width > v.x && w.y < v.y + v.height && w.y + w.height > v.y;
+    };
+    for (const bool right : {false, true}) {
+        const auto desktop = edgeViewport({200, 50, 800, 500}, right ? 0 : 64, right ? 64 : 0);
+        const auto card = edgeViewport({right ? 1020.0 : 20.0, 300, 160, 100}, 16, 16);
+        const hymission::Rect large{350, 150, 300, 200};
+        const hymission::Rect small{card.box.x + 30, 320, 60, 40};
+        for (const bool returning : {false, true}) {
+            const auto from = returning ? small : large;
+            const auto to = returning ? large : small;
+            const auto source = returning ? card : desktop;
+            const auto destination = returning ? desktop : card;
+            ok &= expect(sameRect(edgeTransferFrame(from, to, source, destination, 0).window, from), "drag starts at the exact source geometry");
+            ok &= expect(sameRect(edgeTransferFrame(from, to, source, destination, 1).window, to), "drag finishes at the exact destination geometry");
+            ok &= expect(!visible(edgeTransferFrame(from, to, source, destination, 0.5)), "drag changes scale only while fully outside the clip");
+            for (int step = 0; step <= 100; ++step) {
+                const double p = step / 100.0;
+                const auto frame = edgeTransferFrame(from, to, source, destination, p);
+                const auto& expected = p < 0.5 ? source : destination;
+                const auto& size = p < 0.5 ? from : to;
+                ok &= expect(sameRect(frame.viewport.box, expected.box) && near(frame.viewport.left, expected.left) &&
+                    near(frame.viewport.right, expected.right), "drag clipping and edge effects stay fixed in their own region");
+                ok &= expect(near(frame.window.width, size.width) && near(frame.window.height, size.height), "each drag phase translates without resizing");
+                const auto reverse = edgeTransferFrame(frame.window, from, frame.viewport, source, 0);
+                ok &= expect(sameRect(reverse.window, frame.window) && sameRect(reverse.viewport.box, frame.viewport.box), "mid-drag reversal retains the sampled geometry and clip");
+            }
+            const auto exit = edgeTransferFrame(from, to, source, destination, 0.25);
+            const auto enter = edgeTransferFrame(from, to, source, destination, 0.75);
+            const bool toRight = destination.box.centerX() > source.box.centerX();
+            ok &= expect(toRight ? exit.window.x > from.x && enter.window.x < to.x : exit.window.x < from.x && enter.window.x > to.x,
+                "both sidebar sides exit and enter through the facing edges");
+        }
+    }
+    for (int step = 0; step <= 100; ++step) {
+        const auto hidden = edgeTransferFrame({1100, 100, 200, 100}, {200, 320, 40, 20}, soft, cardView, step / 100.0);
+        ok &= expect(!visible(hidden), "drag transfer never exposes hidden scrolling columns");
+    }
+    const auto sameCard = edgeTransferFrame({30, 310, 30, 30}, {100, 340, 30, 30}, cardView, cardView, 0.5);
+    ok &= expect(visible(sameCard) && sameRect(sameCard.viewport.box, cardView.box), "settling within one card does not exit it again");
+    const auto lowerCard = edgeViewport({20, 450, 160, 100}, 0, 0);
+    const auto cardExit = edgeTransferFrame({30, 310, 30, 30}, {30, 460, 30, 30}, cardView, lowerCard, 0.25);
+    const auto cardEnter = edgeTransferFrame({30, 310, 30, 30}, {30, 460, 30, 30}, cardView, lowerCard, 0.75);
+    ok &= expect(cardExit.window.y > 310 && cardEnter.window.y < 460, "vertical card transfers use the facing top and bottom edges");
+    const auto hardTransfer = edgeTransferFrame({350, 150, 300, 200}, {50, 320, 60, 40}, hard, edgeViewport(cardView.box, 0, 0), 0.75);
+    ok &= expect(near(hardTransfer.viewport.left, 0) && near(hardTransfer.viewport.right, 0) && sameRect(hardTransfer.viewport.box, cardView.box),
+        "zero blur width preserves the stationary hard clip during drag transfer");
     for (const double offset : {-1.5, -0.3, 0.0, 0.6, 1.1}) {
         const hymission::Rect from{viewportBox.x + offset * viewportBox.width, viewportBox.y + 100, 200, 100};
         const hymission::Rect to{cardView.box.x + offset * cardView.box.width, cardView.box.y + 20, 40, 20};

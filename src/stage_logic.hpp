@@ -115,6 +115,9 @@ struct ScrollingFlightFrame {
 };
 ScrollingFlightFrame scrollingFlightFrame(const Rect& from, const Rect& to, const EdgeViewport& fromViewport,
     const EdgeViewport& toViewport, double progress);
+// Exit the source clip before entering the destination clip. Size changes while hidden.
+ScrollingFlightFrame edgeTransferFrame(const Rect& from, const Rect& to, const EdgeViewport& fromViewport,
+    const EdgeViewport& toViewport, double progress);
 
 // Keep this policy independent of compositor enum values for state tests.
 enum class CoverMode { None, Maximized, Fullscreen };

@@ -266,11 +266,15 @@ original mouse grab offset. Dropping on the current workspace does not
 issue a second move. Escape cancels sidebar delivery; no resize or application
 data drag is interpreted as a window move.
 
-Dragging a window over a destination card immediately shrinks its live visual
-into a preview under the pointer, using `stage_transition_ms` and the normal
-flight boundary/rounding rules. The native drag and workspace remain unchanged
-until release. Leaving the card restores the normal dragged window; moving to
-another card retargets from the current preview. Escape cancels the preview/drop.
+Dragging a window over a destination card slides its live visual out through
+the source region's facing edge, then in through the destination region's facing
+edge. Each half keeps that region's clip and window size fixed; the size changes
+while hidden between the halves. The whole transfer uses `stage_transition_ms`.
+Leaving a card uses the same two-phase return to the native dragged window.
+Moving within one card only adjusts placement, while reversing or moving to
+another card starts from the current visual and clip. The native drag and
+workspace remain unchanged until release. Escape cancels the preview/drop.
+Ordinary workspace-switch animations are unchanged.
 With the default `stage_drop_follow = 0`, release continues from that preview
 into the window's actual destination slot, suppressing the card copy until the
 flight completes. Disabled animations update immediately; follow mode uses the

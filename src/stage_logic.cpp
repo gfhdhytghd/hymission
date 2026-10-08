@@ -310,4 +310,31 @@ ScrollingFlightFrame scrollingFlightFrame(const Rect& from, const Rect& to, cons
              lerp(from.width / a.width, to.width / b.width) * view.width,
              lerp(from.height / a.height, to.height / b.height) * view.height}, viewport};
 }
+ScrollingFlightFrame edgeTransferFrame(const Rect& from, const Rect& to, const EdgeViewport& fromViewport,
+    const EdgeViewport& toViewport, double progress) {
+    const double p = std::clamp(sane(progress, 1), 0.0, 1.0);
+    const auto& a = fromViewport.box;
+    const auto& b = toViewport.box;
+    if (std::abs(a.x - b.x) < 0.01 && std::abs(a.y - b.y) < 0.01 &&
+        std::abs(a.width - b.width) < 0.01 && std::abs(a.height - b.height) < 0.01)
+        return {transitionBox(from, to, p), toViewport};
+
+    const bool entering = p >= 0.5;
+    const auto& viewport = entering ? toViewport : fromViewport;
+    const auto& view = viewport.box;
+    const auto& endpoint = entering ? to : from;
+    // Never sweep an already hidden scrolling column across the visible region.
+    if (endpoint.x + endpoint.width <= view.x || endpoint.x >= view.x + view.width ||
+        endpoint.y + endpoint.height <= view.y || endpoint.y >= view.y + view.height)
+        return {endpoint, viewport};
+    auto hidden = endpoint;
+    if (std::abs(a.centerX() - b.centerX()) > 0.01) {
+        const bool left = entering ? a.centerX() < b.centerX() : b.centerX() < a.centerX();
+        hidden.x = left ? view.x - endpoint.width : view.x + view.width;
+    } else {
+        const bool top = entering ? a.centerY() < b.centerY() : b.centerY() < a.centerY();
+        hidden.y = top ? view.y - endpoint.height : view.y + view.height;
+    }
+    return {entering ? transitionBox(hidden, endpoint, (p - 0.5) * 2) : transitionBox(endpoint, hidden, p * 2), viewport};
+}
 } // namespace hymission::stage
