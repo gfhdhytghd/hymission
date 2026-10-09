@@ -297,6 +297,7 @@ struct StageController::Impl {
 
     using RecheckFn = void (*)(Layout::CSpace*);
     using DragEndFn = void (*)(Layout::Supplementary::CDragStateController*);
+    using WindowFocusFn = void (*)(Desktop::CFocusState*, PHLWINDOW, Desktop::eFocusReason, SP<CWLSurfaceResource>);
     using WindowAtFn = PHLWINDOW (*)(const Desktop::CViewHitTester*, const Vector2D&, uint16_t, PHLWINDOW);
     using RoundingFn = float (*)(Desktop::View::CWindow*);
     using RenderWindowFn = void (*)(Render::IHyprRenderer*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, Render::eRenderPassMode, bool, bool);
@@ -330,6 +331,9 @@ struct StageController::Impl {
     nlohmann::json dropTrace = nlohmann::json::array();
     Clock::time_point dropTraceStart;
     std::string dropPhase;
+    PHLWINDOWREF silentDropWindow;
+    PHLWORKSPACEREF silentDropSource;
+    Clock::time_point silentDropStart;
     uint64_t swipeBegins = 0;
     uint64_t swipeUpdates = 0;
     uint64_t swipeEnds = 0;
@@ -337,6 +341,7 @@ struct StageController::Impl {
     std::vector<CHyprSignalListener> listeners;
     CFunctionHook* areaHook = nullptr;
     CFunctionHook* dragHook = nullptr;
+    CFunctionHook* windowFocusHook = nullptr;
     CFunctionHook* hitHook = nullptr;
     CFunctionHook* roundingHook = nullptr;
     CFunctionHook* renderWindowHook = nullptr;
@@ -498,6 +503,23 @@ struct StageController::Impl {
         self->afterRecheck(space);
     }
     static void dragThunk(Layout::Supplementary::CDragStateController* drag) { instance->endDrag(drag); }
+    static void windowFocusThunk(Desktop::CFocusState* focus, PHLWINDOW window, Desktop::eFocusReason reason, SP<CWLSurfaceResource> surface) {
+        auto* self = instance;
+        const bool explicitFocus = reason == Desktop::FOCUS_REASON_KEYBIND || reason == Desktop::FOCUS_REASON_DISPATCH_FOCUSWINDOW ||
+            reason == Desktop::FOCUS_REASON_DISPATCH_MOVEWINDOWINTOGROUP ||
+            reason == Desktop::FOCUS_REASON_CLICK || reason == Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_HARD ||
+            reason == Desktop::FOCUS_REASON_WORKSPACE_CHANGE || reason == Desktop::FOCUS_REASON_TOGGLE_SPECIAL_WORKSPACE;
+        const auto source = self->silentDropSource.lock();
+        if (!explicitFocus && self->enabled && !self->blocked() && window && self->silentDropWindow == window && source && source->isVisible() &&
+            window->m_workspace && !window->m_workspace->isVisible() && !setting("stage_drop_follow", 0) &&
+            Clock::now() - self->silentDropStart < std::chrono::seconds(2)) {
+            if (self->dropTrace.size() < 24)
+                self->dropTrace.push_back({{"event", "suppressed_drop_focus"}, {"reason", static_cast<int>(reason)},
+                    {"destination", window->m_workspace->m_id}});
+            return;
+        }
+        reinterpret_cast<WindowFocusFn>(self->windowFocusHook->m_original)(focus, std::move(window), reason, std::move(surface));
+    }
     static void swipeBeginThunk(CUnifiedWorkspaceSwipeGesture* gesture) {
         auto* self = instance;
         const auto monitor = Desktop::focusState()->monitor();
@@ -1053,6 +1075,7 @@ bool StageController::Impl::installHooks() {
     };
     const auto area = find("recheckWorkArea", "Layout::CSpace::recheckWorkArea()");
     const auto drag = find("dragEnd", "Layout::Supplementary::CDragStateController::dragEnd()");
+    const auto windowFocus = find("rawWindowFocus", "Desktop::CFocusState::rawWindowFocus(");
     const auto hit = find("windowAt", "Desktop::CViewHitTester::windowAt(");
     const auto rounding = find("rounding", "Desktop::View::CWindow::rounding()");
     const auto surfaceBox = find("getTexBox", "CSurfacePassElement::getTexBox()");
@@ -1064,9 +1087,10 @@ bool StageController::Impl::installHooks() {
     const auto changeWorkspace = find("changeWorkspace", "Monitor::CMonitor::changeWorkspace(Hyprutils::Memory::CSharedPointer<CWorkspace> const&");
     renderWindow = reinterpret_cast<RenderWindowFn>(find("renderWindow", "IHyprRenderer::renderWindow("));
     shouldBlur = reinterpret_cast<ShouldBlurFn>(find("shouldBlur", "IHyprRenderer::shouldBlur(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>)"));
-    if (area && drag && hit && rounding && surfaceBox && surfaceVisible && surfaceUV && addPass && fadeouts && workspaceAnimation && changeWorkspace && renderWindow && shouldBlur && g_pHyprOpenGL) {
+    if (area && drag && windowFocus && hit && rounding && surfaceBox && surfaceVisible && surfaceUV && addPass && fadeouts && workspaceAnimation && changeWorkspace && renderWindow && shouldBlur && g_pHyprOpenGL) {
         areaHook = HyprlandAPI::createFunctionHook(handle, area, reinterpret_cast<void*>(&recheckThunk));
         dragHook = HyprlandAPI::createFunctionHook(handle, drag, reinterpret_cast<void*>(&dragThunk));
+        windowFocusHook = HyprlandAPI::createFunctionHook(handle, windowFocus, reinterpret_cast<void*>(&windowFocusThunk));
         hitHook = HyprlandAPI::createFunctionHook(handle, hit, reinterpret_cast<void*>(&windowAtThunk));
         roundingHook = HyprlandAPI::createFunctionHook(handle, rounding, reinterpret_cast<void*>(&roundingThunk));
         renderWindowHook = HyprlandAPI::createFunctionHook(handle, reinterpret_cast<void*>(renderWindow), reinterpret_cast<void*>(&renderWindowThunk));
@@ -1077,7 +1101,7 @@ bool StageController::Impl::installHooks() {
         fadeoutsHook = HyprlandAPI::createFunctionHook(handle, fadeouts, reinterpret_cast<void*>(&fadeoutsThunk));
         workspaceAnimationHook = HyprlandAPI::createFunctionHook(handle, workspaceAnimation, reinterpret_cast<void*>(&workspaceAnimationThunk));
         changeWorkspaceHook = HyprlandAPI::createFunctionHook(handle, changeWorkspace, reinterpret_cast<void*>(&changeWorkspaceThunk));
-        hooksReady = attach(areaHook, "work area") && attach(dragHook, "drag end") && attach(hitHook, "window hit test") &&
+        hooksReady = attach(areaHook, "work area") && attach(dragHook, "drag end") && attach(windowFocusHook, "drop focus") && attach(hitHook, "window hit test") &&
             attach(roundingHook, "rounding") && attach(renderWindowHook, "window rendering") &&
             (overviewRendering || (attach(surfaceBoxHook, "surface box") && attach(surfaceVisibleHook, "surface visible region") && attach(surfaceUVHook, "surface UV"))) &&
             attach(addPassHook, "decoration pass") && attach(fadeoutsHook, "fading window clipping") &&
@@ -1112,7 +1136,7 @@ bool StageController::Impl::installHooks() {
 }
 
 void StageController::Impl::releaseHooks() {
-    for (auto** hook : {&areaHook, &dragHook, &hitHook, &roundingHook, &renderWindowHook, &surfaceBoxHook, &surfaceVisibleHook, &surfaceUVHook, &addPassHook,
+    for (auto** hook : {&areaHook, &dragHook, &windowFocusHook, &hitHook, &roundingHook, &renderWindowHook, &surfaceBoxHook, &surfaceVisibleHook, &surfaceUVHook, &addPassHook,
                         &workspaceAnimationHook, &changeWorkspaceHook, &blurFramebufferHook, &fadeoutsHook}) {
         if (!*hook)
             continue;
@@ -1159,6 +1183,8 @@ void StageController::Impl::initialize() {
             swipe->cancelled = event.cancelled;
     }));
     listeners.emplace_back(events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo&) {
+        if (event.state == WL_KEYBOARD_KEY_STATE_PRESSED)
+            silentDropWindow.reset();
         const auto* drag = g_layoutManager->dragController().get();
         if (event.keycode == KEY_ESC && event.state == WL_KEYBOARD_KEY_STATE_PRESSED && thumbnailDrag) {
             thumbnailDrag.reset();
@@ -1749,7 +1775,9 @@ void StageController::Impl::updateDragHover() {
             }
         }
     }
-    const bool inGap = thumbnailDrag && screen && !index && !onDesktop;
+    // Inter-card gaps remain inside Stage, including for native desktop drags.
+    // Otherwise card -> gap -> card becomes two desktop edge transfers.
+    const bool inGap = screen && !index && !onDesktop;
     if (!enabled || blocked() || cancelDrop || !window || !window->m_isMapped || window->m_pinned) {
         clearDragHover();
         if (!enabled || blocked() || !window || !window->m_isMapped)
@@ -1826,6 +1854,8 @@ void StageController::Impl::updateDragHover() {
 }
 
 void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
+    if (event.state == WL_POINTER_BUTTON_STATE_PRESSED)
+        silentDropWindow.reset();
     if (rendering || (inputSuppressed && inputSuppressed()))
         return;
     if (thumbnailDrag && event.button == BTN_LEFT && event.state == WL_POINTER_BUTTON_STATE_RELEASED) {
@@ -1942,6 +1972,7 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
 }
 
 void StageController::Impl::axis(const IPointer::SAxisEvent& event, Event::SCallbackInfo& info) {
+    silentDropWindow.reset();
     if (info.cancelled)
         return;
     const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal());
@@ -2012,6 +2043,7 @@ void StageController::Impl::finishThumbnailDrag() {
 }
 
 void StageController::Impl::activate(const PHLWORKSPACE& workspace) {
+    silentDropWindow.reset();
     if (!workspace || workspace->m_isSpecialWorkspace)
         return;
     const auto monitor = workspace->m_monitor.lock();
@@ -2128,6 +2160,13 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
     if (destination && window && window->m_isMapped && (!sameWorkspace || (layoutTarget && layoutTarget->floating())) &&
         State::workspaceState()->query().id(destination->m_id).run() == destination && destination->m_monitor) {
         const auto monitor = destination->m_monitor.lock();
+        // A later client/FFM focus callback must not undo a silent Stage drop.
+        silentDropWindow.reset();
+        if (!setting("stage_drop_follow", 0) && !destination->isVisible()) {
+            silentDropWindow = window;
+            silentDropSource = monitor->m_activeWorkspace;
+            silentDropStart = Clock::now();
+        }
         traceDrop("move_window", window, destination);
         if (!sameWorkspace)
             Desktop::globalWindowController()->moveWindowToWorkspace(window, destination);

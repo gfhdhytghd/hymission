@@ -274,7 +274,9 @@ Leaving that card uses the same two-phase return to the native dragged window.
 Drags picked up inside Stage retain their original direct animation throughout,
 including cross-card movement and a temporary excursion over the desktop.
 Moving within Stage, including between cards, retains the original direct
-preview movement and drop-settling animation. Reversing a desktop/card transfer
+preview movement and drop-settling animation. Strip padding and inter-card gaps
+also count as Stage during native desktop drags: desktop -> card A -> gap ->
+card B does not restart a desktop exit/entry. Reversing a desktop/card transfer
 starts from the current visual and clip. The native drag and
 workspace remain unchanged until release. Escape cancels the preview/drop.
 Ordinary workspace-switch animations are unchanged.
@@ -292,11 +294,18 @@ into the window's actual destination slot, suppressing the card copy until the
 flight completes. Disabled animations update immediately; follow mode uses the
 normal workspace-switch animation after release. `drag_hover_active` exposes
 the hover-preview state.
+For a silent drop into a hidden workspace, automatic focus requests for that
+specific window are ignored for up to two seconds while the original workspace
+remains visible. A new key press, pointer press, scroll, or explicit window/
+workspace selection ends or bypasses this protection; `stage_drop_follow = 1`
+also bypasses it. This covers delayed focus requests after the drop handler ends.
 `last_drop_trace` records the latest release's native drag-end, move, placement
 and focus phases, along with workspace-change requests during the release and
 the following two seconds. It contains workspace IDs and policy flags, not
 window titles, and can be read through `hymission-stage-state` for unexpected
 follow behavior.
+Suppressed requests appear as `suppressed_drop_focus` with the compositor's
+numeric focus reason.
 
 Win/Super + left-drag on a window inside a sidebar card picks the topmost
 preview under the pointer. Dragging into the current desktop enlarges it;
