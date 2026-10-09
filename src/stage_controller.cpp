@@ -1931,9 +1931,23 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
                         break;
                     }
                 }
+                // Selecting a window overrides a saved canvas position, including
+                // the activation guard's deferred restore. Blank-card activation
+                // still preserves the camera exactly as scrolled.
+                if (clicked)
+                    std::erase_if(canvasScrolls, [&](const auto& saved) { return saved.workspace == workspace; });
                 activate(workspace);
-                if (clicked && clicked->m_isMapped && !clicked->isHidden() && clicked->m_workspace == workspace)
-                    Desktop::focusState()->fullWindowFocus(clicked, Desktop::FOCUS_REASON_WORKSPACE_CHANGE);
+                if (clicked && clicked->m_isMapped && !clicked->isHidden() && clicked->m_workspace == workspace) {
+                    const bool alreadyFocused = Desktop::focusState()->window() == clicked;
+                    Desktop::focusState()->fullWindowFocus(clicked, Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_HARD);
+                    // Native focus is a no-op for an already focused window, but
+                    // its column can still be outside the newly scrolled view.
+                    if (alreadyFocused && Desktop::focusState()->window() == clicked && scrollingTiled(clicked)) {
+                        auto* scrolling = dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(workspace->m_space->algorithm()->tiledAlgo().get());
+                        if (scrolling)
+                            scrolling->focusOnInput(clicked->layoutTarget(), Layout::Tiled::CScrollingAlgorithm::INPUT_MODE_HARD);
+                    }
+                }
             } else if (pressedSynthetic && card.syntheticId == pressedSynthetic && !card.workspace.lock()) {
                 if (const auto monitor = screen->monitor.lock())
                     activate(ensureWorkspace(monitor, pressedSynthetic));

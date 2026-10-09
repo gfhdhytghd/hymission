@@ -171,7 +171,10 @@ pointer leaves the card. The gesture writes the real scrolling controller's
 camera offset. On subsequent activation, Stage preserves that offset through
 native focus/layout recalculation and restores focus to a window in the scrolled
 viewport. This protection ends after activation; explicit window navigation can
-move the camera normally. Empty cards, sidebar gaps and non-scrolling layouts do
+move the camera normally. Clicking a specific window preview overrides the saved
+camera position and scrolls that window into view, even if it was already focused.
+Clicking card background or switching by workspace gesture retains the position.
+Empty cards, sidebar gaps and non-scrolling layouts do
 not pass the gesture through to the active desktop. Outside Stage, desktop and
 Overview canvas scrolling retain their existing behavior. Two-finger/wheel axis
 input still scrolls the sidebar's card list.
