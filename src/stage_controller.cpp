@@ -211,6 +211,7 @@ struct StageController::Impl {
         std::optional<stage::EdgeViewport> toViewport;
         bool edgeTransfer = false;
         bool desktopDecorations = false;
+        bool nativeDestination = false;
     };
     struct DragHover {
         PHLWINDOWREF window;
@@ -2618,6 +2619,12 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
             const double toRadius = workspace == activeWorkspace ? nativeRadius : radius(*to);
             screen.flights.push_back({std::move(preview), *from, *to, static_cast<float>(fromRadius), static_cast<float>(toRadius)});
             auto& flight = screen.flights.back();
+            flight.nativeDestination = window->m_isFloating && workspace == activeWorkspace;
+            if (flight.nativeDestination && old == previousFlights.end()) {
+                // Preserve the sidebar's bounded starting frame, but never fit
+                // the real desktop destination. Interrupted flights are already sampled.
+                flight.from = box(stage::transitionBoxWithin(rect(flight.from), rect(flight.from), 0, flightBounds(monitor)));
+            }
             if (scrollingTiled(window)) {
                 const auto miniatureView = [&](const std::vector<Card>& cards, const stage::Geometry& geometry, double scroll, bool right) -> std::optional<stage::EdgeViewport> {
                     const auto area = stage::desktopArea(rect(screen.base), geometry, right);
@@ -2677,7 +2684,7 @@ std::pair<Rect, std::optional<stage::EdgeViewport>> StageController::Impl::fligh
             stage::scrollingFlightFrame(rect(flight.from), rect(flight.to), *flight.fromViewport, *flight.toViewport, progress);
         return {frame.window, frame.viewport};
     }
-    return {flight.offscreen || flight.desktopDecorations ? stage::transitionBox(rect(flight.from), rect(flight.to), progress) :
+    return {flight.offscreen || flight.desktopDecorations || flight.nativeDestination ? stage::transitionBox(rect(flight.from), rect(flight.to), progress) :
         stage::transitionBoxWithin(rect(flight.from), rect(flight.to), progress, flightBounds(monitor)), std::nullopt};
 }
 

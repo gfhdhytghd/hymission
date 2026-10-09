@@ -425,6 +425,21 @@ int main() {
     }
     const auto oversized = transitionBoxWithin({-4000, -1000, 6000, 4000}, flightDesktop, 0, flightOutput);
     ok &= expect(near(oversized.width / oversized.height, 1.5), "oversized floating flight fits the output without distortion");
+    // Restore from the bounded sidebar frame to the actual native position,
+    // including negative coordinates and destinations larger than the output.
+    const auto restoreStart = transitionBoxWithin(rightCard, rightCard, 0, gapBounds);
+    for (const hymission::Rect goal : {hymission::Rect{-3300, -90, 800, 600}, hymission::Rect{-200, 1400, 900, 700},
+                                      hymission::Rect{-3500, -200, 4000, 2200}}) {
+        const auto finalFrame = transitionBox(restoreStart, goal, 1);
+        const auto nearEnd = transitionBox(restoreStart, goal, 0.999);
+        ok &= expect(sameRect(finalFrame, goal), "floating restore hands off at the native target instead of a fitted edge");
+        ok &= expect(std::abs(nearEnd.x - goal.x) < 0.001 && std::abs(nearEnd.y - goal.y) < 0.001 &&
+            std::abs(nearEnd.width - goal.width) < 0.001 && std::abs(nearEnd.height - goal.height) < 0.001,
+            "floating restore approaches its offscreen target continuously before handoff");
+        const auto sample = transitionBox(restoreStart, goal, 0.8);
+        const auto restart = transitionBox(sample, goal, 0);
+        ok &= expect(sameRect(sample, restart), "retargeting an offscreen floating restore does not fit it back inside the output");
+    }
     const hymission::Rect dropCard{-1900, 180, 200, 100}, dropDesktop{-1650, 40, 1600, 800};
     const auto drop = mapDropPoint(dropCard, dropDesktop, -1850, 255);
     for (const auto& card : {dropCard, hymission::Rect{-1900, 180, 200, 150}}) {

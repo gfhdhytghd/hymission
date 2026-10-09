@@ -138,6 +138,11 @@ Growing endpoints are fitted inside the output inset by each side's
 that boundary. Shrinking frames are constrained individually. Oversized windows
 are fitted uniformly. Decorations use the same inset clip. Swipe release and
 rapid retargeting share these rules.
+Floating windows returning from a card are an exception: only their initial
+sidebar frame is fitted. They then interpolate directly to the native desktop
+position and size, including partially offscreen targets. A sampled interrupted
+restore is not fitted again, so neither completion nor retargeting jumps to or
+from the output edge. Sidebar destinations retain their existing constraints.
 `stage_transition_ms` defaults to 300 ms (0 disables, maximum
 2000 ms), and disabling Hyprland animations also disables these flights.
 Rapid switches retarget from the currently displayed boxes and rounding.
