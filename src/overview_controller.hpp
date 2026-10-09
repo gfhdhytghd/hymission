@@ -402,6 +402,8 @@ class OverviewController {
         std::size_t               debugSamples = 0;
         bool                      skipNextUpdate = false;
         bool                      restoreScrollingFollowFocus = false;
+        bool                      stageTarget = false;
+        PHLWORKSPACEREF            stageWorkspace;
     };
 
     struct WorkspaceNameBackup {
@@ -580,6 +582,7 @@ class OverviewController {
     [[nodiscard]] bool         isScrollingWorkspace(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] bool         hasScrollingWorkspace() const;
     [[nodiscard]] GestureAxis  gestureAxisForDirection(eTrackpadGestureDirection direction) const;
+    [[nodiscard]] PHLWORKSPACE scrollGestureWorkspace() const;
     [[nodiscard]] ScrollingLayoutDirection scrollingLayoutDirection() const;
     [[nodiscard]] bool         canScrollActiveLayoutWithGesture(eTrackpadGestureDirection direction) const;
     [[nodiscard]] double       scrollLayoutPixelsPerGestureDelta(ScrollingLayoutDirection direction) const;

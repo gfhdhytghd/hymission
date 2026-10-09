@@ -163,6 +163,15 @@ Session lock, overview, fullscreen, output geometry changes and config reload
 cancel flights. Flight metadata is released when the motion timer finishes or cancels.
 The real client geometry and pointer coordinate system remain native throughout.
 
+The `hymission:scroll, layout` trackpad gesture targets the Stage card under the
+pointer when it begins. It scrolls that workspace's scrolling-layout canvas
+without activating the workspace or changing focus, using its layout direction
+and monitor size. The target stays fixed until the gesture ends, even if the
+pointer leaves the card. Empty cards, sidebar gaps and non-scrolling layouts do
+not pass the gesture through to the active desktop. Outside Stage, desktop and
+Overview canvas scrolling retain their existing behavior. Two-finger/wheel axis
+input still scrolls the sidebar's card list.
+
 Workspace swipes use the same window flights and sidebar transition.
 The registered workspace trackpad gesture sends begin/update/end directly to
 Stage, including inversion, scaling and cancellation. Begin only initializes;

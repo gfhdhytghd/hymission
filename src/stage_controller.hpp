@@ -37,6 +37,9 @@ class StageController {
     static void setOverviewRendering(bool active);
     // Overview owns the shared hooks while Stage draws its sliding previews.
     static bool renderingPreview();
+    // An engaged null workspace means sidebar chrome or an empty card: consume
+    // the gesture without falling through to the desktop layout.
+    static std::optional<PHLWORKSPACE> hoveredScrollWorkspace();
     // Scope a native shadow cutout radius without changing window rules.
     static void withWindowRounding(const PHLWINDOW& window, float radius, const std::function<void()>& draw);
     static CBox transformPreviewBox(CBox box);

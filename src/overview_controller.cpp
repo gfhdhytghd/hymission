@@ -5354,10 +5354,16 @@ GestureAxis OverviewController::gestureAxisForDirection(eTrackpadGestureDirectio
     }
 }
 
+PHLWORKSPACE OverviewController::scrollGestureWorkspace() const {
+    // Keep the Stage target pinned for the entire gesture. If it disappears,
+    // do not accidentally redirect the remaining deltas to the active desktop.
+    return m_scrollGestureSession.stageTarget ? m_scrollGestureSession.stageWorkspace.lock() : activeLayoutWorkspace();
+}
+
 ScrollingLayoutDirection OverviewController::scrollingLayoutDirection() const {
     std::string direction = getConfigString(m_handle, "scrolling:direction", "right");
 
-    if (const auto workspace = activeLayoutWorkspace(); workspace) {
+    if (const auto workspace = scrollGestureWorkspace(); workspace) {
         const auto workspaceRule = Config::workspaceRuleMgr()->getWorkspaceRuleFor(workspace).value_or(Config::CWorkspaceRule{});
         if (workspaceRule.m_layoutopts.contains("direction") && !workspaceRule.m_layoutopts.at("direction").empty())
             direction = workspaceRule.m_layoutopts.at("direction");
@@ -5367,8 +5373,8 @@ ScrollingLayoutDirection OverviewController::scrollingLayoutDirection() const {
 }
 
 bool OverviewController::canScrollActiveLayoutWithGesture(eTrackpadGestureDirection direction) const {
-    const auto workspace = activeLayoutWorkspace();
-    if (workspace && Fullscreen::controller()->hasFullscreen(workspace))
+    const auto workspace = scrollGestureWorkspace();
+    if (!workspace || Fullscreen::controller()->hasFullscreen(workspace))
         return false;
 
     return scrollingLayoutGestureAxisMatches(scrollingLayoutDirection(), gestureAxisForDirection(direction));
@@ -5380,7 +5386,9 @@ double OverviewController::scrollLayoutPixelsPerGestureDelta(ScrollingLayoutDire
         return std::max(0.0, niriScrollPixelsPerDelta());
 
     double viewportLength = swipeDistance;
-    if (const auto monitor = Desktop::focusState()->monitor(); monitor)
+    const auto workspace = scrollGestureWorkspace();
+    const auto monitor = workspace ? workspace->m_monitor.lock() : Desktop::focusState()->monitor();
+    if (monitor)
         viewportLength = axisForScrollingLayoutDirection(direction) == GestureAxis::Vertical ? static_cast<double>(monitor->m_size.y) :
                                                                                                static_cast<double>(monitor->m_size.x);
 
@@ -5422,7 +5430,7 @@ bool OverviewController::scrollActiveLayoutByGestureDelta(const IPointer::SSwipe
         return false;
     }
 
-    const auto workspace = activeLayoutWorkspace();
+    const auto workspace = scrollGestureWorkspace();
     auto* const scrolling = scrollingAlgorithmForWorkspace(workspace);
     if (!scrolling || !scrolling->m_scrollingData || !scrolling->m_scrollingData->controller) {
         if (debugLogsEnabled()) {
@@ -6392,6 +6400,10 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
 
 bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction, const IPointer::SSwipeUpdateEvent& event, float deltaScale) {
     m_scrollGestureSession = {};
+    const auto stageWorkspace = isVisible() ? std::optional<PHLWORKSPACE>{} : StageController::hoveredScrollWorkspace();
+    m_scrollGestureSession.stageTarget = stageWorkspace.has_value();
+    if (stageWorkspace)
+        m_scrollGestureSession.stageWorkspace = *stageWorkspace;
 
     const auto phaseName = [this]() {
         switch (m_state.phase) {
@@ -6406,7 +6418,7 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
 
     if (debugLogsEnabled()) {
         const auto layoutDirection = scrollingLayoutDirection();
-        const auto workspace = activeLayoutWorkspace();
+        const auto workspace = scrollGestureWorkspace();
         std::ostringstream out;
         out << "[hymission] scroll gesture begin request mode=" << (mode == HymissionScrollMode::Layout ? "layout" : "unknown")
             << " dir=" << trackpadDirectionName(direction) << " gestureAxis=" << gestureAxisName(gestureAxisForDirection(direction))
@@ -6423,6 +6435,7 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
             out << "[hymission] scroll gesture reject reason=" << reason;
             debugLog(out.str());
         }
+        m_scrollGestureSession = {};
         return false;
     };
 
@@ -6439,8 +6452,10 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
     if (overviewVisible && (!niriModeEnabled() || m_state.phase != Phase::Active))
         return reject("overview-visible");
 
-    const auto workspace = activeLayoutWorkspace();
-    if (workspace && Fullscreen::controller()->hasFullscreen(workspace))
+    const auto workspace = scrollGestureWorkspace();
+    if (!workspace)
+        return reject("no-scroll-workspace");
+    if (Fullscreen::controller()->hasFullscreen(workspace))
         return reject("fullscreen-active");
 
     if (!canScrollActiveLayoutWithGesture(direction))
@@ -6450,7 +6465,8 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
         return reject("active-workspace-not-scrolling");
 
     const bool scrollingFollowFocusWasOverridden = m_scrollingFollowFocusOverridden;
-    setScrollingFollowFocusOverride(true);
+    if (!stageWorkspace)
+        setScrollingFollowFocusOverride(true);
 
     m_scrollGestureSession = {
         .active = true,
@@ -6459,18 +6475,22 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
         .direction = direction,
         .deltaScale = deltaScale,
         .skipNextUpdate = true,
-        .restoreScrollingFollowFocus = !scrollingFollowFocusWasOverridden && m_scrollingFollowFocusOverridden,
+        .restoreScrollingFollowFocus = !stageWorkspace && !scrollingFollowFocusWasOverridden && m_scrollingFollowFocusOverridden,
+        .stageTarget = stageWorkspace.has_value(),
+        .stageWorkspace = stageWorkspace ? *stageWorkspace : PHLWORKSPACE{},
     };
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] scroll gesture accepted route=layout dir=" << trackpadDirectionName(direction) << " scale=" << deltaScale
+            << " stageTarget=" << (stageWorkspace ? 1 : 0) << " workspace=" << workspace->m_name
             << " suppressScrollingFollowFocus=" << (m_scrollGestureSession.restoreScrollingFollowFocus ? 1 : 0);
         debugLog(out.str());
     }
 
     if (!scrollActiveLayoutByGestureDelta(event, direction, deltaScale)) {
-        m_scrollGestureSession = {};
+        if (m_scrollGestureSession.restoreScrollingFollowFocus)
+            setScrollingFollowFocusOverride(false);
         return reject("initial-layout-scroll-failed");
     }
     refreshNiriScrollingOverviewAfterLayoutScroll("scroll-begin");
@@ -6503,7 +6523,8 @@ void OverviewController::endScrollGesture(bool cancelled) {
         return;
 
     const bool deferScrollingFollowFocusRestore = m_scrollGestureSession.restoreScrollingFollowFocus;
-    const bool forceInputRefocus = !isVisible() && !cancelled && m_scrollGestureSession.route == ScrollGestureRoute::Layout;
+    const bool forceInputRefocus = !isVisible() && !cancelled && !m_scrollGestureSession.stageTarget &&
+        m_scrollGestureSession.route == ScrollGestureRoute::Layout;
 
     if (debugLogsEnabled()) {
         std::ostringstream out;

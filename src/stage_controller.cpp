@@ -3455,6 +3455,17 @@ void StageController::endTrackpadWorkspaceSwipe(bool cancelled) {
     endWorkspaceSwipe(self->swipe->native);
 }
 
+std::optional<PHLWORKSPACE> StageController::hoveredScrollWorkspace() {
+    auto* self = Impl::instance;
+    if (!self || !self->enabled || self->blocked() || !g_pInputManager ||
+        (self->inputSuppressed && self->inputSuppressed()))
+        return std::nullopt;
+    const auto [screen, index] = self->hit(g_pInputManager->getMouseCoordsInternal());
+    if (!screen)
+        return std::nullopt;
+    return index ? screen->cards[*index].workspace.lock() : PHLWORKSPACE{};
+}
+
 bool StageController::renderingPreview() {
     return Impl::instance && Impl::instance->rendering && Impl::instance->surfaceTransform.has_value();
 }
