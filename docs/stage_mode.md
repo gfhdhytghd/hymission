@@ -167,7 +167,11 @@ The `hymission:scroll, layout` trackpad gesture targets the Stage card under the
 pointer when it begins. It scrolls that workspace's scrolling-layout canvas
 without activating the workspace or changing focus, using its layout direction
 and monitor size. The target stays fixed until the gesture ends, even if the
-pointer leaves the card. Empty cards, sidebar gaps and non-scrolling layouts do
+pointer leaves the card. The gesture writes the real scrolling controller's
+camera offset. On subsequent activation, Stage preserves that offset through
+native focus/layout recalculation and restores focus to a window in the scrolled
+viewport. This protection ends after activation; explicit window navigation can
+move the camera normally. Empty cards, sidebar gaps and non-scrolling layouts do
 not pass the gesture through to the active desktop. Outside Stage, desktop and
 Overview canvas scrolling retain their existing behavior. Two-finger/wheel axis
 input still scrolls the sidebar's card list.

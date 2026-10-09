@@ -40,6 +40,7 @@ class StageController {
     // An engaged null workspace means sidebar chrome or an empty card: consume
     // the gesture without falling through to the desktop layout.
     static std::optional<PHLWORKSPACE> hoveredScrollWorkspace();
+    static void rememberCanvasScroll(const PHLWORKSPACE& workspace, double offset);
     // Scope a native shadow cutout radius without changing window rules.
     static void withWindowRounding(const PHLWINDOW& window, float radius, const std::function<void()>& draw);
     static CBox transformPreviewBox(CBox box);

@@ -5474,6 +5474,8 @@ bool OverviewController::scrollActiveLayoutByGestureDelta(const IPointer::SSwipe
     if (std::abs(offsetAfter - offsetBefore) >= 0.001) {
         controller->setOffset(offsetAfter);
         data->recalculate(true);
+        if (m_scrollGestureSession.stageTarget)
+            StageController::rememberCanvasScroll(workspace, controller->getOffset());
         if (Animation::mgr())
             Animation::mgr()->frameTick();
     }

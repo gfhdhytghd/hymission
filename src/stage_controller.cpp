@@ -57,6 +57,7 @@
 // computed boxes after the original function, never monitor/bar reservations.
 #define private public
 #include <hyprland/src/layout/space/Space.hpp>
+#include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
 #include "overview_controller.hpp"
 #undef private
@@ -372,6 +373,15 @@ struct StageController::Impl {
     std::optional<SurfaceTransform> surfaceTransform;
     RenderWindowFn renderWindow = nullptr;
     ShouldBlurFn shouldBlur = nullptr;
+    struct CanvasScroll {
+        PHLWORKSPACEREF workspace;
+        double offset = 0;
+        bool activating = false;
+    };
+    std::vector<CanvasScroll> canvasScrolls;
+    UP<SEventLoopDoLaterLock> canvasRelease;
+    void restoreCanvasScroll(const PHLWORKSPACE& workspace);
+    void beginCanvasActivation(const PHLWORKSPACE& workspace);
     UP<SEventLoopDoLaterLock> deferred;
     SP<CEventLoopTimer> refreshTimer;
     SP<CEventLoopTimer> motionTimer;
@@ -519,7 +529,12 @@ struct StageController::Impl {
                     {"destination", window->m_workspace->m_id}});
             return;
         }
+        const auto workspace = window ? window->m_workspace : PHLWORKSPACE{};
+        if (explicitFocus && reason != Desktop::FOCUS_REASON_WORKSPACE_CHANGE)
+            std::erase_if(self->canvasScrolls, [&](const auto& saved) { return saved.workspace == workspace; });
         reinterpret_cast<WindowFocusFn>(self->windowFocusHook->m_original)(focus, std::move(window), reason, std::move(surface));
+        if (reason == Desktop::FOCUS_REASON_WORKSPACE_CHANGE)
+            self->restoreCanvasScroll(workspace);
     }
     static void swipeBeginThunk(CUnifiedWorkspaceSwipeGesture* gesture) {
         auto* self = instance;
@@ -567,12 +582,16 @@ struct StageController::Impl {
         }
         if (self->swipe && self->swipe->monitor == monitor->m_self && (!self->swipe->released || self->swipe->target != workspace))
             self->clearSwipe();
+        if (monitor->m_activeWorkspace != workspace)
+            self->beginCanvasActivation(workspace);
         reinterpret_cast<ChangeWorkspaceFn>(self->changeWorkspaceHook->m_original)(monitor, workspace, internal, noMouseMove, noFocus);
+        self->restoreCanvasScroll(workspace);
         if (self->enabled && !self->blocked() && !self->syncing) {
             // Finish preparing our transition in the dispatch itself, before a
             // frame can expose the new workspace or a native workspace slide.
             self->forceRefresh = true;
             self->sync();
+            self->restoreCanvasScroll(workspace);
         }
     }
     static void addPassThunk(Render::IHyprRenderer* renderer, UP<IPassElement>&& element) {
@@ -1304,6 +1323,8 @@ void StageController::Impl::sync() {
     const bool wasEnabled = enabled;
     enabled = wanted && installHooks();
     if (!enabled) {
+        canvasRelease.reset();
+        canvasScrolls.clear();
         edgeEffect.reset();
         clearSwipe();
         stopTimer(refreshTimer);
@@ -3142,6 +3163,7 @@ StageController::Impl::~Impl() {
     clearSwipe();
     updatePreviewLiveness();
     deferred.reset();
+    canvasRelease.reset();
     stopTimer(refreshTimer);
     stopTimer(motionTimer);
     listeners.clear();
@@ -3453,6 +3475,73 @@ void StageController::endTrackpadWorkspaceSwipe(bool cancelled) {
         return;
     self->swipe->cancelled = cancelled;
     endWorkspaceSwipe(self->swipe->native);
+}
+
+void StageController::rememberCanvasScroll(const PHLWORKSPACE& workspace, double offset) {
+    auto* self = Impl::instance;
+    if (!self || !self->enabled || !workspace || workspace->isVisible())
+        return;
+    std::erase_if(self->canvasScrolls, [&](const auto& saved) { return !saved.workspace || saved.workspace == workspace; });
+    self->canvasScrolls.push_back({workspace, offset, false});
+}
+
+void StageController::Impl::restoreCanvasScroll(const PHLWORKSPACE& workspace) {
+    if (!enabled || !scrollingWorkspace(workspace))
+        return;
+    const auto saved = std::ranges::find_if(canvasScrolls, [&](const auto& entry) {
+        return entry.activating && entry.workspace == workspace;
+    });
+    if (saved == canvasScrolls.end())
+        return;
+    auto* scrolling = dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(workspace->m_space->algorithm()->tiledAlgo().get());
+    if (!scrolling || !scrolling->m_scrollingData || !scrolling->m_scrollingData->controller)
+        return;
+    auto& data = scrolling->m_scrollingData;
+    const auto area = scrolling->usableArea();
+    auto* controller = data->controller.get();
+    const double extent = controller->calculateMaxExtent(area, numberSetting("scrolling:fullscreen_on_one_column", 1) != 0);
+    const double viewport = controller->isPrimaryHorizontal() ? area.w : area.h;
+    const double offset = std::clamp(saved->offset, 0.0, std::max(0.0, extent - viewport));
+    data->controller->setOffset(offset);
+    data->recalculate(true);
+}
+
+void StageController::Impl::beginCanvasActivation(const PHLWORKSPACE& workspace) {
+    if (!enabled || blocked() || !workspace || !g_pEventLoopManager)
+        return;
+    const auto saved = std::ranges::find_if(canvasScrolls, [&](const auto& entry) { return entry.workspace == workspace; });
+    if (saved == canvasScrolls.end())
+        return;
+    saved->activating = true;
+    restoreCanvasScroll(workspace);
+    // Native activation restores the last focused window. Choose a window in
+    // the newly scrolled viewport, without focusing the hidden workspace now.
+    if (scrollingWorkspace(workspace)) {
+        auto* scrolling = dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(workspace->m_space->algorithm()->tiledAlgo().get());
+        const auto column = scrolling ? scrolling->getColumnAtViewportCenter() : nullptr;
+        if (column) {
+            for (const auto& entry : column->targetDatas) {
+                const auto target = entry->target.lock();
+                const auto window = target ? target->window() : PHLWINDOW{};
+                if (window && window->m_isMapped && !window->isHidden() && window->m_workspace == workspace) {
+                    workspace->m_lastFocusedWindow = window;
+                    break;
+                }
+            }
+        }
+    }
+    if (canvasRelease)
+        return;
+    // Keep the guard through the card click's post-activation focus, then
+    // release it. Subsequent deliberate navigation must own the camera again.
+    canvasRelease = g_pEventLoopManager->doLaterLock([this] {
+        canvasRelease.reset();
+        for (const auto& entry : canvasScrolls)
+            if (entry.activating)
+                restoreCanvasScroll(entry.workspace.lock());
+        std::erase_if(canvasScrolls, [](const auto& entry) { return entry.activating || !entry.workspace; });
+        request();
+    });
 }
 
 std::optional<PHLWORKSPACE> StageController::hoveredScrollWorkspace() {
