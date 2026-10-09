@@ -2391,7 +2391,7 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
                 const CBox visible = target.intersection(logicalClip);
                 double renderedRounding = 0;
                 drawPreview(window, monitor, target, cardClip, radius,
-                    scrollingTiled(window) ? std::optional{cardViewport(box)} : std::nullopt, &renderedRounding);
+                    (window->m_isFloating || scrollingTiled(window)) ? std::optional{cardViewport(box)} : std::nullopt, &renderedRounding);
                 if (previewLayer(window) != stage::PreviewLayer::Hidden && visible.w >= 1 && visible.h >= 1)
                     screen->capturePreviews.push_back({window, target, logicalClip, renderedRounding});
             }
@@ -3259,7 +3259,7 @@ std::optional<stage::OverviewEndpoint> StageController::Impl::cardEndpoint(const
             if (preview.window != window)
                 continue;
             const Rect target = rect(preview.target.copy().translate(cardBox.pos()));
-            auto viewport = scrollingTiled(window) ? stage::edgeViewportForWindow(cardViewport(cardBox), target) :
+            auto viewport = (window->m_isFloating || scrollingTiled(window)) ? stage::edgeViewportForWindow(cardViewport(cardBox), target) :
                 stage::edgeViewport(rect(cardBox), 0, 0);
             if (screen.right ? viewport.right > 0 : viewport.left > 0) {
                 viewport.fixedOuterEdge = screen.right ? stage::FixedOuterEdge::Right : stage::FixedOuterEdge::Left;
