@@ -175,6 +175,17 @@ Rect transitionBoxWithin(const Rect& from, const Rect& to, double progress, cons
     return fitWithin(transitionBox(from, to, progress));
 }
 
+Rect dragTargetBox(const Rect& native, const Rect& region, double pointerX, double pointerY, double scale, bool onDesktop) {
+    // Desktop drags retain their size and pointer anchor even beyond the output.
+    const double fit = onDesktop ? 1 : std::min({scale, region.width / std::max(1.0, native.width), region.height / std::max(1.0, native.height)});
+    const double width = native.width * fit;
+    const double height = native.height * fit;
+    const double x = pointerX - width / 2;
+    const double y = pointerY - height / 2;
+    return {onDesktop ? x : std::clamp(x, region.x, region.x + region.width - width),
+            onDesktop ? y : std::clamp(y, region.y, region.y + region.height - height), width, height};
+}
+
 std::pair<double, double> mapDropPoint(const Rect& card, const Rect& desktop, double x, double y) {
     const double u = card.width > 0 ? std::clamp((x - card.x) / card.width, 0.0, 1.0) : 0.5;
     const double v = card.height > 0 ? std::clamp((y - card.y) / card.height, 0.0, 1.0) : 0.5;

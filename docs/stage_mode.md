@@ -266,11 +266,13 @@ original mouse grab offset. Dropping on the current workspace does not
 issue a second move. Escape cancels sidebar delivery; no resize or application
 data drag is interpreted as a window move.
 
-Dragging a window between the desktop and a Stage card slides its live visual out through
+Dragging a floating window from the desktop into a Stage card slides its live visual out through
 the source region's facing edge, then in through the destination region's facing
 edge. Each half keeps that region's clip and window size fixed; the size changes
 while hidden between the halves. The whole transfer uses `stage_transition_ms`.
-Leaving a card uses the same two-phase return to the native dragged window.
+Leaving that card uses the same two-phase return to the native dragged window.
+Drags picked up inside Stage retain their original direct animation throughout,
+including cross-card movement and a temporary excursion over the desktop.
 Moving within Stage, including between cards, retains the original direct
 preview movement and drop-settling animation. Reversing a desktop/card transfer
 starts from the current visual and clip. The native drag and
@@ -281,6 +283,10 @@ the compositor's temporary floating state during a move does not enable edge
 transfers. When a dragged preview returns to the desktop, native decorations
 are drawn immediately, independently of `stage_window_decorations` (which still
 controls resting card previews). Release continuation retains these decorations.
+The window's native rounding also takes effect immediately on the desktop.
+Desktop drag targets keep their native size and pointer-relative position even
+when extending beyond the output; hover and release animation endpoints are
+not fitted back inside the desktop. Card targets remain fitted to their cards.
 With the default `stage_drop_follow = 0`, release continues from that preview
 into the window's actual destination slot, suppressing the card copy until the
 flight completes. Disabled animations update immediately; follow mode uses the

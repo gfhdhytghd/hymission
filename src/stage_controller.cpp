@@ -1694,6 +1694,9 @@ stage::ScrollingFlightFrame StageController::Impl::dragHoverFrame() const {
         return {};
     const double duration = numberSetting("animations:enabled", 1) ? std::clamp(setting("stage_transition_ms", 300), 0L, 2000L) : 0;
     const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - dragHover->start).count();
+    if (!dragHover->edgeTransfer && dragHover->onDesktop)
+        return {stage::transitionBox(rect(dragHover->from), rect(dragHover->to), duration > 0 ? elapsed / duration : 1),
+            stage::edgeViewport(rect(CBox{monitor->m_position, monitor->m_size}), 0, 0)};
     if (!dragHover->edgeTransfer)
         return {stage::transitionBoxWithin(rect(dragHover->from), rect(dragHover->to), duration > 0 ? elapsed / duration : 1,
             flightBounds(monitor)), stage::edgeViewport(flightBounds(monitor), 0, 0)};
@@ -1799,11 +1802,8 @@ void StageController::Impl::updateDragHover() {
     const double scale = onDesktop ? 1 : screen->geometry.cardWidth / screen->geometry.desktopWidth;
     const CBox card = onDesktop ? desktop(*screen) : inGap ? sidebar(*screen) : CBox{sidebar(*screen).x + screen->geometry.padding, screen->base.y + cardTop(*screen, *index),
         screen->geometry.cardWidth, screen->geometry.cardHeight};
-    const double fit = std::min({scale, card.w / std::max(1.0, native.w), card.h / std::max(1.0, native.h)});
-    const Vector2D size = native.size() * fit;
-    const CBox target{std::clamp(pointer.x - size.x / 2, card.x, card.x + card.w - size.x),
-        std::clamp(pointer.y - size.y / 2, card.y, card.y + card.h - size.y), size.x, size.y};
-    if (!dragHover || dragHover->returningToNative || dragHover->window != window || dragHover->workspace != workspace || dragHover->syntheticId != syntheticId || dragHover->monitor != monitor) {
+    const CBox target = box(stage::dragTargetBox(rect(native), rect(card), pointer.x, pointer.y, scale, onDesktop));
+    if (!dragHover || dragHover->returningToNative || dragHover->onDesktop != onDesktop || dragHover->window != window || dragHover->workspace != workspace || dragHover->syntheticId != syntheticId || dragHover->monitor != monitor) {
         const bool fromDesktop = !dragHover || dragHover->window != window || dragHover->onDesktop;
         const auto* nativeScreen = screenFor(window->m_monitor.lock());
         auto from = dragHover && dragHover->window == window ? dragHoverFrame() :
@@ -1814,7 +1814,7 @@ void StageController::Impl::updateDragHover() {
         dragHover = DragHover{window, monitor, workspace, syntheticId, box(from.window), target, Clock::now()};
         dragHover->fromViewport = from.viewport;
         dragHover->onDesktop = onDesktop;
-        dragHover->edgeTransfer = !tiled && fromDesktop != onDesktop;
+        dragHover->edgeTransfer = !thumbnailDrag && !tiled && fromDesktop != onDesktop;
         dragHover->tiled = tiled;
     } else
         dragHover->to = target;
@@ -1972,9 +1972,8 @@ void StageController::Impl::finishThumbnailDrag() {
         destination = ensureWorkspace(monitor, syntheticId);
     const auto frame = dragHoverFrame();
     const bool edgeTransfer = dragHover && dragHover->edgeTransfer;
-    const bool tiled = dragHover && dragHover->tiled;
     const CBox from = box(frame.window);
-    Vector2D center = edgeTransfer ? dragHover->to.middle() : from.middle();
+    Vector2D center = dragHover && (edgeTransfer || dragHover->onDesktop) ? dragHover->to.middle() : from.middle();
     if (const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal()); screen && index) {
         const auto area = desktop(*screen);
         const auto mapped = stage::mapPreviewCenter(
@@ -2002,12 +2001,7 @@ void StageController::Impl::finishThumbnailDrag() {
         const CBox target = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() :
             CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
         screen->flights.push_back({Preview{window, target, target}, from, target,
-            static_cast<float>(stage::previewRounding(-1, numberSetting("decoration:rounding", 0), from.w, from.h)), window->rounding()});
-        if (!tiled) {
-            screen->flights.back().fromViewport = frame.viewport;
-            screen->flights.back().toViewport = desktopViewport(*screen);
-            screen->flights.back().edgeTransfer = true;
-        }
+            window->rounding(), window->rounding()});
         screen->flights.back().desktopDecorations = true;
         screen->flightStart = Clock::now();
         screen->flightDuration = std::clamp(setting("stage_transition_ms", 300), 0L, 2000L);
@@ -2449,9 +2443,9 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
         if (const auto window = dragHover->window.lock()) {
             const auto frame = dragHoverFrame();
             const auto box = hymission::box(frame.window);
-            const auto bounds = flightBounds(monitor);
+            const auto bounds = dragHover->onDesktop ? rect(CBox{monitor->m_position, monitor->m_size}) : flightBounds(monitor);
             const auto clip = physical(CBox{bounds.x, bounds.y, bounds.width, bounds.height});
-            const double radius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
+            const double radius = dragHover->onDesktop ? window->rounding() : stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
                 numberSetting("decoration:rounding", 0), box.w, box.h);
             if (!dragHover->edgeTransfer)
                 drawPreview(window, monitor, box, clip, radius, std::nullopt, nullptr, dragHover->onDesktop);
@@ -2644,7 +2638,7 @@ std::pair<Rect, std::optional<stage::EdgeViewport>> StageController::Impl::fligh
             stage::scrollingFlightFrame(rect(flight.from), rect(flight.to), *flight.fromViewport, *flight.toViewport, progress);
         return {frame.window, frame.viewport};
     }
-    return {flight.offscreen ? stage::transitionBox(rect(flight.from), rect(flight.to), progress) :
+    return {flight.offscreen || flight.desktopDecorations ? stage::transitionBox(rect(flight.from), rect(flight.to), progress) :
         stage::transitionBoxWithin(rect(flight.from), rect(flight.to), progress, flightBounds(monitor)), std::nullopt};
 }
 
@@ -2936,8 +2930,10 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
         const auto [frame, viewport] = flightFrame(flight, p, monitor);
         if (flight.edgeTransfer && viewport && !stage::overviewEndpointVisible({frame, *viewport, viewport->box}))
             continue; // Do not leave a shadow visible during the hidden size change.
-        drawPreview(window, monitor, box(frame), clip,
-            flight.fromRadius + (flight.toRadius - flight.fromRadius) * stage::transitionProgress(p, 1), viewport, nullptr, flight.desktopDecorations);
+        const CBox drawClip = flight.desktopDecorations ? CBox{0, 0, monitor->m_size.x * monitor->m_scale, monitor->m_size.y * monitor->m_scale} : clip;
+        const double radius = flight.desktopDecorations ? window->rounding() :
+            flight.fromRadius + (flight.toRadius - flight.fromRadius) * stage::transitionProgress(p, 1);
+        drawPreview(window, monitor, box(frame), drawClip, radius, viewport, nullptr, flight.desktopDecorations);
     }
     g_pHyprRenderer->m_renderData.clipBox = previousClip;
 }

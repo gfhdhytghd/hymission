@@ -73,6 +73,7 @@ double staggeredProgress(double progress, std::size_t rank, std::size_t count, b
 // progress is the linear timeline, before either easing curve is applied.
 Rect transitionBox(const Rect& from, const Rect& to, double progress);
 Rect transitionBoxWithin(const Rect& from, const Rect& to, double progress, const Rect& bounds);
+Rect dragTargetBox(const Rect& native, const Rect& region, double pointerX, double pointerY, double scale, bool onDesktop);
 std::pair<double, double> mapDropPoint(const Rect& card, const Rect& desktop, double x, double y);
 // Inverse of arrangeWindows' uniform preview transform, without pointer clamping.
 std::pair<double, double> mapPreviewCenter(const Rect& card, const Rect& desktop, double x, double y);

@@ -61,6 +61,20 @@ int main() {
     ok &= expect(rightClipped.right == mirrored.right && edgeViewportForWindow(mirrored, {800, 50, 200, 300}).right == 0,
         "crossing classification mirrors with the sidebar");
     const auto cardView = edgeViewport({20, 300, 160, 100}, 16, 16);
+    const hymission::Rect oversizedDrag{0, 0, 1800, 1000};
+    const auto desktopDrag = dragTargetBox(oversizedDrag, viewportBox, 210, 60, 0.2, true);
+    ok &= expect(near(desktopDrag.width, 1800) && near(desktopDrag.height, 1000) &&
+        near(desktopDrag.centerX(), 210) && near(desktopDrag.centerY(), 60) && desktopDrag.x < viewportBox.x && desktopDrag.y < viewportBox.y,
+        "desktop drag retains oversized native geometry centered on the pointer");
+    const auto desktopArrival = transitionBox({30, 320, 160, 90}, desktopDrag, 1);
+    ok &= expect(near(desktopArrival.x, desktopDrag.x) && near(desktopArrival.y, desktopDrag.y) &&
+        near(desktopArrival.width, desktopDrag.width) && near(desktopArrival.height, desktopDrag.height),
+        "desktop drag animation ends exactly at the unclamped native handoff geometry");
+    const auto cardDrag = dragTargetBox(oversizedDrag, cardView.box, -100, 1000, 0.2, false);
+    ok &= expect(cardDrag.x >= cardView.box.x && cardDrag.y >= cardView.box.y &&
+        cardDrag.x + cardDrag.width <= cardView.box.x + cardView.box.width + 1e-7 &&
+        cardDrag.y + cardDrag.height <= cardView.box.y + cardView.box.height + 1e-7,
+        "Stage drag target still fits inside its card");
     // Drag transfers use two stationary clips, with no visible scaling between them.
     const auto sameRect = [](const hymission::Rect& a, const hymission::Rect& b) {
         return near(a.x, b.x) && near(a.y, b.y) && near(a.width, b.width) && near(a.height, b.height);
