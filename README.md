@@ -37,6 +37,28 @@ https://github.com/user-attachments/assets/7d711730-72f6-4165-94fa-af38bae37385
 
 ## Installation
 
+### Install on Omarchy
+
+Hymission ships as an [Omarchy](https://omarchy.org/) shell plugin. Add and enable it with:
+
+```sh
+omarchy plugin add https://github.com/gfhdhytghd/hymission.git --enable
+```
+
+On first enable a terminal opens, installs any missing build dependencies with `pacman` (it asks for your password), and compiles the plugin against the Hyprland you are running. The build lives in `~/.cache/io.github.gfhdhytghd.hymission/`; nothing is installed system-wide and your Hyprland config files are not edited. When the build finishes the plugin loads and these bindings are registered at runtime:
+
+| Input | Action | Replaces Omarchy default |
+| --- | --- | --- |
+| `Super + Tab` | Mission Control | Next workspace |
+| `Super + Shift + Tab` | Mission Control across all workspaces | Previous workspace |
+| Three-finger vertical swipe | Open or close Mission Control | — |
+
+A key you bound yourself is never taken over; it is skipped and logged instead. To choose your own bindings and settings, copy [`omarchy/defaults.lua`](omarchy/defaults.lua) to `~/.config/hymission/omarchy.lua` and edit it. When that file exists it replaces the defaults above, and it is applied after every config reload. Configure `plugin.hymission` there rather than in `hyprland.lua`: the plugin is not loaded yet when your main config first runs.
+
+After a Hyprland update, a notification offers to rebuild. `omarchy plugin update` pulls new versions and asks for a rebuild only when the native code changed. If you previously installed Hymission with `hyprpm`, run `hyprpm disable hymission` first so only one copy is loaded.
+
+`omarchy plugin disable io.github.gfhdhytghd.hymission` unloads the plugin and restores Omarchy's bindings. `omarchy plugin remove io.github.gfhdhytghd.hymission` does the same and deletes the checkout; remove `~/.cache/io.github.gfhdhytghd.hymission` as well to reclaim the build space.
+
 ### Install with `hyprpm`
 
 `hyprpm` is the preferred user-facing install path in the Hyprland ecosystem.
@@ -918,6 +940,9 @@ If you override default Hyprland bindings (e.g. rebinding `SUPER+TAB` to `hymiss
 - In other setups: prefer overriding bindings in your own Lua config files (loaded after defaults) rather than editing default files directly.
 
 ### Omarchy 4 integration example
+
+> [!TIP]
+> On Omarchy, [Install on Omarchy](#install-on-omarchy) sets all of this up for you and keeps Omarchy's own files untouched. The manual pattern below is for setups that load Hymission some other way.
 
 Omarchy 4 uses a pure Lua config (`configProvider: lua`). Here is a tested integration pattern:
 
