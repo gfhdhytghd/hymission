@@ -71,10 +71,9 @@ start() {
   case $(jq -r .state <<<"$state") in
     loaded)
       # A finished rebuild replaces the running copy.
-      if [[ $(jq -r .swap <<<"$state") == true ]]; then
-        hyprctl plugin unload "$(jq -r .loaded <<<"$state")" >/dev/null
-        hyprctl plugin load "$(jq -r .library <<<"$state")" >/dev/null
-      fi
+      [[ $(jq -r .swap <<<"$state") == true ]] || { jq -c . <<<"$state"; return 0; }
+      hyprctl plugin unload "$(jq -r .loaded <<<"$state")" >/dev/null
+      hyprctl plugin load "$(jq -r .library <<<"$state")" >/dev/null
       ;;
     ready)
       lib=$(jq -r .library <<<"$state")
@@ -83,8 +82,8 @@ start() {
       ;;
     *) jq -c . <<<"$state"; return 0 ;;
   esac
-  # A reload clears bindings registered earlier; the shell service re-applies
-  # them on the configreloaded event, so this path is idempotent.
+  # Let config written for the plugin take effect now that it exists. The
+  # reload drops earlier runtime bindings; apply registers them again.
   hyprctl reload >/dev/null
   status
 }
@@ -93,8 +92,12 @@ start() {
 apply() {
   [[ -n $(loaded_path) ]] || return 0
   local lua="$XDG_RUNTIME_DIR/$ID.lua"
+  # A config reload resets Lua globals, so this marker makes apply run once per
+  # generation no matter how many callers race to it.
+  printf '__omarchy_plugins = __omarchy_plugins or {}\nif __omarchy_plugins[%s] then return end\n__omarchy_plugins[%s] = true\n' \
+    "$(jq -Rn --arg i "$ID" '$i')" "$(jq -Rn --arg i "$ID" '$i')" >"$lua"
   if [[ -f $USER_CONFIG ]]; then
-    printf 'dofile(%s)\n' "$(jq -Rn --arg p "$USER_CONFIG" '$p')" >"$lua"
+    printf 'dofile(%s)\n' "$(jq -Rn --arg p "$USER_CONFIG" '$p')" >>"$lua"
   else
     hyprctl -j binds | jq -r --slurpfile spec "$DIR/omarchy/bindings.json" --arg defaults "$DIR/omarchy/defaults.lua" '
       def mods: {SHIFT: 1, CAPS: 2, CTRL: 4, CONTROL: 4, ALT: 8, MOD2: 16, MOD3: 32, SUPER: 64, WIN: 64, MOD5: 128};
@@ -111,7 +114,7 @@ apply() {
               + "hl.bind(\($b.key | @json), \($b.lua), { description = \($b.description | @json) })"
             end),
         "dofile(\($defaults | @json))"
-    ' >"$lua"
+    ' >>"$lua"
   fi
   hyprctl eval "dofile($(jq -Rn --arg p "$lua" '$p'))" >/dev/null
   grep '^-- skipped' "$lua" || true

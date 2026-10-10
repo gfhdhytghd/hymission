@@ -50,6 +50,7 @@ Item {
     } else if (s.state === "loaded") {
       settingUp = false
       poll.stop()
+      run(applier, "apply")  // covers a configreloaded event fired before we listened
       if (s.outdated && !notified) {
         notified = true
         notify("An update was downloaded. Rebuild to use it.", "Rebuild")
