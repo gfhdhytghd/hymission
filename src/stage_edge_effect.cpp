@@ -191,8 +191,11 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
     Hyprutils::Utils::CScopeGuard restore{[&] { state.damage = previousDamage; state.clipBox = previousClip; }};
     const double left = viewport.left * monitor->m_scale;
     const double right = viewport.right * monitor->m_scale;
+    const double top = viewport.top * monitor->m_scale;
+    const double bottom = viewport.bottom * monitor->m_scale;
     const CBox affected = outputDamage.getExtents();
-    const bool soft = (left > 0 && affected.x < view.x + left) || (right > 0 && affected.x + affected.w > view.x + view.w - right);
+    const bool soft = (left > 0 && affected.x < view.x + left) || (right > 0 && affected.x + affected.w > view.x + view.w - right) ||
+        (top > 0 && affected.y < view.y + top) || (bottom > 0 && affected.y + affected.h > view.y + view.h - bottom);
     const auto destination = state.currentFB;
     const auto fb = soft && destination && ensureShader() ? bufferFor(monitor, destination) : nullptr;
     const auto horizontal = fb ? bufferFor(monitor, destination, true) : nullptr;
@@ -214,7 +217,7 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
     static auto blurPasses = CConfigValue<Config::INTEGER>("decoration:blur:passes");
     const double nativeSupport = std::clamp(*blurSize, int64_t{1}, int64_t{40}) * std::pow(2, std::clamp(*blurPasses, int64_t{1}, int64_t{8}));
     const double maxRadius = std::min({12.0 * monitor->m_scale, nativeSupport - 1, 32.0});
-    const double support = std::ceil(std::min(maxRadius, std::max(left, right) / 2)) + 1;
+    const double support = std::ceil(std::min(maxRadius, std::max({left, right, top, bottom}) / 2)) + 1;
     const CBox sample = CBox{affected.x - support, affected.y - support, affected.w + support * 2, affected.h + support * 2}.intersection(hardClip);
     {
         GLState restoreGL;
@@ -275,7 +278,7 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
     sampleFB.w = std::max(1.0, end.x - sampleFB.x);
     sampleFB.h = std::max(1.0, end.y - sampleFB.y);
     glUniform4f(uniform("uSampleFB"), sampleFB.x, sampleFB.y, sampleFB.w, sampleFB.h);
-    glUniform2f(uniform("uWidths"), left, right);
+    glUniform4f(uniform("uWidths"), left, right, top, bottom);
     glUniform1f(uniform("uMaxRadius"), maxRadius);
     // First pass fills the padded sample rectangle without opacity. The
     // second samples only that fresh rectangle and composites over the output.

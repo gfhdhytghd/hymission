@@ -205,7 +205,7 @@ Rect sidebarArea(const Rect& base, const Geometry& geometry, bool right) {
 Rect desktopArea(const Rect& base, const Geometry& geometry, bool right) {
     return {right ? base.x : base.x + geometry.reservation, base.y, geometry.desktopWidth, base.height};
 }
-EdgeViewport edgeViewport(const Rect& box, double left, double right) {
+EdgeViewport edgeViewport(const Rect& box, double left, double right, double top, double bottom) {
     const double width = std::max(0.0, sane(box.width, 0));
     left = std::clamp(sane(left, 0), 0.0, width);
     right = std::clamp(sane(right, 0), 0.0, width);
@@ -214,7 +214,15 @@ EdgeViewport edgeViewport(const Rect& box, double left, double right) {
         left *= scale;
         right *= scale;
     }
-    return {box, left, right};
+    const double height = std::max(0.0, sane(box.height, 0));
+    top = std::clamp(sane(top, 0), 0.0, height);
+    bottom = std::clamp(sane(bottom, 0), 0.0, height);
+    if (top + bottom > height) {
+        const double scale = height / (top + bottom);
+        top *= scale;
+        bottom *= scale;
+    }
+    return {box, left, right, top, bottom};
 }
 
 EdgeViewport desktopShadowViewport(const EdgeViewport& viewport, const Rect& output) {
@@ -230,6 +238,10 @@ EdgeViewport edgeViewportForWindow(const EdgeViewport& viewport, const Rect& win
         result.left = 0;
     if (window.x + window.width <= viewport.box.x + viewport.box.width + 0.01)
         result.right = 0;
+    if (window.y >= viewport.box.y - 0.01)
+        result.top = 0;
+    if (window.y + window.height <= viewport.box.y + viewport.box.height + 0.01)
+        result.bottom = 0;
     return result;
 }
 
@@ -238,8 +250,10 @@ double edgeOpacity(const EdgeViewport& viewport, double x, double y) {
     if (x < b.x || x >= b.x + b.width || y < b.y || y >= b.y + b.height || b.width <= 0 || b.height <= 0)
         return 0;
     const auto smooth = [](double t) { t = std::clamp(t, 0.0, 1.0); return t * t * (3 - 2 * t); };
-    return std::min(viewport.left > 0 ? smooth(2 * (x - b.x) / viewport.left) : 1.0,
-        viewport.right > 0 ? smooth(2 * (b.x + b.width - x) / viewport.right) : 1.0);
+    return std::min({viewport.left > 0 ? smooth(2 * (x - b.x) / viewport.left) : 1.0,
+        viewport.right > 0 ? smooth(2 * (b.x + b.width - x) / viewport.right) : 1.0,
+        viewport.top > 0 ? smooth(2 * (y - b.y) / viewport.top) : 1.0,
+        viewport.bottom > 0 ? smooth(2 * (b.y + b.height - y) / viewport.bottom) : 1.0});
 }
 
 double overviewTransitionProgress(double start, double current, bool opening) {
@@ -273,7 +287,8 @@ EdgeFrame interpolateEdgeFrame(const EdgeFrame& from, const EdgeFrame& to, doubl
         return Rect{mix(a.x, b.x), mix(a.y, b.y), mix(a.width, b.width), mix(a.height, b.height)};
     };
     const EdgeFrame frame{edgeViewport(mixRect(from.viewport.box, to.viewport.box), mix(from.viewport.left, to.viewport.left),
-                                      mix(from.viewport.right, to.viewport.right)), mixRect(from.clip, to.clip)};
+                                      mix(from.viewport.right, to.viewport.right), mix(from.viewport.top, to.viewport.top),
+                                      mix(from.viewport.bottom, to.viewport.bottom)), mixRect(from.clip, to.clip)};
     // Releasing/reversing a gesture retains the sampled outer edge, even when
     // the other endpoint is the unrestricted overview output.
     return pinOuterEdge(frame, from.viewport.fixedOuterEdge != FixedOuterEdge::None ? from.viewport : to.viewport);
@@ -299,7 +314,8 @@ EdgeFrame overviewRevealFrame(const OverviewEndpoint& endpoint, const Rect& curr
                     mapped.width + (output.width - mapped.width) * reveal, mapped.height + (output.height - mapped.height) * reveal};
     };
     const auto viewport = edgeViewport(unfold(endpoint.viewport.box), endpoint.viewport.left * sx * (1 - reveal),
-                                      endpoint.viewport.right * sx * (1 - reveal));
+                                      endpoint.viewport.right * sx * (1 - reveal), endpoint.viewport.top * sy * (1 - reveal),
+                                      endpoint.viewport.bottom * sy * (1 - reveal));
     return pinOuterEdge({viewport, unfold(endpoint.clip)}, endpoint.viewport);
 }
 
@@ -310,7 +326,8 @@ ScrollingFlightFrame scrollingFlightFrame(const Rect& from, const Rect& to, cons
     const auto& a = fromViewport.box;
     const auto& b = toViewport.box;
     const Rect view{lerp(a.x, b.x), lerp(a.y, b.y), lerp(a.width, b.width), lerp(a.height, b.height)};
-    const auto viewport = edgeViewport(view, lerp(fromViewport.left, toViewport.left), lerp(fromViewport.right, toViewport.right));
+    const auto viewport = edgeViewport(view, lerp(fromViewport.left, toViewport.left), lerp(fromViewport.right, toViewport.right),
+        lerp(fromViewport.top, toViewport.top), lerp(fromViewport.bottom, toViewport.bottom));
     if (a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0)
         return {{view.x, view.y, 0, 0}, viewport};
     // Interpolate relative coordinates so hidden tape columns stay hidden.

@@ -2709,7 +2709,7 @@ stage::EdgeViewport StageController::Impl::desktopViewport(const Screen& screen)
 
 stage::EdgeViewport StageController::Impl::cardViewport(const CBox& card) const {
     const double width = blurFramebufferHook ? setting("stage_scrolling_preview_edge_width", 16) : 0;
-    return stage::edgeViewport(rect(card), width, width);
+    return stage::edgeViewport(rect(card), width, width, width, width);
 }
 
 std::pair<Rect, std::optional<stage::EdgeViewport>> StageController::Impl::flightFrame(const Flight& flight, double progress, const PHLMONITOR& monitor) const {

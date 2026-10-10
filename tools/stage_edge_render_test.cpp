@@ -117,10 +117,12 @@ int main() {
         glUniform4f(location("uSampleFB"), minX, minY, maxX - minX, maxY - minY);
         for (const float scale : {1.F, 1.5F, 2.F}) {
             glUniform1f(location("uMaxRadius"), 12 * scale);
-            for (int mode = 0; mode < 4; ++mode) {
-                const float left = mode == 1 || mode == 3 ? 16 * scale : 0;
-                const float right = mode == 2 || mode == 3 ? 16 * scale : 0;
-                glUniform2f(location("uWidths"), left, right);
+            for (int mode = 0; mode < 16; ++mode) {
+                const float left = mode & 1 ? 16 * scale : 0;
+                const float right = mode & 2 ? 16 * scale : 0;
+                const float top = mode & 4 ? 16 * scale : 0;
+                const float bottom = mode & 8 ? 16 * scale : 0;
+                glUniform4f(location("uWidths"), left, right, top, bottom);
                 for (int pattern = 0; pattern < 3; ++pattern) {
                     const bool hasMirror = pattern == 1;
                     glUniform1i(location("uHasMirror"), hasMirror);
@@ -187,17 +189,23 @@ int main() {
                                 clean &= pixels[i] == 0 && pixels[i + 1] <= pixels[i + 3] && pixels[i + 3] <= alpha;
                                 // The first interior pixel must approach transparency,
                                 // not jump from zero outside to a half-opaque hard line.
-                                if ((left && m.x - viewX <= 0.75) || (right && viewX + viewW - m.x <= 0.75)) {
+                                if ((left && m.x - viewX <= 0.75) || (right && viewX + viewW - m.x <= 0.75) ||
+                                    (top && m.y - viewY <= 0.75) || (bottom && viewY + viewH - m.y <= 0.75)) {
                                     ++boundarySamples;
                                     continuousEdge &= pixels[i + 3] <= 8;
                                 }
-                                const bool edge = (left && m.x < viewX + left) || (right && m.x > viewX + viewW - right);
+                                const bool edge = (left && m.x < viewX + left) || (right && m.x > viewX + viewW - right) ||
+                                    (top && m.y < viewY + top) || (bottom && m.y > viewY + viewH - bottom);
                                 if (pattern == 2 && edge) {
-                                    const float distance = left && m.x < viewX + left ? m.x - viewX : viewX + viewW - m.x;
-                                    const float width = left && m.x < viewX + left ? left : right;
-                                    const float t = std::clamp(distance / width, 0.F, 1.F);
-                                    const float radius = std::min(12 * scale, width * 0.5F) * (1 - t * t * (3 - 2 * t));
-                                    if (radius >= 5 && distance > radius + 2 && m.y > viewY + radius + 2 && m.y < viewY + viewH - radius - 2) {
+                                    const auto radiusAt = [&](float distance, float width) {
+                                        if (width == 0) return 0.F;
+                                        const float t = std::clamp(distance / width, 0.F, 1.F);
+                                        return std::min(12 * scale, width * 0.5F) * (1 - t * t * (3 - 2 * t));
+                                    };
+                                    const float radius = std::max({radiusAt(m.x - viewX, left), radiusAt(viewX + viewW - m.x, right),
+                                        radiusAt(m.y - viewY, top), radiusAt(viewY + viewH - m.y, bottom)});
+                                    if (radius >= 5 && m.x > viewX + radius + 2 && m.x < viewX + viewW - radius - 2 &&
+                                        m.y > viewY + radius + 2 && m.y < viewY + viewH - radius - 2) {
                                         ++antiAliasSamples;
                                         noGrid &= std::abs(2 * pixels[i + 1] - pixels[i + 3]) <= 8;
                                     }

@@ -22,7 +22,7 @@ uniform vec3 uAxisY;
 uniform vec4 uViewport;
 uniform vec4 uSample;
 uniform vec4 uSampleFB;
-uniform vec2 uWidths;
+uniform vec4 uWidths; // left, right, top, bottom
 uniform float uMaxRadius;
 uniform int uPass; // 0: horizontal, 1: vertical and opacity
 layout(location = 0) out vec4 fragColor;
@@ -52,21 +52,24 @@ void main() {
     }
     float l = uWidths.x > 0.0 ? smoothstep(0.0, uWidths.x, m.x - uViewport.x) : 1.0;
     float r = uWidths.y > 0.0 ? smoothstep(0.0, uWidths.y, uViewport.x + uViewport.z - m.x) : 1.0;
-    float strength = 1.0 - min(l, r);
+    float t = uWidths.z > 0.0 ? smoothstep(0.0, uWidths.z, m.y - uViewport.y) : 1.0;
+    float b = uWidths.w > 0.0 ? smoothstep(0.0, uWidths.w, uViewport.y + uViewport.w - m.y) : 1.0;
     // Compress opacity into the outer half-band; retain zero at the clip
     // boundary to avoid a hard line alongside the unchanged blur ramp.
     float fadeL = uWidths.x > 0.0 ? smoothstep(0.0, uWidths.x * 0.5, m.x - uViewport.x) : 1.0;
     float fadeR = uWidths.y > 0.0 ? smoothstep(0.0, uWidths.y * 0.5, uViewport.x + uViewport.z - m.x) : 1.0;
-    float alpha = uPass == 0 ? 1.0 : min(fadeL, fadeR);
-    float width = l < r ? uWidths.x : uWidths.y;
-    float radius = min(uMaxRadius, width * 0.5) * strength;
+    float fadeT = uWidths.z > 0.0 ? smoothstep(0.0, uWidths.z * 0.5, m.y - uViewport.y) : 1.0;
+    float fadeB = uWidths.w > 0.0 ? smoothstep(0.0, uWidths.w * 0.5, uViewport.y + uViewport.w - m.y) : 1.0;
+    float alpha = uPass == 0 ? 1.0 : min(min(fadeL, fadeR), min(fadeT, fadeB));
+    vec4 radii = min(vec4(uMaxRadius), uWidths * 0.5) * (vec4(1.0) - vec4(l, r, t, b));
+    float radius = max(max(radii.x, radii.y), max(radii.z, radii.w));
     vec4 color = sampleLayer(uTexture, p);
     vec4 mirror = uHasMirror ? sampleLayer(uMirror, p) : color;
     if (radius > 0.01) {
         // Full-resolution separable Gaussian, with adjacent texels combined
         // using bilinear filtering. Offsets never grow into a sparse grid.
-        // Horizontal first: sigma varies only with monitor x, so the vertical
-        // pass samples the same sigma even on rotated/flipped outputs.
+        // Combine edge strengths with max so corners have a continuous blur
+        // field. Both passes use monitor axes even on rotated/flipped outputs.
         vec2 direction = uPass == 0 ? uAxisX.xy : uAxisY.xy;
         float sigma = max(radius / 3.0, 0.01);
         float total = 1.0;

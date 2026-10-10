@@ -2861,7 +2861,7 @@ std::string OverviewController::overviewStateJson() const {
         if (const auto frame = stageTransitionFrame(managed.window, managed.targetMonitor)) {
             item["stageTransitionClip"] = rectJson(frame->clip);
             item["stageTransitionViewport"] = rectJson(frame->viewport.box);
-            item["stageTransitionEdges"] = {frame->viewport.left, frame->viewport.right};
+            item["stageTransitionEdges"] = {frame->viewport.left, frame->viewport.right, frame->viewport.top, frame->viewport.bottom};
         }
         if (managed.group) {
             item["groupSize"] = managed.group->size();

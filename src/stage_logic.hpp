@@ -80,18 +80,20 @@ std::pair<double, double> mapPreviewCenter(const Rect& card, const Rect& desktop
 Rect sidebarArea(const Rect& base, const Geometry& geometry, bool right);
 Rect desktopArea(const Rect& base, const Geometry& geometry, bool right);
 
-// The viewport is always a hard clip, including when both effect widths are 0.
+// The viewport is always a hard clip, including when all effect widths are 0.
 // Widths are measured at the displayed size, independently of window geometry.
 enum class FixedOuterEdge { None, Left, Right };
 struct EdgeViewport {
     Rect box;
     double left = 0;
     double right = 0;
+    double top = 0;
+    double bottom = 0;
     // Overview card reveal only; desktop seams keep their moving viewport.
     FixedOuterEdge fixedOuterEdge = FixedOuterEdge::None;
     double fixedOuterX = 0;
 };
-EdgeViewport edgeViewport(const Rect& box, double left, double right);
+EdgeViewport edgeViewport(const Rect& box, double left, double right, double top = 0, double bottom = 0);
 EdgeViewport desktopShadowViewport(const EdgeViewport& viewport, const Rect& output);
 EdgeViewport edgeViewportForWindow(const EdgeViewport& viewport, const Rect& window);
 double edgeOpacity(const EdgeViewport& viewport, double x, double y);

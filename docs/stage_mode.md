@@ -74,12 +74,14 @@ translating it keeps the clip boundary continuous.
 The revealed background remains unchanged. Unpinned floating windows use the
 same desktop boundary and edge effect in every layout. Pinned floating windows
 render above Stage and retain native pointer input over it, without clipping.
-Floating windows inside Stage cards also use the card's left/right gradient
+Floating windows inside Stage cards also use the card's four-sided gradient
 blur bands when their content crosses those edges, in every layout. They share
 `stage_scrolling_preview_edge_width`; fully visible edges remain sharp. Card
 endpoints handed to Overview preserve the same gradient and hard clip.
 Special/fullscreen windows and non-scrolling tiled windows retain native policy.
-The bands remain horizontal even for a vertically configured scrolling layout.
+Stage cards fade and blur each crossed edge independently, including top/bottom
+for vertical scrolling and floating windows. Corners combine the strongest blur
+and lowest opacity of their adjacent bands. The desktop seam remains horizontal.
 Native desktop clipping uses the output height so shadows may extend above or
 below the work area. Card clips and flight coordinate mapping stay unchanged.
 

@@ -60,6 +60,27 @@ int main() {
     const auto rightClipped = edgeViewportForWindow(mirrored, {800, 50, 220, 300});
     ok &= expect(rightClipped.right == mirrored.right && edgeViewportForWindow(mirrored, {800, 50, 200, 300}).right == 0,
         "crossing classification mirrors with the sidebar");
+    const auto fourEdges = edgeViewport(viewportBox, 64, 64, 40, 40);
+    const auto topOnly = edgeViewportForWindow(fourEdges, {250, 40, 300, 200});
+    const auto bottomOnly = edgeViewportForWindow(fourEdges, {250, 450, 300, 120});
+    const auto corner = edgeViewportForWindow(fourEdges, {190, 40, 200, 200});
+    ok &= expect(topOnly.top == 40 && topOnly.bottom == 0 && topOnly.left == 0 && topOnly.right == 0,
+        "top overflow enables only the top gradient");
+    ok &= expect(bottomOnly.bottom == 40 && bottomOnly.top == 0, "bottom overflow enables only the bottom gradient");
+    ok &= expect(corner.top == 40 && corner.left == 64, "corner overflow retains both gradients");
+    ok &= expect(edgeViewportForWindow(fourEdges, viewportBox).top == 0 && edgeViewportForWindow(fourEdges, viewportBox).bottom == 0,
+        "fully visible vertical edges stay sharp");
+    ok &= expect(near(edgeOpacity(topOnly, 500, 50), 0) && near(edgeOpacity(topOnly, 500, 60), 0.5) &&
+        near(edgeOpacity(topOnly, 500, 70), 1) && near(edgeOpacity(bottomOnly, 500, 540), 0.5), "vertical opacity ramps mirror");
+    const auto tallBands = edgeViewport(viewportBox, 0, 0, 1000, 1000);
+    ok &= expect(near(tallBands.top + tallBands.bottom, viewportBox.height), "vertical bands fit viewport height");
+    const auto verticalFlight = scrollingFlightFrame(viewportBox, viewportBox, fourEdges, hard, 0.5);
+    ok &= expect(near(verticalFlight.viewport.top, 5) && near(verticalFlight.viewport.bottom, 5), "flights ease out vertical bands with window geometry");
+    const auto verticalMix = interpolateEdgeFrame({fourEdges, viewportBox}, {hard, viewportBox}, 0.5);
+    ok &= expect(near(verticalMix.viewport.top, 20) && near(verticalMix.viewport.bottom, 20), "overview frames interpolate vertical bands");
+    const OverviewEndpoint verticalEndpoint{viewportBox, fourEdges, viewportBox};
+    const auto verticalReveal = overviewRevealFrame(verticalEndpoint, viewportBox, viewportBox, 1);
+    ok &= expect(verticalReveal.viewport.top == 0 && verticalReveal.viewport.bottom == 0, "overview reveal removes vertical bands at completion");
     const auto cardView = edgeViewport({20, 300, 160, 100}, 16, 16);
     const hymission::Rect oversizedDrag{0, 0, 1800, 1000};
     const auto desktopDrag = dragTargetBox(oversizedDrag, viewportBox, 210, 60, 0.2, true);
