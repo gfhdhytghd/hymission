@@ -111,7 +111,8 @@ Item {
     for _ in $(seq 50); do omarchy-shell -q shell ping >/dev/null 2>&1 && break; sleep 0.2; done
     list=$(omarchy-plugin-list --json 2>/dev/null) || exit 0
     jq -e --arg id "$id" 'any(.[]; .id == $id and .enabled)' <<<"$list" >/dev/null && exit 0
-    path=$(hyprctl -j plugin list | jq -r --arg c "$cache/" '.[]? | select(.path | startswith($c)) | .path' | head -n1)
+    pid=$(hyprctl -j instances | jq -r --arg s "$HYPRLAND_INSTANCE_SIGNATURE" '.[] | select(.instance == $s) | .pid')
+    path=$(awk -v c="$cache/" 'index($6, c) == 1 && $6 ~ /\\.so$/ { print $6; exit }' "/proc/$pid/maps")
     [ -n "$path" ] || exit 0
     hyprctl plugin unload "$path" >/dev/null && hyprctl reload >/dev/null`,
     "bash", pluginId, (Quickshell.env("XDG_CACHE_HOME") || (Quickshell.env("HOME") + "/.cache")) + "/" + pluginId])

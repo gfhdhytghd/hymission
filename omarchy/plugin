@@ -25,10 +25,16 @@ running_commit() { hyprctl -j version | jq -r .commit; }
 header_commit() { sed -n 's/^#define GIT_COMMIT_HASH *"\(.*\)"/\1/p' /usr/include/hyprland/src/version.h 2>/dev/null; }
 source_commit() { git -C "$DIR" rev-parse HEAD 2>/dev/null || echo unknown; }
 
-# Path of our plugin if Hyprland has it loaded (any path), empty otherwise.
+# Path of the plugin library Hyprland has mapped (ours or another copy), if any.
+# hyprctl does not report plugin paths, but the compositor's memory map does.
+hyprland_pid() {
+  hyprctl -j instances | jq -r --arg s "${HYPRLAND_INSTANCE_SIGNATURE:-}" '.[] | select(.instance == $s) | .pid'
+}
 loaded_path() {
-  hyprctl -j plugin list 2>/dev/null |
-    jq -r --arg n "$NAME" 'if type == "array" then .[] else empty end | select(.name == $n) | .path' | head -n1
+  local pid
+  pid=$(hyprland_pid)
+  [[ -n $pid ]] || return 0
+  awk -v lib="/${FILES[0]}" 'index($6, lib) && substr($6, length($6) - length(lib) + 1) == lib { print $6; exit }' "/proc/$pid/maps"
 }
 
 status() {
