@@ -1,0 +1,14 @@
+[
+  {
+    "key": "SUPER + TAB",
+    "lua": "hl.plugin.hymission.toggle",
+    "description": "Mission Control",
+    "replaces": ["Next workspace"]
+  },
+  {
+    "key": "SUPER + SHIFT + TAB",
+    "lua": "function() hl.plugin.hymission.toggle(\"forceall\") end",
+    "description": "Mission Control (all workspaces)",
+    "replaces": ["Previous workspace"]
+  }
+]

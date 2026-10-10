@@ -1,0 +1,304 @@
+#!/bin/bash
+# Omarchy bridge for a native Hyprland plugin. Builds never modify the checkout.
+# status | start | apply | setup | unload | menu on|off|status
+set -euo pipefail
+
+DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=/dev/null
+source "$DIR/omarchy/plugin.conf"
+ID=$(jq -r .id "$DIR/manifest.json")
+TITLE=$(jq -r .name "$DIR/manifest.json")
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/$ID"
+STAMP="$CACHE/current.json"
+USER_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/$NAME/omarchy.lua"
+MENU="$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
+BEGIN="  // >>> $ID (managed by the $TITLE Omarchy plugin; removed when it is disabled)"
+END="  // <<< $ID"
+
+die() { echo "$NAME: $*" >&2; exit 1; }
+lock() { mkdir -p "$CACHE"; exec 9>"$CACHE/.lock"; flock 9; }
+running_commit() { hyprctl -j version | jq -r .commit; }
+header_commit() { sed -n 's/^#define GIT_COMMIT_HASH *"\(.*\)"/\1/p' /usr/include/hyprland/src/version.h 2>/dev/null; }
+# Ignore updates that do not affect the native build.
+source_commit() {
+  git -C "$DIR" log -1 --format=%H -- . ':(exclude)omarchy' ':(exclude)manifest.json' \
+    ':(exclude)*.md' ':(exclude)docs' ':(exclude)preview.*' 2>/dev/null || echo unknown
+}
+
+hyprland_pid() {
+  hyprctl -j instances | jq -r --arg s "${HYPRLAND_INSTANCE_SIGNATURE:-}" '.[] | select(.instance == $s) | .pid'
+}
+# procfs paths may contain spaces; take everything from the first slash.
+loaded_path() {
+  local pid
+  pid=$(hyprland_pid)
+  [[ -n $pid && -r /proc/$pid/maps ]] || return 0
+  OMARCHY_LIB="/${FILES[0]}" awk '
+    { p = substr($0, index($0, "/")); sub(/ \(deleted\)$/, "", p)
+      lib = ENVIRON["OMARCHY_LIB"]
+      if (index($0, "/") && substr(p, length(p)-length(lib)+1) == lib) { print p; exit } }
+  ' "/proc/$pid/maps"
+}
+# Protect builds mapped by ANY Hyprland session, including helper directories.
+mapped_paths() {
+  local pid instances
+  instances=$(hyprctl -j instances | jq -r '.[].pid')
+  while IFS= read -r pid; do
+    [[ -r /proc/$pid/maps ]] || continue
+    awk 'index($0, "/") { p = substr($0, index($0, "/")); sub(/ \(deleted\)$/, "", p); print p }' "/proc/$pid/maps"
+  done <<<"$instances"
+}
+
+status() {
+  local commit loaded built="" stamp=null available=false
+  commit=$(running_commit)
+  loaded=$(loaded_path)
+  if [[ -f $STAMP ]]; then
+    stamp=$(cat "$STAMP")
+    built=$(jq -r '.dir + "/" + .lib' <<<"$stamp")
+    [[ -f $built ]] && available=true
+  fi
+  jq -nc --arg loaded "$loaded" --arg cache "$CACHE/" --arg built "$built" \
+    --arg commit "$commit" --arg source "$(source_commit)" \
+    --argjson stamp "$stamp" --argjson available "$available" '
+    {
+      state: (
+        if $stamp != null and ($available | not) then "missing"
+        elif $loaded != "" then (if ($loaded | startswith($cache)) then "loaded" else "foreign" end)
+        elif $stamp == null or ($available | not) then "missing"
+        elif $stamp.hyprland != $commit then "stale"
+        else "ready" end),
+      outdated: ($stamp != null and $stamp.source != $source),
+      swap: ($available and $loaded != "" and ($loaded | startswith($cache)) and $built != $loaded
+             and $stamp != null and $stamp.hyprland == $commit),
+      loaded: $loaded, library: $built
+    }'
+}
+
+# Omarchy accepts whole-line comments and trailing commas. Preserve entry order.
+menu_entries() {
+  jq -Rs 'gsub("(?m)^[ \\t]*//[^\\n]*(\\n|$)"; "") | gsub("(?<string>\"(?:[^\"\\\\]|\\\\.)*\")|,(?=\\s*[}\\]])"; .string // "") | fromjson
+    | if type == "object" and all(.[]; type == "object") then . else error("menu.json must contain menu entries") end' \
+    "$DIR/omarchy/menu.json"
+}
+menu_refresh() { omarchy menu refresh >/dev/null 2>&1 || true; }
+# Keep a symlink intact by atomically replacing its resolved target. Lock the
+# shared extension too, so different plugins cannot overwrite each other's edits.
+menu_edit() (
+  local action=$1 target tmp block=""
+  [[ $action == install || -f $MENU ]] || return 0
+  if [[ $action == install ]]; then
+    block=$(menu_entries | jq -r 'to_entries[] | "  \(.key | @json): \(.value | tojson),"')
+    block=$(printf '%s\n%s\n%s' "$BEGIN" "$block" "$END")
+  fi
+  mkdir -p "$(dirname "$MENU")"
+  exec 8>"$(dirname "$MENU")/.omarchy-menu.lock"
+  flock 8
+  target=$(readlink -f -- "$MENU") || die "cannot resolve menu extension: $MENU"
+  if [[ -f $target ]] && ! awk '$0 ~ /^[[:space:]]*\{[[:space:]]*$/ { found=1 } END { exit !found }' "$target"; then
+    echo "$NAME: menu extension has no standalone { line; leaving it unchanged" >&2
+    return 0
+  fi
+  tmp=$(mktemp "$(dirname "$target")/.omarchy-menu.XXXXXX")
+  trap 'rm -f -- "$tmp" "$tmp.insert"' EXIT
+  if [[ -f $target ]]; then
+    # An incomplete marker pair must never consume unrelated user entries.
+    if ! OMARCHY_BEGIN=$BEGIN OMARCHY_END=$END awk '
+      $0 == ENVIRON["OMARCHY_BEGIN"] { if (skip) bad=1; skip=1 }
+      $0 == ENVIRON["OMARCHY_END"] { skip=0 }
+      END { exit (skip || bad) }
+    ' "$target"; then
+      echo "$NAME: incomplete managed menu block; leaving it unchanged" >&2
+      return 0
+    fi
+    OMARCHY_BEGIN=$BEGIN OMARCHY_END=$END OMARCHY_BLOCK=$block awk '
+      BEGIN { begin=ENVIRON["OMARCHY_BEGIN"]; end=ENVIRON["OMARCHY_END"]; block=ENVIRON["OMARCHY_BLOCK"] }
+      $0 == begin { if (block != "") print block; skip=1; next }
+      skip { if ($0 == end) skip=0; next }
+      { print }
+    ' "$target" >"$tmp"
+    # New blocks go before user entries, which therefore retain override priority.
+    if [[ $action == install ]] && ! grep -Fqx -- "$BEGIN" "$target"; then
+      OMARCHY_BLOCK=$block awk '
+        { print; if (!inserted && $0 ~ /^[[:space:]]*\{[[:space:]]*$/) { print ENVIRON["OMARCHY_BLOCK"]; inserted=1 } }
+      ' "$tmp" >"$tmp.insert"
+      mv -- "$tmp.insert" "$tmp"
+    fi
+    chmod --reference="$target" "$tmp"
+    cmp -s -- "$target" "$tmp" && return 0
+  else
+    printf '{\n%s\n}\n' "$block" >"$tmp"
+    chmod 644 "$tmp"
+  fi
+  mv -- "$tmp" "$target"
+  menu_refresh
+)
+menu_install() {
+  if [[ -f $DIR/omarchy/menu.json && -f $CACHE/menu-consent ]] && [[ $(cat "$CACHE/menu-consent") == yes ]]; then
+    menu_edit install
+  fi
+}
+menu() {
+  case ${1:-status} in
+    on)
+      [[ -f $DIR/omarchy/menu.json ]] || die "this plugin ships no menu entries"
+      menu_entries >/dev/null
+      printf 'yes\n' >"$CACHE/menu-consent"
+      [[ $(status | jq -r .state) != loaded ]] || menu_install
+      ;;
+    off) printf 'no\n' >"$CACHE/menu-consent"; menu_edit remove ;;
+    status) if [[ -f $CACHE/menu-consent ]]; then cat "$CACHE/menu-consent"; else echo undecided; fi ;;
+    *) die "usage: plugin menu on|off|status" ;;
+  esac
+}
+menu_consent() {
+  local labels answer
+  if [[ -t 0 && -t 1 && -f $DIR/omarchy/menu.json && ! -f $CACHE/menu-consent ]]; then
+    labels=$(menu_entries | jq -r '[.[] | .label] | if length > 1 then (.[:-1] | join(", ")) + " and " + .[-1] else .[0] end')
+    read -r -p "Use $TITLE for Omarchy's $labels menu entries? [Y/n] " answer || return 0
+    case $answer in
+      "" | [Yy] | [Yy][Ee][Ss]) printf 'yes\n' >"$CACHE/menu-consent" ;;
+      *) printf 'no\n' >"$CACHE/menu-consent" ;;
+    esac
+  fi
+}
+
+start() {
+  local state old lib
+  state=$(status)
+  case $(jq -r .state <<<"$state") in
+    loaded)
+      if [[ $(jq -r .swap <<<"$state") != true ]]; then
+        menu_install
+        jq -c . <<<"$state"
+        return 0
+      fi
+      old=$(jq -r .loaded <<<"$state")
+      lib=$(jq -r .library <<<"$state")
+      hyprctl plugin unload "$old" >/dev/null
+      if ! hyprctl plugin load "$lib" >/dev/null; then
+        if hyprctl plugin load "$old" >/dev/null; then
+          hyprctl reload >/dev/null
+          echo "$NAME: new build failed; restored $old" >&2
+        else
+          echo "$NAME: new build and rollback both failed" >&2
+        fi
+        return 1
+      fi
+      ;;
+    ready) hyprctl plugin load "$(jq -r .library <<<"$state")" >/dev/null ;;
+    *) jq -c . <<<"$state"; return 0 ;;
+  esac
+  # Only actual load/swap transitions reload; polling an unchanged build does not.
+  hyprctl reload >/dev/null
+  state=$(status)
+  [[ $(jq -r .state <<<"$state") != loaded ]] || menu_install
+  jq -c . <<<"$state"
+}
+
+# Lua decimal escapes must have three digits so following digits stay literal.
+JQ_LUA='
+  def lua: "\"" + (explode | map(
+    if . == 92 then "\\\\" elif . == 34 then "\\\""
+    elif . < 32 or . == 127 then "\\" + (("00" + tostring)[-3:])
+    else [.] | implode end) | join("")) + "\"";
+'
+lua_string() { jq -nr --arg s "$1" "$JQ_LUA"'$s | lua'; }
+
+apply() (
+  [[ $(status | jq -r .state) == loaded ]] || return 0
+  menu_install
+  [[ -n ${XDG_RUNTIME_DIR:-} && -d $XDG_RUNTIME_DIR && -O $XDG_RUNTIME_DIR ]] ||
+    die "XDG_RUNTIME_DIR must be set to a directory owned by this user"
+  local lua result
+  lua=$(mktemp "$XDG_RUNTIME_DIR/$ID.XXXXXX.lua")
+  trap 'rm -f -- "$lua"' EXIT
+  # Reload resets Lua globals. Keep the once-per-generation marker.
+  printf '__omarchy_plugins = __omarchy_plugins or {}\nif __omarchy_plugins[%s] then return end\n__omarchy_plugins[%s] = true\n' \
+    "$(lua_string "$ID")" "$(lua_string "$ID")" >"$lua"
+  if [[ -f $USER_CONFIG ]]; then
+    printf 'dofile(%s)\n' "$(lua_string "$USER_CONFIG")" >>"$lua"
+  else
+    hyprctl -j binds | jq -r --slurpfile spec "$DIR/omarchy/bindings.json" --arg defaults "$DIR/omarchy/defaults.lua" "$JQ_LUA"'
+      def mods: {SHIFT: 1, CAPS: 2, CTRL: 4, CONTROL: 4, ALT: 8, MOD2: 16, MOD3: 32, SUPER: 64, WIN: 64, MOD5: 128};
+      def parse: (split("+") | map(gsub("^\\s+|\\s+$"; "") | ascii_upcase)) as $p
+        | {key: $p[-1], mask: ($p[:-1] | map(mods[.] // 0) | add // 0)};
+      . as $binds
+      | ($spec[0][] | . as $b | ($b.key | parse) as $k
+          | [$binds[] | select(.modmask == $k.mask and (.key | ascii_upcase) == $k.key)] as $existing
+          | ($existing | map(select(.description as $d | ($b.replaces // []) + [$b.description] | index($d) | not))) as $foreign
+          | if ($foreign | length) > 0 then
+              "-- skipped " + (("\($b.key): bound by the user (\($foreign | map(.description) | join(", ")))") | lua)
+            else
+              (if ($existing | length) > 0 then "hl.unbind(\($b.key | lua))\n" else "" end)
+              + "hl.bind(\($b.key | lua), \($b.lua), { description = \($b.description | lua) })"
+            end),
+        "dofile(\($defaults | lua))"
+    ' >>"$lua"
+  fi
+  result=$(hyprctl eval "dofile($(lua_string "$lua"))")
+  [[ $result == ok ]] || die "Lua apply failed: $result"
+  grep '^-- skipped' "$lua" || true
+)
+
+unload() {
+  local path
+  menu_edit remove
+  path=$(loaded_path)
+  if [[ -n $path && $path == "$CACHE/"* ]]; then
+    hyprctl plugin unload "$path" >/dev/null
+    hyprctl reload >/dev/null
+  fi
+}
+
+setup() (
+  local running headers source out missing file stage="" stamp_tmp="" mapped keep complete=true
+  trap '[[ -z $stage ]] || rm -rf -- "$stage"; [[ -z $stamp_tmp ]] || rm -f -- "$stamp_tmp"' EXIT
+  menu_consent
+  running=$(running_commit)
+  source=$(source_commit)
+  out="$CACHE/${running:0:12}-${source:0:12}"
+  for file in "${FILES[@]}"; do [[ -f $out/$file ]] || complete=false; done
+  if [[ $complete != true ]]; then
+    headers=$(header_commit)
+    [[ -n $headers ]] || die "Hyprland headers not found in /usr/include/hyprland"
+    [[ $running == "$headers" ]] ||
+      die "Hyprland was updated but this session still runs the old version. Log out and back in, then rerun setup."
+    mapped=$(mapped_paths)
+    [[ $mapped != *"$out/"* ]] || die "incomplete build is still mapped; refusing to replace $out"
+    missing=$(pacman -T "${PACKAGES[@]}" || true)
+    if [[ -n $missing ]]; then
+      echo "Installing build dependencies: $missing"
+      # shellcheck disable=SC2086
+      sudo pacman -S --needed --noconfirm $missing
+    fi
+    local extra=()
+    declare -F cmake_out_args >/dev/null && mapfile -t extra < <(cmake_out_args "$out")
+    cmake -S "$DIR" -B "$CACHE/build" -G Ninja -DCMAKE_BUILD_TYPE=Release "${CMAKE_ARGS[@]}" "${extra[@]}"
+    cmake --build "$CACHE/build" --target "${TARGETS[@]}"
+    stage=$(mktemp -d "$CACHE/.stage.XXXXXX")
+    for file in "${FILES[@]}"; do install -Dm755 "$CACHE/build/$file" "$stage/$file"; done
+    [[ ! -e $out ]] || rm -rf -- "$out"
+    mv -- "$stage" "$out"
+    stage=""
+  fi
+  stamp_tmp=$(mktemp "$CACHE/.stamp.XXXXXX")
+  jq -n --arg dir "$out" --arg lib "${FILES[0]}" --arg h "$running" --arg s "$source" \
+    '{dir: $dir, lib: $lib, hyprland: $h, source: $s}' >"$stamp_tmp"
+  mv -- "$stamp_tmp" "$STAMP"
+  stamp_tmp=""
+  mapped=$(mapped_paths)
+  for keep in "$CACHE"/*/; do
+    keep=${keep%/}
+    [[ $keep == "$CACHE/build" || $keep == "$out" || $mapped == *"$keep/"* ]] && continue
+    rm -rf -- "$keep"
+  done
+  echo "$NAME is built for Hyprland ${running:0:12}."
+)
+
+case ${1:-} in
+  status) status ;;
+  start | apply | unload | setup) lock; "$1" ;;
+  menu) lock; menu "${2:-status}" ;;
+  *) echo "usage: $0 status|start|apply|setup|unload|menu on|off|status" >&2; exit 2 ;;
+esac
