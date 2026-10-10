@@ -1025,3 +1025,21 @@ The plugin triggers `reloadConfig()` after loading, which re-runs your Lua confi
 **Check**: Run `hyprctl dispatch hymission:debug_current_layout` to see a notification with the layout count and preview rectangles.
 
 **Fix**: Verify `show_special` and `only_active_monitor` settings match your expected scope.
+
+### Idempotent Stage integration
+
+External edge triggers can use `hl.plugin.hymission.stage_open()` and
+`stage_close()` in Lua configs (legacy: `hymission:stage_open` / `stage_close`).
+Repeated requests preserve the requested state and do not restart its animation;
+closing an already hidden Stage succeeds. Overview/workspace gestures still
+reject state changes. These actions affect Stage globally, as `stage_toggle` does.
+
+`hl.plugin.hymission.stage_region(monitor_name)` returns the current target
+reserved strip as `{x, y, width, height, monitor, visible=true}` in global logical coordinates, including
+its desktop gap and the output's full vertical extent. It updates with actual
+Stage geometry and includes the boundary-to-strip gap from output reservations.
+It returns nil when hidden, unavailable, covered or suspended. Target geometry
+is available during the opening animation. The read-only command
+`hyprctl hymission-stage-region MONITOR` returns the same rectangle as JSON or
+`null`. `hymission-stage-state` exposes the explicit visible state and screens.
+These are read-only queries, with no compositor reload or geometry mutation.

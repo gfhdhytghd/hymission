@@ -15,6 +15,7 @@ extern "C" {
 #include <lua.h>
 }
 
+#include "vendor/nlohmann/json.hpp"
 #include "overview_controller.hpp"
 #include "stage_controller.hpp"
 #include "dispatcher_names.hpp"
@@ -23,6 +24,7 @@ inline HANDLE g_pluginHandle = nullptr;
 inline std::unique_ptr<hymission::OverviewController> g_overviewController;
 inline std::unique_ptr<hymission::StageController> g_stageController;
 inline SP<SHyprCtlCommand> g_stageStateCommand;
+inline SP<SHyprCtlCommand> g_stageRegionCommand;
 inline SP<SHyprCtlCommand> g_overviewStateCommand;
 inline SP<SHyprCtlCommand> g_rawWindowRenderCommand;
 inline SP<SHyprCtlCommand> g_captureInputCommand;
@@ -61,6 +63,13 @@ bool addStringConfig(const char* name, Config::STRING fallback) {
 SDispatchResult dispatchToggle(const std::string& args) {
     return g_overviewController ? g_overviewController->toggle(args) : SDispatchResult{.success = false, .error = "overview controller unavailable"};
 }
+
+SDispatchResult dispatchStageVisibility(bool visible) {
+    return g_stageController && g_stageController->setVisibility(visible) ? SDispatchResult{} :
+        SDispatchResult{.success = false, .error = "Stage is unavailable during overview or a workspace gesture"};
+}
+SDispatchResult dispatchStageOpen(const std::string&) { return dispatchStageVisibility(true); }
+SDispatchResult dispatchStageClose(const std::string&) { return dispatchStageVisibility(false); }
 
 SDispatchResult dispatchStageToggle(const std::string&) {
     return g_stageController && g_stageController->toggleVisibility() ? SDispatchResult{} :
@@ -205,6 +214,22 @@ int luaDebugCurrentLayout(lua_State* L) {
     return luaDispatchResult(L, dispatchDebugCurrentLayout(""));
 }
 
+int luaStageOpen(lua_State* L) { return luaDispatchResult(L, dispatchStageOpen("")); }
+int luaStageClose(lua_State* L) { return luaDispatchResult(L, dispatchStageClose("")); }
+int luaStageRegion(lua_State* L) {
+    const std::string monitor = luaL_checkstring(L, 1);
+    const auto r = g_stageController ? g_stageController->holdRegion(monitor) : std::nullopt;
+    if (!r) { lua_pushnil(L); return 1; }
+    lua_createtable(L, 0, 6);
+    lua_pushnumber(L, r->x); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, r->y); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, r->width); lua_setfield(L, -2, "width");
+    lua_pushnumber(L, r->height); lua_setfield(L, -2, "height");
+    lua_pushlstring(L, monitor.data(), monitor.size()); lua_setfield(L, -2, "monitor");
+    lua_pushboolean(L, true); lua_setfield(L, -2, "visible");
+    return 1;
+}
+
 int luaStageToggle(lua_State* L) {
     return luaDispatchResult(L, dispatchStageToggle(""));
 }
@@ -213,6 +238,10 @@ int luaDispatch(lua_State* L) {
     const std::string dispatcher = normalizeHymissionDispatcher(luaL_checkstring(L, 1));
     const std::string args       = luaOptionalString(L, 2);
 
+    if (dispatcher == "hymission:stage_open")
+        return luaDispatchResult(L, dispatchStageOpen(args));
+    if (dispatcher == "hymission:stage_close")
+        return luaDispatchResult(L, dispatchStageClose(args));
     if (dispatcher == "hymission:stage_toggle")
         return luaDispatchResult(L, dispatchStageToggle(args));
     if (dispatcher == "hymission:toggle")
@@ -454,6 +483,17 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         .fn = [](eHyprCtlOutputFormat, std::string) { return g_stageController ? g_stageController->stateJson() : "{\"enabled\":false}\n"; },
     });
 
+    g_stageRegionCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
+        .name = "hymission-stage-region", .exact = false,
+        .fn = [](eHyprCtlOutputFormat, std::string args) {
+            const auto split = args.find(' ');
+            const auto r = split != std::string::npos && g_stageController ?
+                g_stageController->holdRegion(args.substr(split + 1)) : std::nullopt;
+            return r ? nlohmann::json{{"x", r->x}, {"y", r->y}, {"width", r->width}, {"height", r->height},
+                                      {"monitor", args.substr(split + 1)}, {"visible", true}}.dump() : "null";
+        },
+    });
+
     // Lua configs call the plugin-owned functions registered below directly.
     // Hyprland builds without the legacy config parser keep addDispatcherV2 for
     // ABI compatibility but make it fail, so registering these compatibility
@@ -466,6 +506,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         };
 
         registerDispatcher("hymission:stage_toggle", dispatchStageToggle);
+        registerDispatcher("hymission:stage_open", dispatchStageOpen);
+        registerDispatcher("hymission:stage_close", dispatchStageClose);
         registerDispatcher("hymission:toggle", dispatchToggle);
         registerDispatcher("hymission:open", dispatchOpen);
         registerDispatcher("hymission:close", dispatchClose);
@@ -511,6 +553,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         };
 
         registerLuaFunction("stage_toggle", luaStageToggle);
+        registerLuaFunction("stage_open", luaStageOpen);
+        registerLuaFunction("stage_close", luaStageClose);
+        registerLuaFunction("stage_region", luaStageRegion);
         registerLuaFunction("toggle", luaToggle);
         registerLuaFunction("open", luaOpen);
         registerLuaFunction("close", luaClose);
@@ -538,6 +583,10 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // them before dlclose, while both the code and controller callbacks exist.
     if (g_pHyprRenderer)
         g_pHyprRenderer->m_renderPass.clear();
+    if (g_stageRegionCommand) {
+        HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_stageRegionCommand);
+        g_stageRegionCommand.reset();
+    }
     if (g_stageStateCommand) {
         HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_stageStateCommand);
         g_stageStateCommand.reset();

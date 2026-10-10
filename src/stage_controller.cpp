@@ -3354,16 +3354,44 @@ void StageController::Impl::settleVisibility(bool visible) {
 }
 
 bool StageController::toggleVisibility() {
+    return setVisibility(!m_impl->runtimeVisible.value_or(setting("stage_enabled", 0) != 0));
+}
+
+bool StageController::setVisibility(bool visible) {
     auto& self = *m_impl;
     if (self.blocked() || self.swipe || self.visibilityGesture)
         return false;
-    const bool visible = !self.runtimeVisible.value_or(setting("stage_enabled", 0) != 0);
+    const bool previous = self.runtimeVisible.value_or(setting("stage_enabled", 0) != 0);
+    if (previous == visible && !visible)
+        return true;
     self.runtimeVisible = visible;
     self.sync();
     if (!self.enabled)
         return false;
-    self.settleVisibility(visible);
+    // Repeated requests must not restart an in-flight visibility animation.
+    if (previous != visible)
+        self.settleVisibility(visible);
     return true;
+}
+
+std::optional<Rect> StageController::holdRegion(const std::string& name) const {
+    const auto& self = *m_impl;
+    if (!self.enabled || self.blocked() || !self.runtimeVisible.value_or(setting("stage_enabled", 0) != 0))
+        return std::nullopt;
+    for (const auto& screen : self.screens) {
+        auto monitor = screen.monitor.lock();
+        if (!monitor || monitor->m_name != name || screen.covered || screen.suspended ||
+            self.renderBlocked(monitor) || monitor->m_activeSpecialWorkspace)
+            continue;
+        // Target geometry remains stable through the zero-progress opening frame.
+        const auto region = stage::holdStrip({monitor->m_position.x, monitor->m_position.y,
+                                             monitor->m_size.x, monitor->m_size.y},
+                                            rect(screen.base), screen.geometry.reservation, screen.right);
+        if (region.width <= 0 || region.height <= 0)
+            return std::nullopt;
+        return region;
+    }
+    return std::nullopt;
 }
 
 bool StageController::beginVisibilityGesture() {

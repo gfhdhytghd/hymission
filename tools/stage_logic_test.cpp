@@ -35,6 +35,21 @@ int main() {
     ok &= expect(near(visibleAxisFraction({-1550, -700, 190, 400}, {-1500, -700, 1000, 800}, true), 0.14),
         "global monitor offsets do not change follow percentage");
     {
+        const hymission::Rect output{-1000, -200, 1000, 800};
+        const hymission::Rect work{-980, -170, 950, 740};
+        const auto left = holdStrip(output, work, 120, false);
+        const auto right = holdStrip(output, work, 120, true);
+        ok &= expect(near(left.x, -1000) && near(left.y, -200) && near(left.width, 140) && near(left.height, 800),
+                     "left hold strip includes actual Stage width, gap and output reservations");
+        ok &= expect(near(right.x, -150) && near(right.width, 150) && near(right.height, 800),
+                     "right hold strip reaches the global logical output edge");
+        ok &= expect(near(holdStrip(output, work, 200, false).width, 220), "hold width follows dynamic Stage geometry");
+        ok &= expect(near(holdStrip(output, work, 9999, false).width, 970), "hold reservation clamps to available work area");
+        ok &= expect(hymission::normalizeHymissionDispatcher("stage_open") == "hymission:stage_open" &&
+                     hymission::normalizeHymissionDispatcher("hymission.stage_close") == "hymission:stage_close",
+                     "idempotent Stage aliases resolve in Lua dispatch routing");
+    }
+    {
         const hymission::Rect full{-1920, 30, 1920, 1050};
         const hymission::Rect inset{-1680, 30, 1680, 1050};
         const auto hidden = visibilityDesktop(full, inset, 0);

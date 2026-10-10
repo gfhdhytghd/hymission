@@ -23,6 +23,16 @@ inline Rect reservedWorkArea(Rect area, double reservation, double progress, boo
     return area;
 }
 
+// Extend the actual Stage reservation through output/bar gaps to the physical
+// edge. Inputs and result are already global logical rectangles.
+inline Rect holdStrip(const Rect& output, const Rect& base, double reservation, bool right) {
+    const double amount = std::clamp(reservation, 0.0, base.width);
+    const double boundary = std::clamp(right ? base.x + base.width - amount : base.x + amount,
+                                       output.x, output.x + output.width);
+    return {right ? boundary : output.x, output.y,
+            right ? output.x + output.width - boundary : boundary - output.x, output.height};
+}
+
 inline Rect visibilityDesktop(const Rect& base, const Rect& stageDesktop, double progress) {
     const double p = std::clamp(progress, 0.0, 1.0);
     return {base.x + (stageDesktop.x - base.x) * p, base.y,
