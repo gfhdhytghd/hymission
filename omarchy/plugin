@@ -23,7 +23,12 @@ die() { echo "$NAME: $*" >&2; exit 1; }
 
 running_commit() { hyprctl -j version | jq -r .commit; }
 header_commit() { sed -n 's/^#define GIT_COMMIT_HASH *"\(.*\)"/\1/p' /usr/include/hyprland/src/version.h 2>/dev/null; }
-source_commit() { git -C "$DIR" rev-parse HEAD 2>/dev/null || echo unknown; }
+# Last commit that touched anything the native build reads, so updates to the
+# Omarchy bridge, docs or previews do not ask for a rebuild.
+source_commit() {
+  git -C "$DIR" log -1 --format=%H -- . ':(exclude)omarchy' ':(exclude)manifest.json' \
+    ':(exclude)*.md' ':(exclude)docs' ':(exclude)preview.*' 2>/dev/null || echo unknown
+}
 
 # Path of the plugin library Hyprland has mapped (ours or another copy), if any.
 # hyprctl does not report plugin paths, but the compositor's memory map does.
