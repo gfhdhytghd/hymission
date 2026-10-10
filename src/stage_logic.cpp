@@ -1,4 +1,5 @@
 #include "stage_logic.hpp"
+#include <limits>
 
 #include <algorithm>
 #include <cmath>
@@ -243,6 +244,28 @@ EdgeViewport edgeViewportForWindow(const EdgeViewport& viewport, const Rect& win
     if (window.y + window.height <= viewport.box.y + viewport.box.height + 0.01)
         result.bottom = 0;
     return result;
+}
+
+std::optional<std::size_t> activationCardAt(const std::vector<Rect>& cards, const Rect& clip, double x, double y) {
+    if (x < clip.x || x >= clip.x + clip.width || y < clip.y || y >= clip.y + clip.height)
+        return std::nullopt;
+    std::optional<std::size_t> best;
+    double distance = std::numeric_limits<double>::infinity();
+    // Reverse paint order wins overlaps and exact gap midpoints. Only cards
+    // intersecting the visible strip may acquire its surrounding click area.
+    for (std::size_t i = cards.size(); i > 0; --i) {
+        const auto& card = cards[i - 1];
+        const double top = std::max(card.y, clip.y);
+        const double bottom = std::min(card.y + card.height, clip.y + clip.height);
+        if (card.width <= 0 || bottom <= top)
+            continue;
+        const double d = std::max({top - y, y - bottom, 0.0});
+        if (d < distance) {
+            distance = d;
+            best = i - 1;
+        }
+    }
+    return best;
 }
 
 double visibleAxisFraction(const Rect& target, const Rect& viewport, bool horizontal) {

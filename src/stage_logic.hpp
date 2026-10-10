@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <optional>
 #include <utility>
+#include <vector>
 #include "mission_layout.hpp"
 
 namespace hymission::stage {
@@ -129,6 +130,8 @@ EdgeViewport edgeViewport(const Rect& box, double left, double right, double top
 EdgeViewport desktopShadowViewport(const EdgeViewport& viewport, const Rect& output);
 EdgeViewport edgeViewportForWindow(const EdgeViewport& viewport, const Rect& window);
 double edgeOpacity(const EdgeViewport& viewport, double x, double y);
+// Workspace activation extends visible cards through strip padding and half-gaps.
+std::optional<std::size_t> activationCardAt(const std::vector<Rect>& cards, const Rect& clip, double x, double y);
 // Visible target length as a fraction of the desktop viewport along the scroll axis.
 double visibleAxisFraction(const Rect& target, const Rect& viewport, bool horizontal);
 // Preserve both the gradient's coordinate system and the actual card/strip clip.
