@@ -13,13 +13,17 @@ inline double visibilityGestureProgress(double start, double displacement, doubl
     return std::clamp(start + displacement / std::max(1.0, distance), 0.0, 1.0);
 }
 
-// Scrolling columns retain their native width: Stage moves the entire tape,
+constexpr bool preserveScrollingWidth(bool scrolling, std::size_t columnCount) {
+    return scrolling && columnCount != 1;
+}
+
+// Multiple scrolling columns retain their native width: Stage moves the entire tape,
 // while its rendering viewport clips the part behind the sidebar/output edge.
-inline Rect reservedWorkArea(Rect area, double reservation, double progress, bool right, bool scrolling) {
+inline Rect reservedWorkArea(Rect area, double reservation, double progress, bool right, bool preserveWidth) {
     const double amount = std::min(std::max(0.0, reservation * std::clamp(progress, 0.0, 1.0)), std::max(0.0, area.width - 1));
     if (!right)
         area.x += amount;
-    if (!scrolling)
+    if (!preserveWidth)
         area.width -= amount;
     return area;
 }
