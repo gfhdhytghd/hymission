@@ -12,6 +12,17 @@ inline double visibilityGestureProgress(double start, double displacement, doubl
     return std::clamp(start + displacement / std::max(1.0, distance), 0.0, 1.0);
 }
 
+// Scrolling columns retain their native width: Stage moves the entire tape,
+// while its rendering viewport clips the part behind the sidebar/output edge.
+inline Rect reservedWorkArea(Rect area, double reservation, double progress, bool right, bool scrolling) {
+    const double amount = std::min(std::max(0.0, reservation * std::clamp(progress, 0.0, 1.0)), std::max(0.0, area.width - 1));
+    if (!right)
+        area.x += amount;
+    if (!scrolling)
+        area.width -= amount;
+    return area;
+}
+
 inline Rect visibilityDesktop(const Rect& base, const Rect& stageDesktop, double progress) {
     const double p = std::clamp(progress, 0.0, 1.0);
     return {base.x + (stageDesktop.x - base.x) * p, base.y,

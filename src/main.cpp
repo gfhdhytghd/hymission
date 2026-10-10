@@ -17,6 +17,7 @@ extern "C" {
 
 #include "overview_controller.hpp"
 #include "stage_controller.hpp"
+#include "dispatcher_names.hpp"
 
 inline HANDLE g_pluginHandle = nullptr;
 inline std::unique_ptr<hymission::OverviewController> g_overviewController;
@@ -167,20 +168,7 @@ bool luaTableHasField(lua_State* L, const char* field) {
     return result;
 }
 
-std::string normalizeHymissionDispatcher(std::string dispatcher) {
-    if (dispatcher == "toggle" || dispatcher == "hymission.toggle")
-        return "hymission:toggle";
-    if (dispatcher == "open" || dispatcher == "hymission.open")
-        return "hymission:open";
-    if (dispatcher == "close" || dispatcher == "hymission.close")
-        return "hymission:close";
-    if (dispatcher == "debug_current_layout" || dispatcher == "debugCurrentLayout" || dispatcher == "hymission.debug_current_layout" ||
-        dispatcher == "hymission.debugCurrentLayout")
-        return "hymission:debug_current_layout";
-    if (dispatcher == "scroll" || dispatcher == "hymission.scroll")
-        return "hymission:scroll";
-    return dispatcher;
-}
+using hymission::normalizeHymissionDispatcher;
 
 int luaToggle(lua_State* L) {
     return luaDispatchResult(L, dispatchToggle(luaOptionalString(L, 1)));

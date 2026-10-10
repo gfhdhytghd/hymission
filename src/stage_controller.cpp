@@ -1270,10 +1270,9 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
     // Each invocation starts from the original recheckWorkArea output. Retain
     // workspace gaps, including float gaps, and never compound our reservation.
     for (auto* box : {&space->m_workArea, &space->m_floatingWorkArea}) {
-        const double amount = std::min(screen->geometry.reservation * visibility, std::max(0.0, box->w - 1.0));
-        if (!screen->right)
-            box->x += amount;
-        box->w -= amount;
+        const auto area = stage::reservedWorkArea(rect(*box), screen->geometry.reservation, visibility, screen->right,
+                                                  box == &space->m_workArea && scrollingWorkspace(workspace));
+        *box = hymission::box(area);
     }
     if (!syncing && !sameBox(screen->base, baseArea(monitor)))
         request();

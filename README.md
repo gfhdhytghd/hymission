@@ -668,7 +668,9 @@ hl.plugin.hymission.gesture({
 ```
 
 Swipe right to reveal Stage and continuously reserve space on the desktop; swipe
-left to hide it. Reversing the swipe reverses progress. Release past halfway to
+left to hide it. In scrolling layouts, Stage translates the tape while retaining
+its native sizing viewport and window sizes; the visible desktop clips overflow.
+Reversing the swipe reverses progress. Release past halfway to
 commit; cancellation restores the previous state. Keyboard toggles and release
 settling use `stage_transition_ms`. The runtime choice lasts until plugin reload.
 Stage toggles are ignored during overview or a Stage workspace swipe. The legacy
