@@ -61,6 +61,11 @@ SDispatchResult dispatchToggle(const std::string& args) {
     return g_overviewController ? g_overviewController->toggle(args) : SDispatchResult{.success = false, .error = "overview controller unavailable"};
 }
 
+SDispatchResult dispatchStageToggle(const std::string&) {
+    return g_stageController && g_stageController->toggleVisibility() ? SDispatchResult{} :
+        SDispatchResult{.success = false, .error = "Stage is unavailable during overview or a workspace gesture"};
+}
+
 SDispatchResult dispatchOpen(const std::string& args) {
     return g_overviewController ? g_overviewController->open(args) : SDispatchResult{.success = false, .error = "overview controller unavailable"};
 }
@@ -212,10 +217,16 @@ int luaDebugCurrentLayout(lua_State* L) {
     return luaDispatchResult(L, dispatchDebugCurrentLayout(""));
 }
 
+int luaStageToggle(lua_State* L) {
+    return luaDispatchResult(L, dispatchStageToggle(""));
+}
+
 int luaDispatch(lua_State* L) {
     const std::string dispatcher = normalizeHymissionDispatcher(luaL_checkstring(L, 1));
     const std::string args       = luaOptionalString(L, 2);
 
+    if (dispatcher == "hymission:stage_toggle")
+        return luaDispatchResult(L, dispatchStageToggle(args));
     if (dispatcher == "hymission:toggle")
         return luaDispatchResult(L, dispatchToggle(args));
     if (dispatcher == "hymission:open")
@@ -466,6 +477,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             }
         };
 
+        registerDispatcher("hymission:stage_toggle", dispatchStageToggle);
         registerDispatcher("hymission:toggle", dispatchToggle);
         registerDispatcher("hymission:open", dispatchOpen);
         registerDispatcher("hymission:close", dispatchClose);
@@ -510,6 +522,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             }
         };
 
+        registerLuaFunction("stage_toggle", luaStageToggle);
         registerLuaFunction("toggle", luaToggle);
         registerLuaFunction("open", luaOpen);
         registerLuaFunction("close", luaClose);

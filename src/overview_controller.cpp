@@ -1949,6 +1949,26 @@ class CHymissionTrackpadGesture final : public ITrackpadGesture {
     bool                              m_tracking = false;
 };
 
+class CHymissionStageTrackpadGesture final : public ITrackpadGesture {
+  public:
+    explicit CHymissionStageTrackpadGesture(float scale) : m_scale(scale) {}
+    void begin(const STrackpadGestureBegin& e) override {
+        m_tracking = e.swipe && StageController::beginVisibilityGesture();
+    }
+    void update(const STrackpadGestureUpdate& e) override {
+        if (m_tracking && e.swipe)
+            StageController::updateVisibilityGesture(e.swipe->delta.x * m_scale);
+    }
+    void end(const STrackpadGestureEnd& e) override {
+        if (m_tracking)
+            StageController::endVisibilityGesture(!e.swipe || e.swipe->cancelled);
+        m_tracking = false;
+    }
+  private:
+    float m_scale = 1;
+    bool m_tracking = false;
+};
+
 class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
   public:
     CHymissionWorkspaceTrackpadGesture(eTrackpadGestureDirection direction, float)
@@ -5929,6 +5949,20 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
     const std::string dispatcher = tokens[actionIndex + 1];
     const std::string dispatcherArgs = joinTokens(tokens, actionIndex + 2);
     const auto        trimmedDispatcherArgs = trimCopy(dispatcherArgs);
+
+    if (dispatcher == "hymission:stage_toggle") {
+        if (direction != TRACKPAD_GESTURE_DIR_HORIZONTAL || !trimmedDispatcherArgs.empty())
+            return "hymission:stage_toggle requires horizontal direction and no arguments";
+        const bool disableInhibit = flags.contains('p');
+        (void)g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
+        const auto result = g_pTrackpadGestures->addGesture(makeUnique<CHymissionStageTrackpadGesture>(deltaScale),
+            fingerCount, direction, modMask, deltaScale, disableInhibit);
+        if (!result.has_value())
+            return result.error();
+        rememberRegisteredTrackpadGesture({.fingerCount = fingerCount, .direction = direction, .modMask = modMask,
+            .deltaScale = deltaScale, .disableInhibit = disableInhibit});
+        return {};
+    }
 
     if (dispatcher == "hymission:scroll") {
         const auto scrollMode = parseHymissionScrollMode(trimmedDispatcherArgs);

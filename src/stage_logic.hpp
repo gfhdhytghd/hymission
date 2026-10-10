@@ -1,11 +1,22 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <optional>
 #include <utility>
 #include "mission_layout.hpp"
 
 namespace hymission::stage {
+
+inline double visibilityGestureProgress(double start, double displacement, double distance) {
+    return std::clamp(start + displacement / std::max(1.0, distance), 0.0, 1.0);
+}
+
+inline Rect visibilityDesktop(const Rect& base, const Rect& stageDesktop, double progress) {
+    const double p = std::clamp(progress, 0.0, 1.0);
+    return {base.x + (stageDesktop.x - base.x) * p, base.y,
+            base.width + (stageDesktop.width - base.width) * p, base.height};
+}
 
 enum class OverviewPhase { Inactive, Active, Releasing };
 enum class OverviewRenderOwner { Stage, Overview, PreparedStage };

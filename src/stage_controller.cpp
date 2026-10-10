@@ -385,6 +385,15 @@ struct StageController::Impl {
     UP<SEventLoopDoLaterLock> deferred;
     SP<CEventLoopTimer> refreshTimer;
     SP<CEventLoopTimer> motionTimer;
+    std::optional<bool> runtimeVisible;
+    double visibility = 1;
+    double visibilityFrom = 1;
+    double visibilityTarget = 1;
+    double visibilityDelta = 0;
+    bool visibilityGesture = false;
+    Clock::time_point visibilityStart;
+    void applyVisibility(double progress);
+    void settleVisibility(bool visible);
     bool enabled = false;
     bool hooksReady = false;
     bool hookFailure = false;
@@ -566,7 +575,7 @@ struct StageController::Impl {
         const auto* screen = self->screenFor(monitor);
         // Overview owns window motion while Stage is suspended. Its exit now
         // lands directly in Stage cards; a native slide must not run underneath.
-        const bool overviewOwnsMotion = self->enabled && workspace && !workspace->m_isSpecialWorkspace && screen && screen->geometry.enabled() &&
+        const bool overviewOwnsMotion = self->enabled && self->visibility > 0 && workspace && !workspace->m_isSpecialWorkspace && screen && screen->geometry.enabled() &&
             self->overviewPhaseFor(monitor) != stage::OverviewPhase::Inactive;
         const bool owned = settlingSwipe || overviewOwnsMotion || self->ownsTransition(workspace);
         reinterpret_cast<WorkspaceAnimationFn>(self->workspaceAnimationHook->m_original)(workspace, type, left, instant || owned, std::move(style));
@@ -736,7 +745,7 @@ bool StageController::Impl::renderBlocked(const PHLMONITOR& monitor) const {
 }
 
 bool StageController::Impl::ownsTransition(const PHLWORKSPACE& workspace, bool allowCovered) const {
-    if (!enabled || !workspace || workspace->m_isSpecialWorkspace || blocked())
+    if (!enabled || visibility != 1 || visibilityGesture || !workspace || workspace->m_isSpecialWorkspace || blocked())
         return false;
     const auto monitor = workspace->m_monitor.lock();
     if (!monitor || monitor->m_activeSpecialWorkspace)
@@ -749,7 +758,7 @@ bool StageController::Impl::ownsTransition(const PHLWORKSPACE& workspace, bool a
 }
 
 bool StageController::Impl::interactive(const Screen& screen) const {
-    return enabled && !rendering && !blocked() && !(inputSuppressed && inputSuppressed()) && screen.geometry.enabled() && !screen.covered && !screen.suspended;
+    return visibility == 1 && !visibilityGesture && enabled && !rendering && !blocked() && !(inputSuppressed && inputSuppressed()) && screen.geometry.enabled() && !screen.covered && !screen.suspended;
 }
 
 StageController::Impl::Screen* StageController::Impl::screenFor(const PHLMONITOR& monitor) {
@@ -1261,7 +1270,7 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
     // Each invocation starts from the original recheckWorkArea output. Retain
     // workspace gaps, including float gaps, and never compound our reservation.
     for (auto* box : {&space->m_workArea, &space->m_floatingWorkArea}) {
-        const double amount = std::min(screen->geometry.reservation, std::max(0.0, box->w - 1.0));
+        const double amount = std::min(screen->geometry.reservation * visibility, std::max(0.0, box->w - 1.0));
         if (!screen->right)
             box->x += amount;
         box->w -= amount;
@@ -1319,7 +1328,12 @@ void StageController::Impl::sync() {
         return;
     }
     syncing = true;
-    const bool wanted = setting("stage_enabled", 0) != 0;
+    const bool configured = setting("stage_enabled", 0) != 0;
+    if (!runtimeVisible) {
+        runtimeVisible = configured;
+        visibility = visibilityTarget = configured ? 1 : 0;
+    }
+    const bool wanted = *runtimeVisible || enabled || visibilityGesture || visibility > 0;
     const bool wasEnabled = enabled;
     enabled = wanted && installHooks();
     if (!enabled) {
@@ -1412,7 +1426,7 @@ void StageController::Impl::sync() {
         const auto oldGeometry = screen->geometry;
         const bool switching = screen->active != WORKSPACE_INVALID && monitor->m_activeWorkspace && screen->active != monitor->m_activeWorkspace->m_id;
         const bool changedOutput = !sameBox(base, screen->base) || screen->scale != monitor->m_scale || screen->transform != static_cast<int>(monitor->m_transform);
-        if (!finishingOverview && switching && !changedOutput && !changedPolicy && !reconfigure && !blocked() && !screen->covered && !screen->suspended) {
+        if (visibility == 1 && !visibilityGesture && !finishingOverview && switching && !changedOutput && !changedPolicy && !reconfigure && !blocked() && !screen->covered && !screen->suspended) {
             pendingFlights.push_back({monitor, screen->active, screen->cards, oldGeometry, screen->scroll, screen->right, {}});
             for (const auto& window : Desktop::windowState()->windows()) {
                 if (window->m_monitor == monitor && window->m_isMapped && !window->isHidden() && !window->m_pinned)
@@ -1423,7 +1437,7 @@ void StageController::Impl::sync() {
         const bool oldRight = screen->right;
         if (!smartisan || changedMode)
             screen->right = false;
-        if (!finishingOverview && smartisan && switching && !blocked() && !screen->covered && !screen->suspended)
+        if (visibility == 1 && !visibilityGesture && !finishingOverview && smartisan && switching && !blocked() && !screen->covered && !screen->suspended)
             screen->right = !screen->right;
         const bool changedSide = oldRight != screen->right;
         if (changedSide && smartisan && switching && !changedOutput && !reconfigure && numberSetting("animations:enabled", 1) != 0 && setting("stage_transition_ms", 300) > 0) {
@@ -1578,6 +1592,13 @@ void StageController::Impl::armMotion() {
 void StageController::Impl::motion() {
     bool again = false;
     const auto now = Clock::now();
+    if (!visibilityGesture && visibility != visibilityTarget) {
+        const double duration = numberSetting("animations:enabled", 1) ? std::clamp(setting("stage_transition_ms", 300), 0L, 2000L) * std::abs(visibilityTarget - visibilityFrom) : 0;
+        const double elapsed = std::chrono::duration<double, std::milli>(now - visibilityStart).count();
+        const double t = duration > 0 ? std::clamp(elapsed / duration, 0.0, 1.0) : 1;
+        applyVisibility(t == 1 ? visibilityTarget : visibilityFrom + (visibilityTarget - visibilityFrom) * (1 - std::pow(1 - t, 3)));
+        again |= t < 1;
+    }
     if (swipe) {
         const auto monitor = swipe->monitor.lock();
         auto* actual = screenFor(monitor);
@@ -2326,7 +2347,7 @@ void StageController::Impl::renderStage(eRenderStage stage) {
     if (progress && *progress >= 1.0)
         return;
     auto* screen = visualScreenFor(monitor);
-    if (!screen || !screen->geometry.enabled() || monitor->m_activeSpecialWorkspace || screen->shown <= 0)
+    if (!screen || !screen->geometry.enabled() || monitor->m_activeSpecialWorkspace || (screen->shown <= 0 || visibility <= 0))
         return;
     if (stage == (progress ? RENDER_PRE_WINDOWS : RENDER_POST_WINDOWS)) {
         stagePassQueued = true;
@@ -2500,8 +2521,8 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
         drawPane(screen->cards, screen->geometry, screen->scroll, screen->right,
             (screen->right ? 1 : -1) * travel(screen->right, screen->geometry.bandWidth) * (1 - p));
     } else {
-        const double slide = (screen->right ? 1 : -1) * (1 - screen->shown) * screen->geometry.bandWidth;
-        if (!screen->covered && screen->shown < 1) {
+        const double slide = (screen->right ? 1 : -1) * (1 - screen->shown * visibility) * screen->geometry.bandWidth;
+        if (!screen->covered && screen->shown < 1 && visibility == 1) {
             const double duration = std::clamp(setting("stage_transition_ms", 300), 0L, 2000L);
             const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - screen->slideStart).count();
             const double t = duration > 0 ? std::clamp(elapsed / duration, 0.0, 1.0) : 1;
@@ -2537,7 +2558,8 @@ CBox StageController::Impl::sidebar(const Screen& screen) const {
 
 CBox StageController::Impl::desktop(const Screen& screen) const {
     const auto box = stage::desktopArea({screen.base.x, screen.base.y, screen.base.w, screen.base.h}, screen.geometry, screen.right);
-    return {box.x, box.y, box.width, box.height};
+    const auto area = stage::visibilityDesktop(rect(screen.base), box, visibility);
+    return {area.x, area.y, area.width, area.height};
 }
 
 double StageController::Impl::cardTop(const Screen& screen, std::size_t index) const {
@@ -2671,7 +2693,7 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
                 if (!flight.fromViewport) {
                     if (workspace->m_id == previous) {
                         const auto area = stage::desktopArea(rect(screen.base), oldGeometry, oldRight);
-                        const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 32) : 0;
+                        const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 32) * visibility : 0;
                         flight.fromViewport = stage::edgeViewport(area, oldRight ? 0 : width, oldRight ? width : 0);
                     } else
                         flight.fromViewport = miniatureView(oldCards, oldGeometry, oldScroll, oldRight);
@@ -2703,7 +2725,7 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
 }
 
 stage::EdgeViewport StageController::Impl::desktopViewport(const Screen& screen) const {
-    const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 32) : 0;
+    const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 32) * visibility : 0;
     return stage::edgeViewport(rect(desktop(screen)), screen.right ? 0 : width, screen.right ? width : 0);
 }
 
@@ -3059,7 +3081,7 @@ void StageController::Impl::refreshPreviews() {
     if (!enabled || blocked() || rendering || g_pHyprRenderer->m_renderData.pMonitor)
         return;
     for (auto& screen : screens) {
-        if (!interactive(screen))
+        if (screen.covered || screen.suspended || (visibility <= 0 && !visibilityGesture && !runtimeVisible.value_or(false)))
             continue;
         ensureBackground(screen, screen.monitor.lock());
         bool changed = false;
@@ -3098,7 +3120,7 @@ void StageController::Impl::updatePreviewLiveness() {
             for (const auto& flight : swipe->visual.flights)
                 add(flight.preview.window);
         for (const auto& screen : screens) {
-            if (!interactive(screen))
+            if (screen.covered || screen.suspended || (visibility <= 0 && !visibilityGesture && !runtimeVisible.value_or(false)))
                 continue;
             for (std::size_t i = 0; i < screen.cards.size(); ++i) {
                 const auto top = cardTop(screen, i);
@@ -3196,7 +3218,7 @@ StageController::Impl::~Impl() {
 }
 
 std::string StageController::Impl::stateJson() const {
-    nlohmann::json result{{"enabled", enabled}, {"smartisan_mode", smartisan}, {"hooks_ready", hooksReady}, {"preview_renderer", "native_surfaces"},
+    nlohmann::json result{{"visible", runtimeVisible.value_or(setting("stage_enabled", 0) != 0)}, {"visibility_progress", visibility}, {"enabled", enabled}, {"smartisan_mode", smartisan}, {"hooks_ready", hooksReady}, {"preview_renderer", "native_surfaces"},
         {"refresh_interval_ms", std::clamp(setting("stage_refresh_ms", 16), 1L, 16L)}, {"error", error},
         {"swipe_begin_count", swipeBegins}, {"swipe_update_count", swipeUpdates}, {"swipe_end_count", swipeEnds},
         {"raw_swipe_update_count", rawSwipeUpdates},
@@ -3263,6 +3285,86 @@ StageController::StageController(HANDLE handle, std::function<bool()> suspended,
                                  std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> frame, std::function<std::optional<double>(const PHLMONITOR&)> slide, std::function<bool()> suppressInput) :
     m_impl(std::make_unique<Impl>(handle, std::move(suspended), std::move(phase), std::move(frame), std::move(slide), std::move(suppressInput))) {}
 StageController::~StageController() = default;
+void StageController::Impl::applyVisibility(double progress) {
+    visibility = std::clamp(progress, 0.0, 1.0);
+    for (auto& screen : screens) {
+        screen.flights.clear();
+        screen.paneTransition = false;
+        screen.departingCards.clear();
+        if (auto monitor = screen.monitor.lock()) {
+            g_layoutManager->invalidateMonitorGeometries(monitor);
+            // Finger progress already supplies the animation; native window
+            // animations must not lag behind each new work-area endpoint.
+            for (const auto& window : Desktop::windowState()->windows()) {
+                if (window->m_monitor == monitor && window->m_isMapped && !window->m_isFloating && !window->m_pinned) {
+                    window->positionAnimation()->warp();
+                    window->sizeAnimation()->warp();
+                }
+            }
+            damage(screen);
+        }
+    }
+    request();
+}
+
+void StageController::Impl::settleVisibility(bool visible) {
+    runtimeVisible = visible;
+    visibilityGesture = false;
+    visibilityFrom = visibility;
+    visibilityTarget = visible ? 1 : 0;
+    visibilityStart = Clock::now();
+    armMotion();
+}
+
+bool StageController::toggleVisibility() {
+    auto& self = *m_impl;
+    if (self.blocked() || self.swipe || self.visibilityGesture)
+        return false;
+    const bool visible = !self.runtimeVisible.value_or(setting("stage_enabled", 0) != 0);
+    self.runtimeVisible = visible;
+    self.sync();
+    if (!self.enabled)
+        return false;
+    self.settleVisibility(visible);
+    return true;
+}
+
+bool StageController::beginVisibilityGesture() {
+    auto* self = Impl::instance;
+    if (!self || self->blocked() || self->swipe || self->visibilityGesture)
+        return false;
+    self->runtimeVisible = self->runtimeVisible.value_or(setting("stage_enabled", 0) != 0);
+    self->visibilityGesture = true;
+    self->sync();
+    if (!self->enabled) {
+        self->visibilityGesture = false;
+        return false;
+    }
+    self->visibilityFrom = self->visibility;
+    self->visibilityDelta = 0;
+    return true;
+}
+
+void StageController::updateVisibilityGesture(double delta) {
+    auto* self = Impl::instance;
+    if (!self || !self->visibilityGesture)
+        return;
+    if (self->blocked()) {
+        endVisibilityGesture(true);
+        return;
+    }
+    self->visibilityDelta += delta;
+    const double distance = std::max(1.0, numberSetting("gestures:workspace_swipe_distance", 300));
+    self->applyVisibility(stage::visibilityGestureProgress(self->visibilityFrom, self->visibilityDelta, distance));
+}
+
+void StageController::endVisibilityGesture(bool cancelled) {
+    auto* self = Impl::instance;
+    if (!self || !self->visibilityGesture)
+        return;
+    self->settleVisibility(cancelled ? self->runtimeVisible.value_or(false) : self->visibility >= 0.5);
+}
+
 void StageController::initialize() { m_impl->initialize(); }
 std::string StageController::stateJson() const { return m_impl->stateJson(); }
 
@@ -3279,7 +3381,7 @@ std::optional<stage::OverviewEndpoint> StageController::Impl::cardEndpoint(const
             screen.base.x - monitor->m_position.x + screen.geometry.bandWidth;
         offset = (screen.right ? 1 : -1) * travel * (1 - stage::transitionProgress(t, 1));
     } else if (!settled)
-        offset = (screen.right ? 1 : -1) * (1 - screen.shown) * screen.geometry.bandWidth;
+        offset = (screen.right ? 1 : -1) * (1 - screen.shown * visibility) * screen.geometry.bandWidth;
     const auto area = sidebar(screen);
     const CBox output{monitor->m_position, monitor->m_size};
     const CBox strip{area.x + offset, area.y + screen.geometry.paddingTop, area.w,
@@ -3310,7 +3412,7 @@ std::optional<stage::OverviewEndpoint> StageController::Impl::cardEndpoint(const
 
 std::optional<stage::OverviewEndpoint> StageController::overviewOrigin(const PHLWINDOW& window) {
     auto* self = Impl::instance;
-    if (!self || !self->enabled || self->blocked() || !window || window->m_pinned)
+    if (!self || !self->enabled || self->visibility <= 0 || self->blocked() || !window || window->m_pinned)
         return std::nullopt;
     const auto monitor = window->m_monitor.lock();
     auto* screen = self->visualScreenFor(monitor);
@@ -3343,7 +3445,7 @@ void StageController::prepareOverviewExit(const std::vector<PHLMONITOR>& monitor
     if (!self)
         return;
     self->overviewExitScreens.clear();
-    if (!self->enabled)
+    if (!self->enabled || self->visibility <= 0)
         return;
     for (const auto& monitor : monitors) {
         const auto* source = self->screenFor(monitor);

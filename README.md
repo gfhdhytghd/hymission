@@ -658,9 +658,26 @@ hl.config({
 })
 ```
 
+Stage can also be toggled at runtime, including when `stage_enabled = 0`:
+
+```lua
+hl.bind("SUPER + comma", function() hl.plugin.hymission.stage_toggle() end)
+hl.plugin.hymission.gesture({
+    fingers = 4, direction = "horizontal", mods = "SUPER", action = "stage_toggle",
+})
+```
+
+Swipe right to reveal Stage and continuously reserve space on the desktop; swipe
+left to hide it. Reversing the swipe reverses progress. Release past halfway to
+commit; cancellation restores the previous state. Keyboard toggles and release
+settling use `stage_transition_ms`. The runtime choice lasts until plugin reload.
+Stage toggles are ignored during overview or a Stage workspace swipe. The legacy
+dispatcher is `hymission:stage_toggle`; Lua also supports `dispatch("stage_toggle")`.
+`hyprctl hymission-stage-state` exposes `visible` and `visibility_progress`.
+
 | Option | Default | Behavior |
 | --- | --- | --- |
-| `stage_enabled` | `0` | Enable the persistent sidebar independently on each monitor. |
+| `stage_enabled` | `0` | Default Stage visibility when the plugin starts: `0` hidden, `1` visible. Keyboard/gesture changes override it until plugin reload; config reload alone keeps the current runtime state. |
 | `stage_card_min_width` | `120` | Minimum card width in logical pixels. Below this limit, excess cards scroll vertically. |
 | `stage_card_max_width` | `0` | `0` automatically caps card width at one fifth of each output's logical width. Positive values override the cap in logical pixels. |
 | `stage_window_rounding` | `-1.0` | Window miniature corner radius in logical pixels at its displayed size. Negative values use half of `decoration:rounding`; `0` makes square corners. |

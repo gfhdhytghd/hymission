@@ -24,6 +24,10 @@ class StageController {
     StageController(const StageController&) = delete;
     StageController& operator=(const StageController&) = delete;
     void initialize();
+    bool toggleVisibility();
+    static bool beginVisibilityGesture();
+    static void updateVisibilityGesture(double delta);
+    static void endVisibilityGesture(bool cancelled);
     std::string stateJson() const;
     // Overview owns the native swipe entry points; Stage consumes only its own
     // gestures. Surface hook ownership is handed over before overview attaches.
