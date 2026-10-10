@@ -497,7 +497,7 @@ struct StageController::Impl {
     bool ownsTransition(const PHLWORKSPACE& workspace, bool allowCovered = false) const;
     Screen* screenFor(const PHLMONITOR& monitor);
     std::vector<Card> cardsForWorkspace(const PHLMONITOR& monitor, const PHLWORKSPACE& activeWorkspace) const;
-    std::pair<Screen*, std::optional<std::size_t>> hit(const Vector2D& point);
+    std::pair<Screen*, std::optional<std::size_t>> hit(const Vector2D& point, bool activation = false);
     void pointer();
     void updateDragHover();
     stage::ScrollingFlightFrame dragHoverFrame() const;
@@ -514,7 +514,7 @@ struct StageController::Impl {
     void correctFloating(const PHLMONITOR& monitor, const CBox& desktop);
     void damage(const Screen& screen);
     double cardTop(const Screen& screen, std::size_t index) const;
-    std::optional<std::size_t> cardHit(const Screen& screen, const Vector2D& point) const;
+    std::optional<std::size_t> cardHit(const Screen& screen, const Vector2D& point, bool activation = false) const;
     CBox sidebar(const Screen& screen) const;
     CBox desktop(const Screen& screen) const;
     std::string stateJson() const;
@@ -1722,7 +1722,7 @@ void StageController::Impl::motion() {
         armMotion();
 }
 
-std::pair<StageController::Impl::Screen*, std::optional<std::size_t>> StageController::Impl::hit(const Vector2D& point) {
+std::pair<StageController::Impl::Screen*, std::optional<std::size_t>> StageController::Impl::hit(const Vector2D& point, bool activation) {
     // Use native input regions/stacking, including transparent input holes.
     // Call the original directly to avoid re-entering our windowAt hook.
     if (hitHook) {
@@ -1753,8 +1753,11 @@ std::pair<StageController::Impl::Screen*, std::optional<std::size_t>> StageContr
                 return {&screen, std::nullopt};
             continue;
         }
-        if (point.x >= band.x && point.x < band.x + band.w && point.y >= band.y && point.y < band.y + band.h)
-            return {&screen, cardHit(screen, point)};
+        const auto monitor = screen.monitor.lock();
+        const double left = !screen.right && monitor ? monitor->m_position.x : band.x;
+        const double right = screen.right && monitor ? monitor->m_position.x + monitor->m_size.x : band.x + band.w;
+        if (point.x >= left && point.x < right && point.y >= band.y && point.y < band.y + band.h)
+            return {&screen, cardHit(screen, point, activation)};
     }
     return {nullptr, std::nullopt};
 }
@@ -1954,7 +1957,7 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
         const auto pressedSynthetic = std::exchange(pressedSyntheticId, 0);
         if (event.button == BTN_LEFT)
             pressed.reset();
-        const auto [screen, indexRaw] = hit(g_pInputManager->getMouseCoordsInternal());
+        const auto [screen, indexRaw] = hit(g_pInputManager->getMouseCoordsInternal(), !reorderArmed);
         info.cancelled = true;
         std::optional<std::size_t> index = indexRaw;
         if (event.button == BTN_LEFT && screen && !index && reorderArmed && screen->monitor.lock() == pressMonitor.lock() && !screen->cards.empty())
@@ -1976,7 +1979,7 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
                 // Resolve the topmost visible preview before activating: switching
                 // workspaces rebuilds cards and can invalidate this reference.
                 PHLWINDOW clicked;
-                if (!reorderArmed && card.previewsReady) {
+                if (!reorderArmed && card.previewsReady && cardHit(*screen, g_pInputManager->getMouseCoordsInternal()) == index) {
                     const Vector2D origin{sidebar(*screen).x + screen->geometry.padding, screen->base.y + cardTop(*screen, *index)};
                     const auto point = g_pInputManager->getMouseCoordsInternal();
                     for (auto it = card.previews.rbegin(); it != card.previews.rend(); ++it) {
@@ -2027,13 +2030,14 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
     auto* drag = g_layoutManager->dragController().get();
     if (drag && drag->target())
         return; // native grab must receive its release exactly once
-    const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal());
+    const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal(),
+        !reorderArmed && !(g_pInputManager->getModsFromAllKBs() & 64));
     if (!screen)
         return;
     info.cancelled = true;
     swallowedButtons.insert(event.button);
     if (event.button == BTN_LEFT && event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
-        if (index && (g_pInputManager->getModsFromAllKBs() & 64)) {
+        if (index && cardHit(*screen, g_pInputManager->getMouseCoordsInternal()) == index && (g_pInputManager->getModsFromAllKBs() & 64)) {
             const auto& card = screen->cards[*index];
             const Vector2D origin{sidebar(*screen).x + screen->geometry.padding, screen->base.y + cardTop(*screen, *index)};
             for (auto it = card.previews.rbegin(); it != card.previews.rend(); ++it) {
@@ -2606,10 +2610,29 @@ double StageController::Impl::cardTop(const Screen& screen, std::size_t index) c
     return screen.geometry.cardTop(index, screen.scroll) + card.shift * (1 - p);
 }
 
-std::optional<std::size_t> StageController::Impl::cardHit(const Screen& screen, const Vector2D& point) const {
+std::optional<std::size_t> StageController::Impl::cardHit(const Screen& screen, const Vector2D& point, bool activation) const {
     if (!screen.covered && screen.shown < 1)
         return std::nullopt;
     const auto& g = screen.geometry;
+    if (activation) {
+        auto bounds = sidebar(screen);
+        if (const auto monitor = screen.monitor.lock()) {
+            if (screen.right)
+                bounds.w = monitor->m_position.x + monitor->m_size.x - bounds.x;
+            else {
+                bounds.w += bounds.x - monitor->m_position.x;
+                bounds.x = monitor->m_position.x;
+            }
+        }
+        std::vector<Rect> cards;
+        for (std::size_t i = 0; i < screen.cards.size(); ++i) {
+            const double top = screen.base.y + cardTop(screen, i);
+            const double visibleTop = std::max(top, screen.base.y + g.paddingTop);
+            const double visibleBottom = std::min(top + g.cardHeight, screen.base.y + screen.base.h - g.paddingBottom);
+            cards.push_back({bounds.x, visibleTop, bounds.w, std::max(0.0, visibleBottom - visibleTop)});
+        }
+        return stage::activationCardAt(cards, rect(bounds), point.x, point.y);
+    }
     const auto local = point - sidebar(screen).pos();
     if (local.x < g.padding || local.x >= g.padding + g.cardWidth || local.y < g.paddingTop || local.y >= screen.base.h - g.paddingBottom)
         return std::nullopt;

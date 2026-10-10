@@ -172,6 +172,13 @@ width; vertical layouts use desktop height. Offscreen targets have zero overlap.
 The native fit/center setting and already-visible-column behavior are retained;
 clicks, keyboard focus and non-Stage input keep native handling.
 
+Workspace activation clicks cover the full sidebar width through the outer
+screen edge. Adjacent cards divide their gap at its midpoint; outer vertical
+padding belongs to the nearest visible card. Hidden cards cannot receive these
+clicks. Expanded padding/gap hits activate only the workspace, while selecting a
+window or starting a thumbnail drag requires the pointer inside the actual card.
+Native floating pinned windows above the strip retain input priority.
+
 The `hymission:scroll, layout` trackpad gesture targets the Stage card under the
 pointer when it begins. It scrolls that workspace's scrolling-layout canvas
 without activating the workspace or changing focus, using its layout direction

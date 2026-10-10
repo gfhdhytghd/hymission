@@ -17,6 +17,20 @@ bool near(double a, double b) { return std::abs(a - b) < 1e-7; }
 int main() {
     using namespace hymission::stage;
     bool ok = true;
+    const std::vector<hymission::Rect> clickCards{{20, 20, 160, 100}, {20, 140, 160, 100}};
+    const hymission::Rect clickStrip{0, 0, 200, 260};
+    ok &= expect(activationCardAt(clickCards, clickStrip, 0, 60) == 0 && activationCardAt(clickCards, clickStrip, 199, 180) == 1,
+        "card activation extends across strip padding to both horizontal edges");
+    ok &= expect(activationCardAt(clickCards, clickStrip, 0, 129.9) == 0 && activationCardAt(clickCards, clickStrip, 0, 130) == 1,
+        "card gaps divide at their midpoint without a dead zone");
+    ok &= expect(activationCardAt(clickCards, clickStrip, 30, 0) == 0 && activationCardAt(clickCards, clickStrip, 30, 259) == 1,
+        "outer vertical strip padding activates the nearest card");
+    ok &= expect(!activationCardAt(clickCards, clickStrip, 200, 60) && !activationCardAt(clickCards, clickStrip, -1, 60),
+        "activation never leaks into the desktop or another output");
+    ok &= expect(activationCardAt({{20, -150, 160, 100}, {20, -20, 160, 100}}, clickStrip, 0, 0) == 1,
+        "offscreen cards cannot steal clicks from a partly visible card");
+    ok &= expect(activationCardAt({{20, 20, 160, 100}, {20, 70, 160, 100}}, clickStrip, 0, 80) == 1 &&
+        !activationCardAt({}, clickStrip, 0, 80), "overlaps retain paint order and empty strips have no target");
     const hymission::Rect focusDesktop{500, 100, 1000, 800};
     ok &= expect(near(visibleAxisFraction({450, 100, 190, 400}, focusDesktop, true), 0.14),
         "follow threshold excludes Stage-covered content from intersection and denominator");
