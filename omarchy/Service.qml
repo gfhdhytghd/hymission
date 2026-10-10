@@ -45,7 +45,9 @@ Item {
     let s
     try { s = JSON.parse(json) } catch (e) { return }
     root.state = s.state
-    if (s.state === "loaded") {
+    if (s.state === "loaded" && settingUp && s.outdated) {
+      return  // a rebuild is still running; the next poll swaps it in
+    } else if (s.state === "loaded") {
       settingUp = false
       poll.stop()
       if (s.outdated && !notified) {

@@ -58,6 +58,8 @@ status() {
         elif $stamp.hyprland != $commit then "stale"
         else "ready" end),
       outdated: ($stamp != null and $stamp.source != $source),
+      swap: ($loaded != "" and ($loaded | startswith($cache)) and $built != $loaded
+             and $stamp != null and $stamp.hyprland == $commit),
       loaded: $loaded,
       library: $built
     }'
@@ -67,7 +69,13 @@ start() {
   local state lib
   state=$(status)
   case $(jq -r .state <<<"$state") in
-    loaded) ;;
+    loaded)
+      # A finished rebuild replaces the running copy.
+      if [[ $(jq -r .swap <<<"$state") == true ]]; then
+        hyprctl plugin unload "$(jq -r .loaded <<<"$state")" >/dev/null
+        hyprctl plugin load "$(jq -r .library <<<"$state")" >/dev/null
+      fi
+      ;;
     ready)
       lib=$(jq -r .library <<<"$state")
       [[ -f $lib ]] || die "build output is missing; run setup again"
