@@ -165,8 +165,8 @@ Session lock, overview, fullscreen, output geometry changes and config reload
 cancel flights. Flight metadata is released when the motion timer finishes or cancels.
 The real client geometry and pointer coordinate system remain native throughout.
 
-With Stage interactive, scrolling-layout automatic focus uses the reduced desktop
-work area for `scrolling:follow_min_visible`: both the visible intersection and
+With Stage interactive, scrolling-layout automatic focus intersects its work area
+with the visible desktop for `scrolling:follow_min_visible`: both the visible intersection and
 the percentage denominator exclude the sidebar. Horizontal layouts use desktop
 width; vertical layouts use desktop height. Offscreen targets have zero overlap.
 The native fit/center setting and already-visible-column behavior are retained;

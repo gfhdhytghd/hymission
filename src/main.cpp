@@ -17,6 +17,7 @@ extern "C" {
 
 #include "overview_controller.hpp"
 #include "stage_controller.hpp"
+#include "dispatcher_names.hpp"
 
 inline HANDLE g_pluginHandle = nullptr;
 inline std::unique_ptr<hymission::OverviewController> g_overviewController;
@@ -59,6 +60,11 @@ bool addStringConfig(const char* name, Config::STRING fallback) {
 
 SDispatchResult dispatchToggle(const std::string& args) {
     return g_overviewController ? g_overviewController->toggle(args) : SDispatchResult{.success = false, .error = "overview controller unavailable"};
+}
+
+SDispatchResult dispatchStageToggle(const std::string&) {
+    return g_stageController && g_stageController->toggleVisibility() ? SDispatchResult{} :
+        SDispatchResult{.success = false, .error = "Stage is unavailable during overview or a workspace gesture"};
 }
 
 SDispatchResult dispatchOpen(const std::string& args) {
@@ -162,20 +168,7 @@ bool luaTableHasField(lua_State* L, const char* field) {
     return result;
 }
 
-std::string normalizeHymissionDispatcher(std::string dispatcher) {
-    if (dispatcher == "toggle" || dispatcher == "hymission.toggle")
-        return "hymission:toggle";
-    if (dispatcher == "open" || dispatcher == "hymission.open")
-        return "hymission:open";
-    if (dispatcher == "close" || dispatcher == "hymission.close")
-        return "hymission:close";
-    if (dispatcher == "debug_current_layout" || dispatcher == "debugCurrentLayout" || dispatcher == "hymission.debug_current_layout" ||
-        dispatcher == "hymission.debugCurrentLayout")
-        return "hymission:debug_current_layout";
-    if (dispatcher == "scroll" || dispatcher == "hymission.scroll")
-        return "hymission:scroll";
-    return dispatcher;
-}
+using hymission::normalizeHymissionDispatcher;
 
 int luaToggle(lua_State* L) {
     return luaDispatchResult(L, dispatchToggle(luaOptionalString(L, 1)));
@@ -212,10 +205,16 @@ int luaDebugCurrentLayout(lua_State* L) {
     return luaDispatchResult(L, dispatchDebugCurrentLayout(""));
 }
 
+int luaStageToggle(lua_State* L) {
+    return luaDispatchResult(L, dispatchStageToggle(""));
+}
+
 int luaDispatch(lua_State* L) {
     const std::string dispatcher = normalizeHymissionDispatcher(luaL_checkstring(L, 1));
     const std::string args       = luaOptionalString(L, 2);
 
+    if (dispatcher == "hymission:stage_toggle")
+        return luaDispatchResult(L, dispatchStageToggle(args));
     if (dispatcher == "hymission:toggle")
         return luaDispatchResult(L, dispatchToggle(args));
     if (dispatcher == "hymission:open")
@@ -466,6 +465,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             }
         };
 
+        registerDispatcher("hymission:stage_toggle", dispatchStageToggle);
         registerDispatcher("hymission:toggle", dispatchToggle);
         registerDispatcher("hymission:open", dispatchOpen);
         registerDispatcher("hymission:close", dispatchClose);
@@ -510,6 +510,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             }
         };
 
+        registerLuaFunction("stage_toggle", luaStageToggle);
         registerLuaFunction("toggle", luaToggle);
         registerLuaFunction("open", luaOpen);
         registerLuaFunction("close", luaClose);
@@ -527,7 +528,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         .name = "hymission",
         .description = "Mission Control style overview prototype",
         .author = "wilf",
-        .version = "0.8.0",
+        .version = "0.9.0",
     };
 }
 

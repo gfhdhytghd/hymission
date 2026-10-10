@@ -2,48 +2,6 @@
   "project": "hymission",
   "repository": "gfhdhytghd/hymission",
   "site_url": "https://gfhdhytghd.github.io/hymission/",
-  "unreleased": {
-    "since": "v0.8.0-v0.56.2",
-    "summary": "Stage rendering, gestures, window interaction, and capture integration since 0.8.0. These changes are not part of a published release.",
-    "sections": [
-      {
-        "title": "Stage sidebar",
-        "items": [
-          "Optionally keep the active workspace visible, reserve empty workspace slots, show card backdrops, and distribute cards evenly (#45). Active-card glow is opt-in and disabled by default.",
-          "Click a window preview to activate its workspace and focus that window. Floating windows dragged within their own Stage card now retain the dropped position."
-        ]
-      },
-      {
-        "title": "Rendering",
-        "items": [
-          "Clip scrolling windows and unpinned floating windows at Stage boundaries with progressive blur and fading. Configure desktop and preview bands independently with `stage_scrolling_desktop_edge_width` and `stage_scrolling_preview_edge_width`.",
-          "Keep pinned floating windows above Stage with native pointer input, and respect window stacking and fullscreen occlusion in previews.",
-          "Preserve live backdrop blur, shadow cutouts, rounded corners, and edge gradients through overview transitions. Correct clipping of closing windows and shadow rendering beyond Stage content."
-        ]
-      },
-      {
-        "title": "Gestures and overview",
-        "items": [
-          "Synchronize sidebar movement and returning cards with workspace swipe progress, including fullscreen transitions, pauses, reversal, and cancellation.",
-          "Return overview windows directly to their Stage cards and retain the intended workspace across compact gesture handoffs. Preserve geometry and clipping when releasing or interrupting a gesture.",
-          "Fix duplicate sidebar movement and workspace-strip wallpaper rendering. Ignore empty overview opens, limit workspace creation during a single swipe, and correct hover-only preview expansion."
-        ]
-      },
-      {
-        "title": "Capture integration",
-        "items": [
-          "Expose rendered Stage window geometry, clipping, stacking, and rounded corners to HyprCapture. Separate screenshot input suppression from rendering so selection does not also activate a workspace.",
-          "Avoid render-hook conflicts with Viewflow and transform its shadows with overview previews."
-        ]
-      },
-      {
-        "title": "Validation",
-        "items": [
-          "Add an offscreen Stage edge-rendering regression test and extend Stage and overview logic coverage. The current CMake build and all five tests pass; updated compositor-session behavior still requires live verification."
-        ]
-      }
-    ]
-  },
   "releases": [
     {
       "tag": "v0.8.0-v0.56.2",
@@ -395,5 +353,52 @@
         }
       ]
     }
-  ]
+  ],
+  "unreleased": {
+    "since": "v0.8.0-v0.56.2",
+    "summary": "Stage rendering, gestures, window interaction, and capture integration since 0.8.0. These changes are not part of a published release.",
+    "sections": [
+      {
+        "title": "Stage sidebar",
+        "items": [
+          "Optionally keep the active workspace visible, reserve empty workspace slots, show card backdrops, and distribute cards evenly (#45). Active-card glow is opt-in and disabled by default.",
+          "Click a window preview to activate its workspace and focus that window. Floating windows dragged within their own Stage card now retain the dropped position.",
+          "Toggle Stage at runtime with `hl.plugin.hymission.stage_toggle()` / `hymission:stage_toggle`. A horizontal plugin gesture reveals or hides the sidebar with continuous desktop reservation, reversal, cancellation, and animated settling. `stage_enabled` now sets startup visibility; config reload preserves the runtime choice. Scrolling layouts translate as a whole without changing column widths or window sizes.",
+          "Preserve native rounding, decorations, layering, and return animations when dragging between the desktop and Stage cards. Keep drops in card gaps consistent and prevent silent drops from stealing focus."
+        ]
+      },
+      {
+        "title": "Rendering",
+        "items": [
+          "Clip scrolling windows and unpinned floating windows at Stage boundaries with progressive blur and fading. Configure desktop and preview bands independently with `stage_scrolling_desktop_edge_width` and `stage_scrolling_preview_edge_width`.",
+          "Keep pinned floating windows above Stage with native pointer input, and respect window stacking and fullscreen occlusion in previews.",
+          "Preserve live backdrop blur, shadow cutouts, rounded corners, and edge gradients through overview transitions. Correct clipping of closing windows and shadow rendering beyond Stage content.",
+          "Apply blur and fading to every overflowing preview edge, including floating previews, while retaining hard clipping when edge widths are zero."
+        ]
+      },
+      {
+        "title": "Gestures and overview",
+        "items": [
+          "Synchronize sidebar movement and returning cards with workspace swipe progress, including fullscreen transitions, pauses, reversal, and cancellation.",
+          "Return overview windows directly to their Stage cards and retain the intended workspace across compact gesture handoffs. Preserve geometry and clipping when releasing or interrupting a gesture.",
+          "Fix duplicate sidebar movement and workspace-strip wallpaper rendering. Ignore empty overview opens, limit workspace creation during a single swipe, and correct hover-only preview expansion.",
+          "Route layout-scroll gestures to the hovered Stage workspace, preserve its canvas offset when activating it, and scroll explicitly selected windows into view.",
+          "Fix the Lua `stage_toggle` action alias so Win+four-finger horizontal gestures register as continuous Stage gestures."
+        ]
+      },
+      {
+        "title": "Capture integration",
+        "items": [
+          "Expose rendered Stage window geometry, clipping, stacking, and rounded corners to HyprCapture. Separate screenshot input suppression from rendering so selection does not also activate a workspace.",
+          "Avoid render-hook conflicts with Viewflow and transform its shadows with overview previews."
+        ]
+      },
+      {
+        "title": "Validation",
+        "items": [
+          "CMake Release and Meson Release builds and regression suites validated against Hyprland 0.56.2. Live compositor behavior requires a user-run plugin update and session validation."
+        ]
+      }
+    ]
+  }
 }

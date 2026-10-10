@@ -1,4 +1,5 @@
 #include "stage_logic.hpp"
+#include "dispatcher_names.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -33,6 +34,33 @@ int main() {
         "oversized targets saturate and empty viewports reject visibility");
     ok &= expect(near(visibleAxisFraction({-1550, -700, 190, 400}, {-1500, -700, 1000, 800}, true), 0.14),
         "global monitor offsets do not change follow percentage");
+    {
+        const hymission::Rect full{-1920, 30, 1920, 1050};
+        const hymission::Rect inset{-1680, 30, 1680, 1050};
+        const auto hidden = visibilityDesktop(full, inset, 0);
+        const auto half = visibilityDesktop(full, inset, 0.5);
+        const auto shown = visibilityDesktop(full, inset, 1);
+        ok &= expect(near(hidden.x, full.x) && near(hidden.width, full.width), "hidden Stage restores full desktop");
+        ok &= expect(near(half.x, -1800) && near(half.width, 1800) && near(half.x + half.width, 0), "finger progress pushes desktop right without moving its right edge");
+        ok &= expect(near(shown.x, inset.x) && near(shown.width, inset.width), "fully visible Stage reserves its strip");
+        ok &= expect(near(visibilityGestureProgress(0, 150, 300), 0.5) && near(visibilityGestureProgress(1, -150, 300), 0.5), "open and close share continuous progress");
+        ok &= expect(near(visibilityGestureProgress(0, -300, 300), 0) && near(visibilityGestureProgress(1, 600, 300), 1), "gesture endpoints clamp without overshoot");
+        ok &= expect(near(visibilityGestureProgress(0, 60, 300), 0.2), "reversing accumulated travel reverses the desktop");
+    }
+    ok &= expect(hymission::normalizeHymissionDispatcher("stage_toggle") == "hymission:stage_toggle" &&
+                 hymission::normalizeHymissionDispatcher("hymission.stage_toggle") == "hymission:stage_toggle" &&
+                 hymission::normalizeHymissionDispatcher("hymission:stage_toggle") == "hymission:stage_toggle",
+                 "Lua Stage action names route to the continuous Stage gesture dispatcher");
+    for (const double progress : {0.0, 0.25, 0.5, 1.0, 0.5, 0.0}) {
+        const hymission::Rect native{-1440, 30, 1440, 842};
+        const auto scrolling = reservedWorkArea(native, 240, progress, false, true);
+        ok &= expect(near(scrolling.width, native.width) && near(scrolling.height, native.height) &&
+                     near(scrolling.x, native.x + 240 * progress), "scrolling tape translates on advance and reversal without changing its sizing viewport");
+        const auto tiled = reservedWorkArea(native, 240, progress, false, false);
+        ok &= expect(near(tiled.x + tiled.width, native.x + native.width), "ordinary tiled layout retains its right desktop edge");
+        const auto right = reservedWorkArea(native, 240, progress, true, true);
+        ok &= expect(near(right.x, native.x) && near(right.width, native.width), "right sidebar clips scrolling columns without resizing them");
+    }
     // Lifecycle regression: A's old sidebar must never cover B's predicted
     // sidebar during the zero-progress frame or deferred overview teardown.
     ok &= expect(overviewRenderOwner(OverviewPhase::Inactive, false) == OverviewRenderOwner::Stage,
