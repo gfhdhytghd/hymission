@@ -1,4 +1,5 @@
 #include "stage_edge_shader.hpp"
+#include "stage_edge_framebuffer.hpp"
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
@@ -29,6 +30,25 @@ GLuint compile(GLenum type, const char* source) {
 }
 
 int main() {
+    using hymission::stage::edgeAlphaFormat;
+    using hymission::stage::allocateEdgeFramebuffer;
+    const std::pair<uint32_t, uint32_t> formats[] = {
+        {DRM_FORMAT_XRGB8888, DRM_FORMAT_ARGB8888}, {DRM_FORMAT_XBGR8888, DRM_FORMAT_ABGR8888},
+        {DRM_FORMAT_XRGB2101010, DRM_FORMAT_ARGB2101010}, {DRM_FORMAT_XBGR2101010, DRM_FORMAT_ABGR2101010},
+        {DRM_FORMAT_ARGB8888, DRM_FORMAT_ARGB8888}, {DRM_FORMAT_ABGR8888, DRM_FORMAT_ABGR8888},
+        {DRM_FORMAT_ARGB2101010, DRM_FORMAT_ARGB2101010}, {DRM_FORMAT_ABGR2101010, DRM_FORMAT_ABGR2101010},
+        {DRM_FORMAT_ABGR16161616F, DRM_FORMAT_ABGR16161616F},
+        {DRM_FORMAT_INVALID, DRM_FORMAT_INVALID}, {0xffffffff, DRM_FORMAT_INVALID},
+    };
+    for (const auto& [input, expected] : formats) {
+        if (edgeAlphaFormat(input) != expected) {
+            std::cerr << "Incorrect alpha format: " << input << '\n';
+            return 1;
+        }
+    }
+    if (allocateEdgeFramebuffer(1, 2, 3, 0, W, H, DRM_FORMAT_ABGR8888, 0))
+        return 1; // No current context: reject before any GL allocation.
+
     const auto display = eglGetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
     if (display == EGL_NO_DISPLAY || !eglInitialize(display, nullptr, nullptr)) {
         std::cout << "SKIP: surfaceless EGL unavailable\n";
@@ -47,6 +67,54 @@ int main() {
         eglTerminate(display);
         return 77;
     }
+    // Exercise the production allocation path without loading a plugin. Include
+    // CM FP16, mixed-format capture, output resize, mirror removal and failures.
+    GLuint allocationFB = 0, allocationTextures[3]{};
+    glGenFramebuffers(1, &allocationFB);
+    glGenTextures(3, allocationTextures);
+    for (const auto format : {DRM_FORMAT_ABGR8888, DRM_FORMAT_ABGR2101010, DRM_FORMAT_ABGR16161616F, DRM_FORMAT_ABGR8888}) {
+        for (bool mirror : {false, true, false}) {
+            if (!allocateEdgeFramebuffer(allocationFB, allocationTextures[0], allocationTextures[1],
+                mirror ? allocationTextures[2] : 0, mirror ? W * 2 : W, H, format, DRM_FORMAT_ABGR8888)) {
+                std::cerr << "Failed color/stencil/mirror allocation: " << format << '\n';
+                return 1;
+            }
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+                return 1;
+            if (format == DRM_FORMAT_ABGR16161616F) {
+                const GLfloat hdr[] = {2.0F, 0.5F, 0.25F, 1.0F};
+                GLfloat pixel[4]{};
+                glClearBufferfv(GL_COLOR, 0, hdr);
+                glReadBuffer(GL_COLOR_ATTACHMENT0);
+                glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, pixel);
+                if (glGetError() != GL_NO_ERROR || std::abs(pixel[0] - 2.0F) > 0.01F)
+                    return 1; // Keep FP16 range; never silently downgrade to 8-bit.
+            }
+        }
+    }
+    // Force an incomplete attachment set (same texture used as color and depth)
+    // and then recover, proving failure is a return value rather than an abort.
+    if (allocateEdgeFramebuffer(allocationFB, allocationTextures[0], allocationTextures[0], 0,
+            W, H, DRM_FORMAT_ABGR8888, 0) ||
+        !allocateEdgeFramebuffer(allocationFB, allocationTextures[0], allocationTextures[1], 0,
+            W, H, DRM_FORMAT_ABGR8888, 0))
+        return 1;
+    GLint limit = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &limit);
+    for (const auto format : {uint32_t{DRM_FORMAT_INVALID}, uint32_t{0xffffffff}}) {
+        if (allocateEdgeFramebuffer(allocationFB, allocationTextures[0], allocationTextures[1], 0, W, H, format, 0) ||
+            allocateEdgeFramebuffer(allocationFB, allocationTextures[0], allocationTextures[1], allocationTextures[2],
+                W, H, DRM_FORMAT_ABGR8888, format))
+            return 1;
+    }
+    if (allocateEdgeFramebuffer(allocationFB, allocationTextures[0], allocationTextures[1], 0, limit + 1, H, DRM_FORMAT_ABGR8888, 0) ||
+        allocateEdgeFramebuffer(allocationFB, allocationTextures[0], allocationTextures[1], 0, 0, H, DRM_FORMAT_ABGR8888, 0) ||
+        allocateEdgeFramebuffer(allocationFB, 0, allocationTextures[1], 0, W, H, DRM_FORMAT_ABGR8888, 0))
+        return 1;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &allocationFB);
+    glDeleteTextures(3, allocationTextures);
+    std::cout << "PASS: alpha formats and fallible color/stencil/mirror allocation\n";
     const auto vertex = compile(GL_VERTEX_SHADER, hymission::stage::edgeVertexShader);
     const auto fragment = compile(GL_FRAGMENT_SHADER, hymission::stage::edgeFragmentShader);
     if (!vertex || !fragment)

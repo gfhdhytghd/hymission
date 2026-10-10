@@ -1,5 +1,6 @@
 #include "stage_edge_effect.hpp"
 #include "stage_edge_shader.hpp"
+#include "stage_edge_framebuffer.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -55,6 +56,54 @@ struct GLState {
     }
 };
 
+// A transient Stage-only framebuffer. Allocation failures must disable the
+// optional effect, never assert inside the compositor's native allocator.
+class EdgeFramebuffer final : public Render::IFramebuffer {
+  public:
+    explicit EdgeFramebuffer(uint32_t mirrorFormat) : IFramebuffer("hymission edge layer") {
+        m_tex = g_pHyprRenderer->createTexture();
+        m_stencilTex = g_pHyprRenderer->createTexture();
+        if (mirrorFormat) {
+            m_mirrorTex = g_pHyprRenderer->createTexture();
+            m_mirrorTex->allocate({}, mirrorFormat);
+        }
+    }
+    ~EdgeFramebuffer() override { release(); }
+    void release() override {
+        if (m_fb)
+            glDeleteFramebuffers(1, &m_fb);
+        m_fb = 0;
+        m_fbAllocated = false;
+        m_tex.reset();
+        m_stencilTex.reset();
+        m_mirrorTex.reset();
+        m_size = {};
+    }
+    void bind() override {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_fb);
+        g_pHyprOpenGL->setViewport(0, 0, m_size.x, m_size.y);
+    }
+    void addStencil(SP<Render::ITexture> tex) override { m_stencilTex = tex; }
+    bool readPixels(CHLBufferReference, uint32_t, uint32_t, uint32_t, uint32_t) override { return false; }
+  protected:
+    bool internalAlloc(int w, int h, uint32_t format) override {
+        if (!m_tex)
+            m_tex = g_pHyprRenderer->createTexture();
+        if (!m_stencilTex)
+            return false;
+        m_tex->allocate({w, h}, format);
+        m_stencilTex->allocate({w, h});
+        if (m_mirrorTex)
+            m_mirrorTex->allocate({w, h}, m_mirrorTex->m_drmFormat);
+        if (!m_fb)
+            glGenFramebuffers(1, &m_fb);
+        return stage::allocateEdgeFramebuffer(m_fb, m_tex->m_texID, m_stencilTex->m_texID,
+            m_mirrorTex ? m_mirrorTex->m_texID : 0, w, h, format, m_mirrorTex ? m_mirrorTex->m_drmFormat : 0);
+    }
+  private:
+    GLuint m_fb = 0;
+};
+
 GLuint compile(GLenum type, const char* source, std::string& error) {
     const GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);
@@ -87,6 +136,9 @@ void StageEdgeEffect::reset() {
 }
 
 bool StageEdgeEffect::ensureShader() {
+    if (!g_pHyprOpenGL || eglGetCurrentContext() == EGL_NO_CONTEXT ||
+        eglGetCurrentContext() != g_pHyprOpenGL->m_eglContext)
+        return false;
     if (m_program)
         return true;
     if (!m_error.empty())
@@ -123,50 +175,49 @@ bool StageEdgeEffect::ensureShader() {
 }
 
 SP<Render::IFramebuffer> StageEdgeEffect::bufferFor(const PHLMONITOR& monitor, const SP<Render::IFramebuffer>& destination, bool horizontal) {
+    if (!monitor || !destination || !g_pHyprOpenGL || eglGetCurrentContext() == EGL_NO_CONTEXT ||
+        eglGetCurrentContext() != g_pHyprOpenGL->m_eglContext)
+        return nullptr;
     GLState restore;
+    const auto destinationMirror = destination->getMirrorTexture();
+    const auto format = stage::edgeAlphaFormat(destination->m_drmFormat);
+    const auto mirrorFormat = destinationMirror ? stage::edgeAlphaFormat(destinationMirror->m_drmFormat) : 0;
+    const auto fail = [&]() -> SP<Render::IFramebuffer> {
+        if (m_error.empty()) {
+            m_error = "unsupported or unavailable scrolling window framebuffer";
+            Log::logger->log(Log::ERR, "[hymission] Stage edge effect unavailable; retaining hard clip: {} (format {}, mirror {})",
+                m_error, destination->m_drmFormat, destinationMirror ? destinationMirror->m_drmFormat : 0);
+        }
+        return nullptr;
+    };
+    GLint maxSize = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxSize);
+    if (!format || (destinationMirror && !mirrorFormat) ||
+        !std::isfinite(monitor->m_pixelSize.x) || !std::isfinite(monitor->m_pixelSize.y) ||
+        monitor->m_pixelSize.x < 1 || monitor->m_pixelSize.y < 1 ||
+        monitor->m_pixelSize.x > maxSize || monitor->m_pixelSize.y > maxSize)
+        return fail();
     std::erase_if(m_buffers, [](const Buffer& b) { return b.monitor.expired(); });
     auto it = std::ranges::find_if(m_buffers, [&](const Buffer& b) { return b.monitor == monitor; });
     if (it == m_buffers.end()) {
         m_buffers.push_back({monitor, nullptr, nullptr});
         it = std::prev(m_buffers.end());
     }
-    // Keep the output's precision and color space, but require an alpha channel.
     auto& fb = horizontal ? it->horizontal : it->framebuffer;
-    if (!fb) {
-        fb = g_pHyprRenderer->createFB(horizontal ? "hymission horizontal blur" : "hymission scrolling window layer");
-        if (fb) {
-            auto stencil = g_pHyprRenderer->createTexture();
-            glGenTextures(1, &stencil->m_texID);
-            fb->addStencil(stencil);
-        }
-    }
-    if (!fb || !fb->alloc(static_cast<int>(monitor->m_pixelSize.x), static_cast<int>(monitor->m_pixelSize.y),
-                          NFormatUtils::alphaFormat(destination->m_drmFormat))) {
-        if (m_error.empty()) {
-            m_error = "could not allocate scrolling window layer";
-            Log::logger->log(Log::ERR, "[hymission] {}; retaining hard clip", m_error);
-        }
-        return nullptr;
+    const auto oldMirror = fb ? fb->getMirrorTexture() : nullptr;
+    if (!fb || fb->m_size != monitor->m_pixelSize || fb->m_drmFormat != format ||
+        (oldMirror ? oldMirror->m_drmFormat : 0) != mirrorFormat) {
+        // Replace the complete attachment set together when output size/CM or
+        // capture changes. Never reallocate with a stale mirror attachment.
+        fb.reset();
+        auto candidate = makeShared<EdgeFramebuffer>(mirrorFormat);
+        if (!candidate->alloc(static_cast<int>(monitor->m_pixelSize.x), static_cast<int>(monitor->m_pixelSize.y), format))
+            return fail();
+        fb = candidate;
     }
     fb->setImageDescription(destination->imageDescription());
-    // Preserve the compositor's separate, unmodified capture colors when its
-    // work buffer uses a second color attachment (HDR/SDR modifications).
-    const auto destinationMirror = destination->getMirrorTexture();
-    if (destinationMirror) {
-        auto mirror = fb->getMirrorTexture();
-        const auto format = NFormatUtils::alphaFormat(destinationMirror->m_drmFormat);
-        if (!mirror || mirror->m_size != monitor->m_pixelSize || mirror->m_drmFormat != format) {
-            fb->disableMirror();
-            mirror = g_pHyprRenderer->createTexture();
-            mirror->allocate(monitor->m_pixelSize, format);
-            mirror->m_imageDescription = destinationMirror->m_imageDescription;
-            fb->enableMirror(mirror);
-        }
-    } else
-        fb->disableMirror();
-    fb->bind();
-    const GLenum attachments[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
-    glDrawBuffers(destinationMirror ? 2 : 1, attachments);
+    if (destinationMirror)
+        fb->getMirrorTexture()->m_imageDescription = destinationMirror->m_imageDescription;
     return fb;
 }
 

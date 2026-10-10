@@ -80,7 +80,7 @@ if edge_test_egl.found() and edge_test_gles.found()
   stage_edge_render_test = executable('hymission-stage-edge-render-test',
     'tools/stage_edge_render_test.cpp',
     include_directories: include_directories('src'),
-    dependencies: [edge_test_egl, edge_test_gles, dependency('hyprutils')],
+    dependencies: [edge_test_egl, edge_test_gles, dependency('hyprutils'), dependency('hyprgraphics'), dependency('libdrm')],
     install: false,
   )
   test('hymission-stage-edge-render-test', stage_edge_render_test, env: ['LIBGL_ALWAYS_SOFTWARE=1'])

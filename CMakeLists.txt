@@ -69,7 +69,7 @@ add_executable(hymission-layout-demo
 target_include_directories(hymission-layout-demo PRIVATE src)
 
 if(BUILD_TESTING)
-  pkg_check_modules(EDGE_TEST_GL QUIET IMPORTED_TARGET egl glesv2 hyprutils)
+  pkg_check_modules(EDGE_TEST_GL QUIET IMPORTED_TARGET egl glesv2 hyprutils hyprgraphics libdrm)
   if(EDGE_TEST_GL_FOUND)
     add_executable(hymission-stage-edge-render-test tools/stage_edge_render_test.cpp)
     target_include_directories(hymission-stage-edge-render-test PRIVATE src)
