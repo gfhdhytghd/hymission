@@ -1,0 +1,155 @@
+#!/bin/bash
+# Omarchy shell-plugin bridge for a native Hyprland plugin.
+#
+#   plugin status    JSON state: missing | stale | ready | loaded | foreign
+#   plugin start     load the build that matches the running Hyprland, then reload config
+#   plugin apply     register key bindings and defaults (run after every config reload)
+#   plugin setup     install build dependencies and build (interactive, in a terminal)
+#   plugin unload    unload the plugin and restore the Hyprland config
+#
+# Builds live in ${XDG_CACHE_HOME:-~/.cache}/<plugin id>/, keyed by the Hyprland
+# and source commits, so the plugin checkout itself is never modified.
+
+set -euo pipefail
+
+DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+source "$DIR/omarchy/plugin.conf"
+ID=$(jq -r .id "$DIR/manifest.json")
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/$ID"
+STAMP="$CACHE/current.json"
+USER_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/$NAME/omarchy.lua"
+
+die() { echo "$NAME: $*" >&2; exit 1; }
+
+running_commit() { hyprctl -j version | jq -r .commit; }
+header_commit() { sed -n 's/^#define GIT_COMMIT_HASH *"\(.*\)"/\1/p' /usr/include/hyprland/src/version.h 2>/dev/null; }
+source_commit() { git -C "$DIR" rev-parse HEAD 2>/dev/null || echo unknown; }
+
+# Path of our plugin if Hyprland has it loaded (any path), empty otherwise.
+loaded_path() {
+  hyprctl -j plugin list 2>/dev/null |
+    jq -r --arg n "$NAME" 'if type == "array" then .[] else empty end | select(.name == $n) | .path' | head -n1
+}
+
+status() {
+  local commit loaded built=""
+  commit=$(running_commit)
+  loaded=$(loaded_path)
+  [[ -f $STAMP ]] && built=$(jq -r '.dir + "/" + .lib' "$STAMP")
+  jq -nc \
+    --arg loaded "$loaded" --arg cache "$CACHE/" --arg built "$built" \
+    --arg commit "$commit" --arg source "$(source_commit)" \
+    --argjson stamp "$( [[ -f $STAMP ]] && cat "$STAMP" || echo null )" '
+    {
+      state: (
+        if $loaded != "" then (if ($loaded | startswith($cache)) then "loaded" else "foreign" end)
+        elif $stamp == null then "missing"
+        elif $stamp.hyprland != $commit then "stale"
+        else "ready" end),
+      outdated: ($stamp != null and $stamp.source != $source),
+      loaded: $loaded,
+      library: $built
+    }'
+}
+
+start() {
+  local state lib
+  state=$(status)
+  case $(jq -r .state <<<"$state") in
+    loaded) ;;
+    ready)
+      lib=$(jq -r .library <<<"$state")
+      [[ -f $lib ]] || die "build output is missing; run setup again"
+      hyprctl plugin load "$lib" >/dev/null
+      ;;
+    *) jq -c . <<<"$state"; return 0 ;;
+  esac
+  # A reload clears bindings registered earlier; the shell service re-applies
+  # them on the configreloaded event, so this path is idempotent.
+  hyprctl reload >/dev/null
+  status
+}
+
+# Turn "SUPER + SHIFT + TAB" into the modmask/key pair hyprctl reports.
+apply() {
+  [[ -n $(loaded_path) ]] || return 0
+  local lua="$XDG_RUNTIME_DIR/$ID.lua"
+  if [[ -f $USER_CONFIG ]]; then
+    printf 'dofile(%s)\n' "$(jq -Rn --arg p "$USER_CONFIG" '$p')" >"$lua"
+  else
+    hyprctl -j binds | jq -r --slurpfile spec "$DIR/omarchy/bindings.json" --arg defaults "$DIR/omarchy/defaults.lua" '
+      def mods: {SHIFT: 1, CAPS: 2, CTRL: 4, CONTROL: 4, ALT: 8, MOD2: 16, MOD3: 32, SUPER: 64, WIN: 64, MOD5: 128};
+      def parse: (split("+") | map(gsub("^\\s+|\\s+$"; "") | ascii_upcase)) as $p
+        | {key: $p[-1], mask: ($p[:-1] | map(mods[.] // 0) | add // 0)};
+      . as $binds
+      | ($spec[0][] | . as $b | ($b.key | parse) as $k
+          | [$binds[] | select(.modmask == $k.mask and (.key | ascii_upcase) == $k.key)] as $existing
+          | ($existing | map(select(.description as $d | ($b.replaces // []) + [$b.description] | index($d) | not))) as $foreign
+          | if ($foreign | length) > 0 then
+              "-- skipped \($b.key): bound by the user (\($foreign | map(.description) | join(", ")))"
+            else
+              (if ($existing | length) > 0 then "hl.unbind(\($b.key | @json))\n" else "" end)
+              + "hl.bind(\($b.key | @json), \($b.lua), { description = \($b.description | @json) })"
+            end),
+        "dofile(\($defaults | @json))"
+    ' >"$lua"
+  fi
+  hyprctl eval "dofile($(jq -Rn --arg p "$lua" '$p'))" >/dev/null
+  grep '^-- skipped' "$lua" || true
+}
+
+unload() {
+  local path
+  path=$(loaded_path)
+  [[ -n $path && $path == "$CACHE/"* ]] || return 0
+  hyprctl plugin unload "$path" >/dev/null
+  hyprctl reload >/dev/null
+}
+
+setup() {
+  local running headers source out missing
+  running=$(running_commit)
+  headers=$(header_commit)
+  [[ -n $headers ]] || die "Hyprland headers not found in /usr/include/hyprland"
+  [[ $running == "$headers" ]] ||
+    die "Hyprland was updated but this session still runs the old version. Log out and back in, then rerun setup."
+
+  missing=$(pacman -T "${PACKAGES[@]}" || true)
+  if [[ -n $missing ]]; then
+    echo "Installing build dependencies: $missing"
+    # shellcheck disable=SC2086
+    sudo pacman -S --needed --noconfirm $missing
+  fi
+
+  source=$(source_commit)
+  out="$CACHE/${running:0:12}-${source:0:12}"
+  mkdir -p "$CACHE"
+  local extra=()
+  declare -F cmake_out_args >/dev/null && mapfile -t extra < <(cmake_out_args "$out")
+  cmake -S "$DIR" -B "$CACHE/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    "${CMAKE_ARGS[@]}" "${extra[@]}"
+  cmake --build "$CACHE/build" --target "${TARGETS[@]}"
+
+  rm -rf "$out.tmp" && mkdir -p "$out.tmp"
+  local file
+  for file in "${FILES[@]}"; do install -m755 "$CACHE/build/$file" "$out.tmp/$file"; done
+  rm -rf "$out" && mv "$out.tmp" "$out"
+  jq -n --arg dir "$out" --arg lib "${FILES[0]}" --arg h "$running" --arg s "$source" \
+    '{dir: $dir, lib: $lib, hyprland: $h, source: $s}' >"$STAMP.tmp"
+  mv "$STAMP.tmp" "$STAMP"
+
+  # Keep the new build and whatever Hyprland still has mapped; drop the rest.
+  local loaded keep
+  loaded=$(loaded_path)
+  for keep in "$CACHE"/*/; do
+    keep=${keep%/}
+    [[ $keep == "$CACHE/build" || $keep == "$out" || $loaded == "$keep/"* ]] && continue
+    rm -rf "$keep"
+  done
+  echo "$NAME is built for Hyprland ${running:0:12}."
+}
+
+case ${1:-} in
+  status | start | apply | unload | setup) "$1" ;;
+  *) echo "usage: $0 status|start|apply|setup|unload" >&2; exit 2 ;;
+esac

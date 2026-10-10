@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.gfhdhytghd.hymission",
+  "name": "Hymission",
+  "version": "0.9.1",
+  "author": "wilf",
+  "license": "GPL-3.0-only",
+  "description": "Mission Control for Hyprland: a native overview of every window with live previews, search, gestures and Stage workspace strips.",
+  "preview": "preview.png",
+  "kinds": ["service"],
+  "keepLoaded": true,
+  "entryPoints": { "service": "omarchy/Service.qml" }
+}
