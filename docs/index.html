@@ -167,7 +167,7 @@
     <h1>hymission</h1>
     <p class="lede">Release history of the hymission overview and Stage workspace sidebar plugin for Hyprland. Each version tag names the plugin version followed by the Hyprland release it was built for.</p>
     <ul class="actions">
-      <li><a class="button primary" href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.8.0-v0.56.2">Latest: v0.8.0-v0.56.2</a></li>
+      <li><a class="button primary" href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.9.0-v0.56.2">Latest: v0.9.0-v0.56.2</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission#installation">Installation</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission/releases">All GitHub releases</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission">Source code</a></li>
@@ -178,7 +178,7 @@
   <nav class="toc" aria-labelledby="toc-title">
     <h2 id="toc-title">Versions</h2>
     <ol>
-      <li><a href="#unreleased">Unreleased <span>next</span></a></li>
+      <li><a href="#v0-9-0-v0-56-2">0.9.0 <span>2026-10-10</span></a></li>
       <li><a href="#v0-8-0-v0-56-2">0.8.0 <span>2026-09-12</span></a></li>
       <li><a href="#v0-7-1-v0-56-2">0.7.1 <span>2026-09-06</span></a></li>
       <li><a href="#v0-7-0-v0-56-2">0.7.0 <span>2026-09-04</span></a></li>
@@ -201,28 +201,33 @@
   <main id="changelog" tabindex="-1">
     <ol class="timeline" aria-label="Releases, newest first">
       <li>
-        <article class="entry unreleased" id="unreleased" aria-labelledby="unreleased-title">
+        <article class="entry" id="v0-9-0-v0-56-2" aria-labelledby="v0-9-0-v0-56-2-title">
           <div class="entry-head">
-            <h2 id="unreleased-title"><a href="#unreleased">Unreleased</a></h2>
-            <div class="meta"><span class="badge pending">Not yet released</span><span>Since v0.8.0-v0.56.2</span></div>
+            <h2 id="v0-9-0-v0-56-2-title"><a href="#v0-9-0-v0-56-2">0.9.0</a></h2>
+            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-10-10T06:20:27Z">Oct 10, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.9.0-v0.56.2</code></div>
           </div>
-          <p class="summary">Stage rendering, gestures, window interaction, and capture integration since 0.8.0. These changes are not part of a published release.</p>
+          <p class="headline">Continuous Stage toggles, scrolling translation, and rendering and drag improvements</p>
           <h3>Stage sidebar</h3>
           <ul>
             <li>Optionally keep the active workspace visible, reserve empty workspace slots, show card backdrops, and distribute cards evenly (<a href="https://github.com/gfhdhytghd/hymission/issues/45">#45</a>). Active-card glow is opt-in and disabled by default.</li>
             <li>Click a window preview to activate its workspace and focus that window. Floating windows dragged within their own Stage card now retain the dropped position.</li>
+            <li>Toggle Stage at runtime with <code>hl.plugin.hymission.stage_toggle()</code> / <code>hymission:stage_toggle</code>. A horizontal plugin gesture reveals or hides the sidebar with continuous desktop reservation, reversal, cancellation, and animated settling. <code>stage_enabled</code> now sets startup visibility; config reload preserves the runtime choice. Scrolling layouts translate as a whole without changing column widths or window sizes.</li>
+            <li>Preserve native rounding, decorations, layering, and return animations when dragging between the desktop and Stage cards. Keep drops in card gaps consistent and prevent silent drops from stealing focus.</li>
           </ul>
           <h3>Rendering</h3>
           <ul>
             <li>Clip scrolling windows and unpinned floating windows at Stage boundaries with progressive blur and fading. Configure desktop and preview bands independently with <code>stage_scrolling_desktop_edge_width</code> and <code>stage_scrolling_preview_edge_width</code>.</li>
             <li>Keep pinned floating windows above Stage with native pointer input, and respect window stacking and fullscreen occlusion in previews.</li>
             <li>Preserve live backdrop blur, shadow cutouts, rounded corners, and edge gradients through overview transitions. Correct clipping of closing windows and shadow rendering beyond Stage content.</li>
+            <li>Apply blur and fading to every overflowing preview edge, including floating previews, while retaining hard clipping when edge widths are zero.</li>
           </ul>
           <h3>Gestures and overview</h3>
           <ul>
             <li>Synchronize sidebar movement and returning cards with workspace swipe progress, including fullscreen transitions, pauses, reversal, and cancellation.</li>
             <li>Return overview windows directly to their Stage cards and retain the intended workspace across compact gesture handoffs. Preserve geometry and clipping when releasing or interrupting a gesture.</li>
             <li>Fix duplicate sidebar movement and workspace-strip wallpaper rendering. Ignore empty overview opens, limit workspace creation during a single swipe, and correct hover-only preview expansion.</li>
+            <li>Route layout-scroll gestures to the hovered Stage workspace, preserve its canvas offset when activating it, and scroll explicitly selected windows into view.</li>
+            <li>Fix the Lua <code>stage_toggle</code> action alias so Win+four-finger horizontal gestures register as continuous Stage gestures.</li>
           </ul>
           <h3>Capture integration</h3>
           <ul>
@@ -231,16 +236,16 @@
           </ul>
           <h3>Validation</h3>
           <ul>
-            <li>Add an offscreen Stage edge-rendering regression test and extend Stage and overview logic coverage. The current CMake build and all five tests pass; updated compositor-session behavior still requires live verification.</li>
+            <li>CMake Release and Meson Release builds and regression suites validated against Hyprland 0.56.2. Live compositor behavior requires a user-run plugin update and session validation.</li>
           </ul>
-          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/compare/v0.8.0-v0.56.2...master">Compare v0.8.0-v0.56.2…master</a></div>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.9.0-v0.56.2">Release notes for v0.9.0-v0.56.2 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.8.0-v0.56.2...v0.9.0-v0.56.2">Compare with v0.8.0-v0.56.2</a></div>
         </article>
       </li>
       <li>
         <article class="entry" id="v0-8-0-v0-56-2" aria-labelledby="v0-8-0-v0-56-2-title">
           <div class="entry-head">
             <h2 id="v0-8-0-v0-56-2-title"><a href="#v0-8-0-v0-56-2">0.8.0</a></h2>
-            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-09-12T18:12:39Z">Sep 12, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.8.0-v0.56.2</code></div>
+            <div class="meta"><time datetime="2026-09-12T18:12:39Z">Sep 12, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.8.0-v0.56.2</code></div>
           </div>
           <p class="headline">Stage workspace sidebar and overview navigation</p>
           <h3>Stage workspace sidebar</h3>
