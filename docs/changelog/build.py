@@ -24,7 +24,7 @@ TEMPLATE = HERE / "template.html"
 OUTPUT = HERE.parent / "index.html"
 
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:\.\d+)?$")
 HYPRLAND_RE = re.compile(r"^\d+\.\d+(\.\d+)?$")
 INLINE_RE = re.compile(r"`([^`]+)`|(?<![\w&/])#(\d+)\b")
 
@@ -62,7 +62,7 @@ def validate(data):
         where = f"release {tag or '?'}"
         fail_unless(tag not in seen, f"{where}: duplicate tag")
         seen.add(tag)
-        fail_unless(VERSION_RE.match(release.get("version", "")), f"{where}: version must look like 1.2.3")
+        fail_unless(VERSION_RE.match(release.get("version", "")), f"{where}: version must look like 1.2.3 or 1.2.3.4")
         fail_unless(release.get("hyprland") is None or HYPRLAND_RE.match(release.get("hyprland", "")), f"{where}: hyprland must look like 0.56 or 0.56.2")
         expected = {f"v{release['version']}-{release['hyprland']}", f"v{release['version']}-v{release['hyprland']}"} if release['hyprland'] else {"v0.0.1"}
         fail_unless(tag in expected, f"{where}: tag does not match version and Hyprland metadata")
