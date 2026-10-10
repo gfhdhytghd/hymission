@@ -4,6 +4,34 @@
   "site_url": "https://gfhdhytghd.github.io/hymission/",
   "releases": [
     {
+      "tag": "v0.9.1.1-v0.56.2",
+      "version": "0.9.1.1",
+      "hyprland": "0.56.2",
+      "published_at": "2026-10-10T09:18:22Z",
+      "headline": "Stage activation at screen edges and card gaps",
+      "sections": [
+        {
+          "title": "Stage click targets",
+          "items": [
+            "Extend workspace activation through sidebar padding to the screen edge and divide card gaps at their midpoint. Outer vertical padding belongs to the nearest visible card.",
+            "Keep hidden cards from receiving clicks and retain pinned-window input priority. Window selection, thumbnail dragging and drops keep their own hit rules."
+          ]
+        },
+        {
+          "title": "Stage integration",
+          "items": [
+            "Include idempotent stage_open and stage_close actions, plus stage_region for external edge triggers."
+          ]
+        },
+        {
+          "title": "Validation",
+          "items": [
+            "CMake Release and Meson Release builds each passed all five tests against Hyprland 0.56.2. Live compositor validation requires a user-run update."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.9.1-v0.56.2",
       "version": "0.9.1",
       "hyprland": "0.56.2",
