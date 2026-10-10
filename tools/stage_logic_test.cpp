@@ -16,6 +16,23 @@ bool near(double a, double b) { return std::abs(a - b) < 1e-7; }
 int main() {
     using namespace hymission::stage;
     bool ok = true;
+    const hymission::Rect focusDesktop{500, 100, 1000, 800};
+    ok &= expect(near(visibleAxisFraction({450, 100, 190, 400}, focusDesktop, true), 0.14),
+        "follow threshold excludes Stage-covered content from intersection and denominator");
+    ok &= expect(near(visibleAxisFraction({1360, 100, 190, 400}, focusDesktop, true), 0.14),
+        "right-side viewport uses the same follow threshold");
+    ok &= expect(near(visibleAxisFraction({500, 50, 400, 162}, focusDesktop, false), 0.14),
+        "vertical follow threshold uses desktop height and top boundary");
+    ok &= expect(near(visibleAxisFraction({500, 788, 400, 200}, focusDesktop, false), 0.14),
+        "vertical bottom overlap uses desktop height");
+    ok &= expect(visibleAxisFraction({0, 100, 200, 200}, focusDesktop, true) == 0 &&
+        visibleAxisFraction({1600, 100, 200, 200}, focusDesktop, true) == 0,
+        "fully offscreen columns never count negative overlap as visible");
+    ok &= expect(visibleAxisFraction({0, 0, 3000, 2000}, focusDesktop, true) == 1 &&
+        visibleAxisFraction(focusDesktop, {0, 0, 0, 0}, false) == 0,
+        "oversized targets saturate and empty viewports reject visibility");
+    ok &= expect(near(visibleAxisFraction({-1550, -700, 190, 400}, {-1500, -700, 1000, 800}, true), 0.14),
+        "global monitor offsets do not change follow percentage");
     // Lifecycle regression: A's old sidebar must never cover B's predicted
     // sidebar during the zero-progress frame or deferred overview teardown.
     ok &= expect(overviewRenderOwner(OverviewPhase::Inactive, false) == OverviewRenderOwner::Stage,

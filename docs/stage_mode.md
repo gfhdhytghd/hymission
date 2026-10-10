@@ -165,6 +165,13 @@ Session lock, overview, fullscreen, output geometry changes and config reload
 cancel flights. Flight metadata is released when the motion timer finishes or cancels.
 The real client geometry and pointer coordinate system remain native throughout.
 
+With Stage interactive, scrolling-layout automatic focus uses the reduced desktop
+work area for `scrolling:follow_min_visible`: both the visible intersection and
+the percentage denominator exclude the sidebar. Horizontal layouts use desktop
+width; vertical layouts use desktop height. Offscreen targets have zero overlap.
+The native fit/center setting and already-visible-column behavior are retained;
+clicks, keyboard focus and non-Stage input keep native handling.
+
 The `hymission:scroll, layout` trackpad gesture targets the Stage card under the
 pointer when it begins. It scrolls that workspace's scrolling-layout canvas
 without activating the workspace or changing focus, using its layout direction

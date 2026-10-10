@@ -97,6 +97,8 @@ EdgeViewport edgeViewport(const Rect& box, double left, double right, double top
 EdgeViewport desktopShadowViewport(const EdgeViewport& viewport, const Rect& output);
 EdgeViewport edgeViewportForWindow(const EdgeViewport& viewport, const Rect& window);
 double edgeOpacity(const EdgeViewport& viewport, double x, double y);
+// Visible target length as a fraction of the desktop viewport along the scroll axis.
+double visibleAxisFraction(const Rect& target, const Rect& viewport, bool horizontal);
 // Preserve both the gradient's coordinate system and the actual card/strip clip.
 // A window fully outside clip must use an offscreen endpoint, not a reveal.
 struct OverviewEndpoint {

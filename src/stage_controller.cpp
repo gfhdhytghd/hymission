@@ -300,6 +300,7 @@ struct StageController::Impl {
     using RecheckFn = void (*)(Layout::CSpace*);
     using DragEndFn = void (*)(Layout::Supplementary::CDragStateController*);
     using WindowFocusFn = void (*)(Desktop::CFocusState*, PHLWINDOW, Desktop::eFocusReason, SP<CWLSurfaceResource>);
+    using ScrollFocusFn = void (*)(Layout::Tiled::CScrollingAlgorithm*, SP<Layout::ITarget>, Layout::Tiled::CScrollingAlgorithm::eInputMode);
     using WindowAtFn = PHLWINDOW (*)(const Desktop::CViewHitTester*, const Vector2D&, uint16_t, PHLWINDOW);
     using RoundingFn = float (*)(Desktop::View::CWindow*);
     using RenderWindowFn = void (*)(Render::IHyprRenderer*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, Render::eRenderPassMode, bool, bool);
@@ -344,6 +345,7 @@ struct StageController::Impl {
     CFunctionHook* areaHook = nullptr;
     CFunctionHook* dragHook = nullptr;
     CFunctionHook* windowFocusHook = nullptr;
+    CFunctionHook* scrollFocusHook = nullptr;
     CFunctionHook* hitHook = nullptr;
     CFunctionHook* roundingHook = nullptr;
     CFunctionHook* renderWindowHook = nullptr;
@@ -535,6 +537,38 @@ struct StageController::Impl {
         reinterpret_cast<WindowFocusFn>(self->windowFocusHook->m_original)(focus, std::move(window), reason, std::move(surface));
         if (reason == Desktop::FOCUS_REASON_WORKSPACE_CHANGE)
             self->restoreCanvasScroll(workspace);
+    }
+    static void scrollFocusThunk(Layout::Tiled::CScrollingAlgorithm* algorithm, SP<Layout::ITarget> target,
+                                 Layout::Tiled::CScrollingAlgorithm::eInputMode input) {
+        auto* self = instance;
+        const auto original = reinterpret_cast<ScrollFocusFn>(self->scrollFocusHook->m_original);
+        const auto workspace = target ? target->workspace() : PHLWORKSPACE{};
+        const auto screen = workspace ? self->screenFor(workspace->m_monitor.lock()) : nullptr;
+        const double minimum = numberSetting("scrolling:follow_min_visible", 0);
+        if (input != Layout::Tiled::CScrollingAlgorithm::INPUT_MODE_SOFT || minimum <= 0 ||
+            !screen || !self->interactive(*screen) || !scrollingWorkspace(workspace) ||
+            target->space() != workspace->m_space || workspace->m_space->algorithm()->tiledAlgo().get() != algorithm) {
+            original(algorithm, std::move(target), input);
+            return;
+        }
+        const auto data = algorithm->m_scrollingData;
+        const auto targetData = algorithm->dataFor(target);
+        if (!data || !data->controller || !targetData)
+            return;
+        // Native soft focus measures against monitor.logicalBox(), counting
+        // content hidden under Stage. Both intersection and denominator must
+        // instead use the same global work area that lays out the desktop.
+        const auto desktop = workspace->m_space->workArea();
+        if (stage::visibleAxisFraction(rect(target->position()), rect(desktop), data->controller->isPrimaryHorizontal()) <
+            std::clamp(minimum, 0.0, 1.0))
+            return;
+        const auto column = targetData->column.lock();
+        if (!column || data->visible(column, true))
+            return;
+        // Retain the native soft-focus tail, without rerunning its full-output
+        // percentage gate or promoting this input to forced/hard focus.
+        data->centerOrFitCol(column);
+        data->recalculate();
     }
     static void swipeBeginThunk(CUnifiedWorkspaceSwipeGesture* gesture) {
         auto* self = instance;
@@ -1095,6 +1129,7 @@ bool StageController::Impl::installHooks() {
     };
     const auto area = find("recheckWorkArea", "Layout::CSpace::recheckWorkArea()");
     const auto drag = find("dragEnd", "Layout::Supplementary::CDragStateController::dragEnd()");
+    const auto scrollFocus = find("focusOnInput", "Layout::Tiled::CScrollingAlgorithm::focusOnInput(");
     const auto windowFocus = find("rawWindowFocus", "Desktop::CFocusState::rawWindowFocus(");
     const auto hit = find("windowAt", "Desktop::CViewHitTester::windowAt(");
     const auto rounding = find("rounding", "Desktop::View::CWindow::rounding()");
@@ -1107,10 +1142,11 @@ bool StageController::Impl::installHooks() {
     const auto changeWorkspace = find("changeWorkspace", "Monitor::CMonitor::changeWorkspace(Hyprutils::Memory::CSharedPointer<CWorkspace> const&");
     renderWindow = reinterpret_cast<RenderWindowFn>(find("renderWindow", "IHyprRenderer::renderWindow("));
     shouldBlur = reinterpret_cast<ShouldBlurFn>(find("shouldBlur", "IHyprRenderer::shouldBlur(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>)"));
-    if (area && drag && windowFocus && hit && rounding && surfaceBox && surfaceVisible && surfaceUV && addPass && fadeouts && workspaceAnimation && changeWorkspace && renderWindow && shouldBlur && g_pHyprOpenGL) {
+    if (area && drag && windowFocus && scrollFocus && hit && rounding && surfaceBox && surfaceVisible && surfaceUV && addPass && fadeouts && workspaceAnimation && changeWorkspace && renderWindow && shouldBlur && g_pHyprOpenGL) {
         areaHook = HyprlandAPI::createFunctionHook(handle, area, reinterpret_cast<void*>(&recheckThunk));
         dragHook = HyprlandAPI::createFunctionHook(handle, drag, reinterpret_cast<void*>(&dragThunk));
         windowFocusHook = HyprlandAPI::createFunctionHook(handle, windowFocus, reinterpret_cast<void*>(&windowFocusThunk));
+        scrollFocusHook = HyprlandAPI::createFunctionHook(handle, scrollFocus, reinterpret_cast<void*>(&scrollFocusThunk));
         hitHook = HyprlandAPI::createFunctionHook(handle, hit, reinterpret_cast<void*>(&windowAtThunk));
         roundingHook = HyprlandAPI::createFunctionHook(handle, rounding, reinterpret_cast<void*>(&roundingThunk));
         renderWindowHook = HyprlandAPI::createFunctionHook(handle, reinterpret_cast<void*>(renderWindow), reinterpret_cast<void*>(&renderWindowThunk));
@@ -1121,7 +1157,8 @@ bool StageController::Impl::installHooks() {
         fadeoutsHook = HyprlandAPI::createFunctionHook(handle, fadeouts, reinterpret_cast<void*>(&fadeoutsThunk));
         workspaceAnimationHook = HyprlandAPI::createFunctionHook(handle, workspaceAnimation, reinterpret_cast<void*>(&workspaceAnimationThunk));
         changeWorkspaceHook = HyprlandAPI::createFunctionHook(handle, changeWorkspace, reinterpret_cast<void*>(&changeWorkspaceThunk));
-        hooksReady = attach(areaHook, "work area") && attach(dragHook, "drag end") && attach(windowFocusHook, "drop focus") && attach(hitHook, "window hit test") &&
+        hooksReady = attach(areaHook, "work area") && attach(dragHook, "drag end") && attach(windowFocusHook, "drop focus") &&
+            attach(scrollFocusHook, "scrolling desktop focus") && attach(hitHook, "window hit test") &&
             attach(roundingHook, "rounding") && attach(renderWindowHook, "window rendering") &&
             (overviewRendering || (attach(surfaceBoxHook, "surface box") && attach(surfaceVisibleHook, "surface visible region") && attach(surfaceUVHook, "surface UV"))) &&
             attach(addPassHook, "decoration pass") && attach(fadeoutsHook, "fading window clipping") &&
@@ -1156,7 +1193,7 @@ bool StageController::Impl::installHooks() {
 }
 
 void StageController::Impl::releaseHooks() {
-    for (auto** hook : {&areaHook, &dragHook, &windowFocusHook, &hitHook, &roundingHook, &renderWindowHook, &surfaceBoxHook, &surfaceVisibleHook, &surfaceUVHook, &addPassHook,
+    for (auto** hook : {&areaHook, &dragHook, &windowFocusHook, &scrollFocusHook, &hitHook, &roundingHook, &renderWindowHook, &surfaceBoxHook, &surfaceVisibleHook, &surfaceUVHook, &addPassHook,
                         &workspaceAnimationHook, &changeWorkspaceHook, &blurFramebufferHook, &fadeoutsHook}) {
         if (!*hook)
             continue;

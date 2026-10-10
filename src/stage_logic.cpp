@@ -245,6 +245,18 @@ EdgeViewport edgeViewportForWindow(const EdgeViewport& viewport, const Rect& win
     return result;
 }
 
+double visibleAxisFraction(const Rect& target, const Rect& viewport, bool horizontal) {
+    const double start = horizontal ? viewport.x : viewport.y;
+    const double length = horizontal ? viewport.width : viewport.height;
+    const double targetStart = horizontal ? target.x : target.y;
+    const double targetLength = horizontal ? target.width : target.height;
+    if (!std::isfinite(start) || !std::isfinite(length) || !std::isfinite(targetStart) || !std::isfinite(targetLength) ||
+        length <= 0 || targetLength <= 0)
+        return 0;
+    const double visible = std::max(0.0, std::min(start + length, targetStart + targetLength) - std::max(start, targetStart));
+    return std::clamp(visible / length, 0.0, 1.0);
+}
+
 double edgeOpacity(const EdgeViewport& viewport, double x, double y) {
     const auto& b = viewport.box;
     if (x < b.x || x >= b.x + b.width || y < b.y || y >= b.y + b.height || b.width <= 0 || b.height <= 0)
