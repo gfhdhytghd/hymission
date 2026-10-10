@@ -1,6 +1,6 @@
 #include "stage_edge_effect.hpp"
 #include "stage_edge_shader.hpp"
-#include "stage_edge_framebuffer.hpp"
+#include "stage_edge_native_framebuffer.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -54,54 +54,6 @@ struct GLState {
         if (!scissoring)
             g_pHyprOpenGL->scissor(nullptr);
     }
-};
-
-// A transient Stage-only framebuffer. Allocation failures must disable the
-// optional effect, never assert inside the compositor's native allocator.
-class EdgeFramebuffer final : public Render::IFramebuffer {
-  public:
-    explicit EdgeFramebuffer(uint32_t mirrorFormat) : IFramebuffer("hymission edge layer") {
-        m_tex = g_pHyprRenderer->createTexture();
-        m_stencilTex = g_pHyprRenderer->createTexture();
-        if (mirrorFormat) {
-            m_mirrorTex = g_pHyprRenderer->createTexture();
-            m_mirrorTex->allocate({}, mirrorFormat);
-        }
-    }
-    ~EdgeFramebuffer() override { release(); }
-    void release() override {
-        if (m_fb)
-            glDeleteFramebuffers(1, &m_fb);
-        m_fb = 0;
-        m_fbAllocated = false;
-        m_tex.reset();
-        m_stencilTex.reset();
-        m_mirrorTex.reset();
-        m_size = {};
-    }
-    void bind() override {
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_fb);
-        g_pHyprOpenGL->setViewport(0, 0, m_size.x, m_size.y);
-    }
-    void addStencil(SP<Render::ITexture> tex) override { m_stencilTex = tex; }
-    bool readPixels(CHLBufferReference, uint32_t, uint32_t, uint32_t, uint32_t) override { return false; }
-  protected:
-    bool internalAlloc(int w, int h, uint32_t format) override {
-        if (!m_tex)
-            m_tex = g_pHyprRenderer->createTexture();
-        if (!m_stencilTex)
-            return false;
-        m_tex->allocate({w, h}, format);
-        m_stencilTex->allocate({w, h});
-        if (m_mirrorTex)
-            m_mirrorTex->allocate({w, h}, m_mirrorTex->m_drmFormat);
-        if (!m_fb)
-            glGenFramebuffers(1, &m_fb);
-        return stage::allocateEdgeFramebuffer(m_fb, m_tex->m_texID, m_stencilTex->m_texID,
-            m_mirrorTex ? m_mirrorTex->m_texID : 0, w, h, format, m_mirrorTex ? m_mirrorTex->m_drmFormat : 0);
-    }
-  private:
-    GLuint m_fb = 0;
 };
 
 GLuint compile(GLenum type, const char* source, std::string& error) {
@@ -210,7 +162,7 @@ SP<Render::IFramebuffer> StageEdgeEffect::bufferFor(const PHLMONITOR& monitor, c
         // Replace the complete attachment set together when output size/CM or
         // capture changes. Never reallocate with a stale mirror attachment.
         fb.reset();
-        auto candidate = makeShared<EdgeFramebuffer>(mirrorFormat);
+        auto candidate = makeShared<stage::EdgeFramebuffer>(mirrorFormat);
         if (!candidate->alloc(static_cast<int>(monitor->m_pixelSize.x), static_cast<int>(monitor->m_pixelSize.y), format))
             return fail();
         fb = candidate;

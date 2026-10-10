@@ -69,6 +69,19 @@ add_executable(hymission-layout-demo
 target_include_directories(hymission-layout-demo PRIVATE src)
 
 if(BUILD_TESTING)
+  find_program(HYPRLAND_TEST_EXECUTABLE Hyprland)
+  if(HYPRLAND_TEST_EXECUTABLE)
+    add_library(hymission-stage-edge-native-probe MODULE tools/stage_edge_native_contract_probe.cpp)
+    get_target_property(EDGE_NATIVE_INCLUDES hymission INCLUDE_DIRECTORIES)
+    target_include_directories(hymission-stage-edge-native-probe PRIVATE src ${EDGE_NATIVE_INCLUDES})
+    target_link_libraries(hymission-stage-edge-native-probe PRIVATE ${HYPR_DEPS_LIBRARIES} ${LUA_LIBRARIES} ${GLIB_LIBRARIES})
+    add_test(NAME hymission-stage-edge-native-contract-test
+      COMMAND ${CMAKE_COMMAND} -E env
+        "LD_PRELOAD=$<TARGET_FILE:hymission-stage-edge-native-probe>"
+        HYMISSION_NATIVE_FRAMEBUFFER_PROBE=1 ${HYPRLAND_TEST_EXECUTABLE} --version)
+    set_tests_properties(hymission-stage-edge-native-contract-test PROPERTIES TIMEOUT 10
+      PASS_REGULAR_EXPRESSION "PASS: Stage native GL cast, getFBID, invalidate and release")
+  endif()
   pkg_check_modules(EDGE_TEST_GL QUIET IMPORTED_TARGET egl glesv2 hyprutils hyprgraphics libdrm)
   if(EDGE_TEST_GL_FOUND)
     add_executable(hymission-stage-edge-render-test tools/stage_edge_render_test.cpp)

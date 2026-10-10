@@ -50,3 +50,33 @@ build and the edge render test also passed.
 This is offline software-GL validation, not acceptance on the LG output or
 under live Hyprland. No plugin update/load/unload, compositor restart/reload,
 or color configuration change was performed. DCI-P3 remains disabled.
+
+## Follow-up: native blur contract (06:29, PID 2187278)
+
+This report loaded the fixed 0.9.1.1 artifact (hyprpm source hash 018770a),
+but hit a different SIGSEGV: `IFramebuffer::isAllocated + 0x4`, called by
+`CGLFramebuffer::invalidate + 0x17` from native texture blur while drawing
+into Stage's temporary layer. The first fix introduced this regression.
+
+The installed binary's `renderTextureWithBlurInternal + 0xb8c` calls
+`__dynamic_cast` on currentFB to obtain CGLFramebuffer, then calls invalidate
+without checking for null. An implementation derived only from IFramebuffer
+cannot satisfy this contract. The old offline storage/shader tests did not
+exercise it. The newly listed hypr-sdr-white plugin is not needed to explain
+this invalid cast, and is not established as its cause.
+
+EdgeFramebuffer now derives from CGLFramebuffer and shares its actual
+framebuffer handle and native bind/release/invalidate/clear/readback methods.
+Only allocation is overridden, retaining the previous format validation,
+fallible GL allocation and hard-clip fallback. A narrowly scoped private
+header exposure follows the existing Stage hook convention so getFBID and
+native cleanup see the same GL object; no duplicate handle is maintained.
+Partially allocated objects are explicitly disposed of on allocation failure.
+
+Release build and six CTest tests pass, including a new ABI probe preloaded
+into a separate `Hyprland --version` process. It constructs the production
+EdgeFramebuffer, checks the real native dynamic cast and getFBID, and invokes
+the installed invalidate and release on an unallocated object. This requires
+no display/EGL context and never starts a compositor session. Full allocated
+native window blur remains a live acceptance item; the surfaceless allocation
+and shader tests continue to pass. No session reload or color change was made.
