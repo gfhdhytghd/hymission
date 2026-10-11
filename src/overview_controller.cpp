@@ -13765,9 +13765,13 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     const auto targetWorkspace = entry.workspace ? entry.workspace : ::State::workspaceState()->query().id(entry.workspaceId).run();
     if (!targetWorkspace && !entry.syntheticEmpty)
         return;
+    // Fake rendering copies the monitor's work buffer without a color resolve.
+    // HDR uses extended linear values: retain FP16 through both rendering and
+    // thumbnail blits instead of clipping/quantizing them into default RGBA8.
+    const auto snapshotFormat = monitor->useFP16() ? DRM_FORMAT_ABGR16161616F : DRM_FORMAT_ARGB8888;
     auto snapshot = std::make_shared<WorkspaceStripEntry::Snapshot>();
     snapshot->framebuffer = createFramebuffer("hymission workspace strip snapshot");
-    if (!snapshot->framebuffer || !snapshot->framebuffer->alloc(fbWidth, fbHeight))
+    if (!snapshot->framebuffer || !snapshot->framebuffer->alloc(fbWidth, fbHeight, snapshotFormat))
         return;
     snapshot->framebuffer->setImageDescription(monitor->workBufferImageDescription());
     setFramebufferLinearFiltering(*snapshot->framebuffer);
@@ -14064,7 +14068,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         const int backgroundFbWidth = std::max(1, static_cast<int>(std::lround(monitor->m_transformedSize.x)));
         const int backgroundFbHeight = std::max(1, static_cast<int>(std::lround(monitor->m_transformedSize.y)));
         auto      backgroundFramebuffer = createFramebuffer("hymission workspace strip background");
-        if (backgroundFramebuffer && backgroundFramebuffer->alloc(backgroundFbWidth, backgroundFbHeight)) {
+        if (backgroundFramebuffer && backgroundFramebuffer->alloc(backgroundFbWidth, backgroundFbHeight, snapshotFormat)) {
             backgroundFramebuffer->setImageDescription(monitor->workBufferImageDescription());
             setFramebufferLinearFiltering(*backgroundFramebuffer);
             renderedScaledBackgroundOnly = renderBackgroundLayersIntoFramebuffer(backgroundFramebuffer, renderNow) &&
@@ -14081,7 +14085,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             const int renderFbWidth = std::max(1, static_cast<int>(std::lround(monitor->m_transformedSize.x)));
             const int renderFbHeight = std::max(1, static_cast<int>(std::lround(monitor->m_transformedSize.y)));
             auto      fullSizeFramebuffer = createFramebuffer("hymission workspace strip full snapshot");
-            if (fullSizeFramebuffer && fullSizeFramebuffer->alloc(renderFbWidth, renderFbHeight)) {
+            if (fullSizeFramebuffer && fullSizeFramebuffer->alloc(renderFbWidth, renderFbHeight, snapshotFormat)) {
                 fullSizeFramebuffer->setImageDescription(monitor->workBufferImageDescription());
                 setFramebufferLinearFiltering(*fullSizeFramebuffer);
                 renderFramebuffer = fullSizeFramebuffer;
