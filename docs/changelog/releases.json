@@ -7,7 +7,7 @@
       "tag": "v0.11.0-v0.56.2",
       "version": "0.11.0",
       "hyprland": "0.56.2",
-      "published_at": "2026-10-11T21:39:02Z",
+      "published_at": "2026-10-11T21:39:11Z",
       "headline": "Complete session-lock input safety, HDR Stage strips and steadier Stage clicks",
       "sections": [
         {
@@ -36,7 +36,7 @@
       "tag": "v0.10.2-v0.56.2",
       "version": "0.10.2",
       "hyprland": "0.56.2",
-      "published_at": "2026-10-11T19:55:58Z",
+      "published_at": "2026-10-11T19:57:09Z",
       "headline": "Stop search input capture when the session locks",
       "sections": [
         {
@@ -54,7 +54,7 @@
       "tag": "v0.10.1-v0.56.2",
       "version": "0.10.1",
       "hyprland": "0.56.2",
-      "published_at": "2026-10-11T19:08:19Z",
+      "published_at": "2026-10-11T19:08:56Z",
       "headline": "Keep debug logs private to the current user",
       "sections": [
         {
@@ -71,7 +71,7 @@
       "tag": "v0.10.0-v0.56.2",
       "version": "0.10.0",
       "hyprland": "0.56.2",
-      "published_at": "2026-10-11T07:59:41Z",
+      "published_at": "2026-10-11T08:00:35Z",
       "headline": "Stage framebuffer crash fixes and Omarchy integration",
       "sections": [
         {
