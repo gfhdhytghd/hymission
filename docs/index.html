@@ -167,7 +167,7 @@
     <h1>hymission</h1>
     <p class="lede">Release history of the hymission overview and Stage workspace sidebar plugin for Hyprland. Each version tag names the plugin version followed by the Hyprland release it was built for.</p>
     <ul class="actions">
-      <li><a class="button primary" href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.10.1-v0.56.2">Latest: v0.10.1-v0.56.2</a></li>
+      <li><a class="button primary" href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.10.2-v0.56.2">Latest: v0.10.2-v0.56.2</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission#installation">Installation</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission/releases">All GitHub releases</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission">Source code</a></li>
@@ -178,6 +178,7 @@
   <nav class="toc" aria-labelledby="toc-title">
     <h2 id="toc-title">Versions</h2>
     <ol>
+      <li><a href="#v0-10-2-v0-56-2">0.10.2 <span>2026-10-11</span></a></li>
       <li><a href="#v0-10-1-v0-56-2">0.10.1 <span>2026-10-11</span></a></li>
       <li><a href="#v0-10-0-v0-56-2">0.10.0 <span>2026-10-11</span></a></li>
       <li><a href="#v0-9-1-1-v0-56-2">0.9.1.1 <span>2026-10-10</span></a></li>
@@ -204,10 +205,27 @@
   <main id="changelog" tabindex="-1">
     <ol class="timeline" aria-label="Releases, newest first">
       <li>
+        <article class="entry" id="v0-10-2-v0-56-2" aria-labelledby="v0-10-2-v0-56-2-title">
+          <div class="entry-head">
+            <h2 id="v0-10-2-v0-56-2-title"><a href="#v0-10-2-v0-56-2">0.10.2</a></h2>
+            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-10-11T19:55:58Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.10.2-v0.56.2</code></div>
+          </div>
+          <p class="headline">Stop search input capture when the session locks</p>
+          <h3>Session-lock input safety</h3>
+          <ul>
+            <li>Cancel active search on the session-lock event, discard queued keys and stop the helper focus timer and IPC channel.</li>
+            <li>Pass keyboard events through while locked before inspecting keyboard state or cancelling input. Guard overview input handling, search startup, focus retries and helper IPC against session lock.</li>
+            <li>Do not restart search or replay pending keys after unlocking; rebuild the visible overview without its previous search filter.</li>
+            <li>Verified with CMake and Meson builds, existing regression suites and static path review. Actual locker input and unlock behavior remain pending live validation.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.10.2-v0.56.2">Release notes for v0.10.2-v0.56.2 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.10.1-v0.56.2...v0.10.2-v0.56.2">Compare with v0.10.1-v0.56.2</a></div>
+        </article>
+      </li>
+      <li>
         <article class="entry" id="v0-10-1-v0-56-2" aria-labelledby="v0-10-1-v0-56-2-title">
           <div class="entry-head">
             <h2 id="v0-10-1-v0-56-2-title"><a href="#v0-10-1-v0-56-2">0.10.1</a></h2>
-            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-10-11T19:08:19Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.10.1-v0.56.2</code></div>
+            <div class="meta"><time datetime="2026-10-11T19:08:19Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.10.1-v0.56.2</code></div>
           </div>
           <p class="headline">Keep debug logs private to the current user</p>
           <h3>Debug log privacy</h3>

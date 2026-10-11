@@ -1066,6 +1066,8 @@ class OverviewController {
     CHyprSignalListener       m_touchUpListener;
     CHyprSignalListener       m_touchCancelListener;
     CHyprSignalListener       m_keyboardListener;
+    CHyprSignalListener       m_sessionLockListener;
+    CHyprSignalListener       m_sessionUnlockListener;
     CHyprSignalListener       m_windowOpenListener;
     CHyprSignalListener       m_windowDestroyListener;
     CHyprSignalListener       m_windowCloseListener;

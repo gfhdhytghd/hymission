@@ -64,6 +64,7 @@
 #include <hyprland/src/pointer/cursor/CursorManager.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
+#include <hyprland/src/managers/SessionLockManager.hpp>
 #include <hyprland/src/managers/EventManager.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopTimer.hpp>
@@ -89,6 +90,10 @@ namespace hymission {
 
 namespace {
 void searchHelperAnchor() {}
+
+bool sessionLocked() {
+    return g_pSessionLockManager && g_pSessionLockManager->isSessionLocked();
+}
 
 std::string searchHelperPath() {
     Dl_info info{};
@@ -2511,6 +2516,13 @@ bool OverviewController::initialize() {
         if (handleTouchUp(ITouch::SUpEvent{.timeMs = event.timeMs, .touchID = event.touchID}, true))
             info.cancelled = true;
     });
+    if (g_pSessionLockManager) {
+        m_sessionLockListener = g_pSessionLockManager->m_events.lock.listen([this] { stopSearchInput(); });
+        m_sessionUnlockListener = g_pSessionLockManager->m_events.unlock.listen([this] {
+            if (isVisible())
+                scheduleVisibleStateRebuild();
+        });
+    }
     m_keyboardListener = events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) { handleKeyboard(event, info); });
     m_windowOpenListener = events.window.open.listen([this](PHLWINDOW window) {
         clearWindowClosePending(window);
@@ -3482,6 +3494,12 @@ bool OverviewController::handleMouseAxis(const IPointer::SAxisEvent& event) {
 }
 
 void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) {
+    // Let the locker receive every press/release, even if helper focus failed.
+    if (sessionLocked()) {
+        stopSearchInput();
+        return;
+    }
+
     const auto keyboard = inputKeyboardWithState();
     if (!keyboard || !keyboard->m_xkbState)
         return;
@@ -3607,6 +3625,11 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
 }
 
 bool OverviewController::ensureSearchInputFocus() {
+    if (sessionLocked()) {
+        stopSearchInput();
+        return false;
+    }
+
     if (!m_searchActive || m_searchInputPid <= 0 || !g_pSeatManager)
         return false;
 
@@ -3642,6 +3665,11 @@ bool OverviewController::ensureSearchInputFocus() {
 }
 
 bool OverviewController::startSearchInput() {
+    if (sessionLocked()) {
+        stopSearchInput();
+        return false;
+    }
+
     if (m_searchActive)
         return true;
 
@@ -3704,7 +3732,7 @@ bool OverviewController::startSearchInput() {
     }
     m_searchFocusTimer = wl_event_loop_add_timer(loop, [](void* data) {
         auto* controller = static_cast<OverviewController*>(data);
-        if (controller->m_searchActive && !controller->ensureSearchInputFocus())
+        if (controller->m_searchActive && !controller->ensureSearchInputFocus() && controller->m_searchFocusTimer)
             wl_event_source_timer_update(controller->m_searchFocusTimer, 8);
         return 0;
     }, this);
@@ -3744,6 +3772,11 @@ void OverviewController::stopSearchInput(bool clearSearchState) {
 }
 
 int OverviewController::handleSearchInputFd(uint32_t mask) {
+    if (sessionLocked()) {
+        stopSearchInput();
+        return 0;
+    }
+
     if (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
         stopSearchInput();
         if (isVisible() && m_state.phase != Phase::Closing && m_state.phase != Phase::ClosingSettle)
@@ -7853,7 +7886,7 @@ bool OverviewController::isVisible() const {
 }
 
 bool OverviewController::shouldHandleInput() const {
-    if (captureInputSuppressed())
+    if (sessionLocked() || captureInputSuppressed())
         return false;
 
     if (m_gestureSession.active || m_workspaceTransition.active || m_workspaceSwipeGesture.active)

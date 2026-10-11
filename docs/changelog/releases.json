@@ -4,6 +4,24 @@
   "site_url": "https://gfhdhytghd.github.io/hymission/",
   "releases": [
     {
+      "tag": "v0.10.2-v0.56.2",
+      "version": "0.10.2",
+      "hyprland": "0.56.2",
+      "published_at": "2026-10-11T19:55:58Z",
+      "headline": "Stop search input capture when the session locks",
+      "sections": [
+        {
+          "title": "Session-lock input safety",
+          "items": [
+            "Cancel active search on the session-lock event, discard queued keys and stop the helper focus timer and IPC channel.",
+            "Pass keyboard events through while locked before inspecting keyboard state or cancelling input. Guard overview input handling, search startup, focus retries and helper IPC against session lock.",
+            "Do not restart search or replay pending keys after unlocking; rebuild the visible overview without its previous search filter.",
+            "Verified with CMake and Meson builds, existing regression suites and static path review. Actual locker input and unlock behavior remain pending live validation."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.10.1-v0.56.2",
       "version": "0.10.1",
       "hyprland": "0.56.2",
