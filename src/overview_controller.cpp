@@ -83,17 +83,20 @@
 
 #include "overview_logic.hpp"
 #include "private_debug_log.hpp"
+#include "input_guard.hpp"
 
 extern char** environ;
 
 namespace hymission {
 
+bool sessionLocked() {
+    return sessionLocked(g_pSessionLockManager.get());
+}
+
 namespace {
 void searchHelperAnchor() {}
 
-bool sessionLocked() {
-    return g_pSessionLockManager && g_pSessionLockManager->isSessionLocked();
-}
+std::size_t inputGeneration = 0;
 
 std::string searchHelperPath() {
     Dl_info info{};
@@ -1923,6 +1926,9 @@ class CHymissionTrackpadGesture final : public ITrackpadGesture {
     }
 
     void begin(const STrackpadGestureBegin& e) override {
+        if (sessionLocked())
+            return;
+        m_inputGeneration = inputGeneration;
         m_tracking = false;
         if (!g_controller || !e.swipe ||
             !g_controller->beginTrackpadGesture(m_dispatcher == GestureDispatcherKind::Open, m_scope, m_recommand, m_direction, *e.swipe, m_deltaScale))
@@ -1932,6 +1938,8 @@ class CHymissionTrackpadGesture final : public ITrackpadGesture {
     }
 
     void update(const STrackpadGestureUpdate& e) override {
+        if (sessionLocked() || m_inputGeneration != inputGeneration)
+            return;
         if (!m_tracking || !g_controller || !e.swipe)
             return;
 
@@ -1939,6 +1947,8 @@ class CHymissionTrackpadGesture final : public ITrackpadGesture {
     }
 
     void end(const STrackpadGestureEnd& e) override {
+        if (sessionLocked() || m_inputGeneration != inputGeneration)
+            return;
         if (!m_tracking || !g_controller)
             return;
 
@@ -1947,6 +1957,7 @@ class CHymissionTrackpadGesture final : public ITrackpadGesture {
     }
 
   private:
+    std::size_t                       m_inputGeneration = 0;
     GestureDispatcherKind             m_dispatcher;
     OverviewController::ScopeOverride m_scope = OverviewController::ScopeOverride::Default;
     bool                              m_recommand = false;
@@ -1959,18 +1970,26 @@ class CHymissionStageTrackpadGesture final : public ITrackpadGesture {
   public:
     explicit CHymissionStageTrackpadGesture(float scale) : m_scale(scale) {}
     void begin(const STrackpadGestureBegin& e) override {
+        if (sessionLocked())
+            return;
+        m_inputGeneration = inputGeneration;
         m_tracking = e.swipe && StageController::beginVisibilityGesture();
     }
     void update(const STrackpadGestureUpdate& e) override {
+        if (sessionLocked() || m_inputGeneration != inputGeneration)
+            return;
         if (m_tracking && e.swipe)
             StageController::updateVisibilityGesture(e.swipe->delta.x * m_scale);
     }
     void end(const STrackpadGestureEnd& e) override {
+        if (sessionLocked() || m_inputGeneration != inputGeneration)
+            return;
         if (m_tracking)
             StageController::endVisibilityGesture(!e.swipe || e.swipe->cancelled);
         m_tracking = false;
     }
   private:
+    std::size_t m_inputGeneration = 0;
     float m_scale = 1;
     bool m_tracking = false;
 };
@@ -1982,6 +2001,9 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
     }
 
     void begin(const STrackpadGestureBegin& e) override {
+        if (sessionLocked())
+            return;
+        m_inputGeneration = inputGeneration;
         m_mode = Mode::Native;
 
         if (!g_controller || !e.swipe) {
@@ -2019,6 +2041,8 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
     }
 
     void update(const STrackpadGestureUpdate& e) override {
+        if (sessionLocked() || m_inputGeneration != inputGeneration)
+            return;
         if (m_mode == Mode::Blocked || !e.swipe)
             return;
 
@@ -2036,6 +2060,8 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
     }
 
     void end(const STrackpadGestureEnd& e) override {
+        if (sessionLocked() || m_inputGeneration != inputGeneration)
+            return;
         if (m_mode == Mode::Blocked)
             return;
 
@@ -2057,6 +2083,7 @@ class CHymissionWorkspaceTrackpadGesture final : public ITrackpadGesture {
     }
 
   private:
+    std::size_t m_inputGeneration = 0;
     enum class Mode {
         Native,
         Overview,
@@ -2076,6 +2103,9 @@ class CHymissionScrollTrackpadGesture final : public ITrackpadGesture {
     }
 
     void begin(const STrackpadGestureBegin& e) override {
+        if (sessionLocked())
+            return;
+        m_inputGeneration = inputGeneration;
         m_tracking = false;
 
         const auto gestureDirection = e.direction != TRACKPAD_GESTURE_DIR_NONE ? e.direction : m_direction;
@@ -2086,6 +2116,8 @@ class CHymissionScrollTrackpadGesture final : public ITrackpadGesture {
     }
 
     void update(const STrackpadGestureUpdate& e) override {
+        if (sessionLocked() || m_inputGeneration != inputGeneration)
+            return;
         if (m_tracking) {
             if (g_controller && e.swipe)
                 g_controller->updateScrollGesture(*e.swipe);
@@ -2094,6 +2126,8 @@ class CHymissionScrollTrackpadGesture final : public ITrackpadGesture {
     }
 
     void end(const STrackpadGestureEnd& e) override {
+        if (sessionLocked() || m_inputGeneration != inputGeneration)
+            return;
         if (m_tracking) {
             m_tracking = false;
             if (g_controller)
@@ -2107,6 +2141,7 @@ class CHymissionScrollTrackpadGesture final : public ITrackpadGesture {
     }
 
   private:
+    std::size_t m_inputGeneration = 0;
     HymissionScrollMode      m_mode = HymissionScrollMode::Layout;
     eTrackpadGestureDirection m_direction = TRACKPAD_GESTURE_DIR_HORIZONTAL;
     bool                     m_tracking = false;
@@ -2487,9 +2522,13 @@ bool OverviewController::initialize() {
 
     m_renderStageListener = events.render.stage.listen([this](eRenderStage stage) { renderStage(stage); });
     m_mouseMoveListener = events.input.mouse.move.listen([this](const Vector2D&, Event::SCallbackInfo&) {
+        if (sessionLocked())
+            return;
         handleMouseMove();
     });
     m_mouseButtonListener = events.input.mouse.button.listen([this](const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
+        if (sessionLocked())
+            return;
         // Copy the signal payload immediately; forwarding the raw listener arg
         // has produced corrupted button/state values on current Hyprland builds.
         const auto copiedEvent = event;
@@ -2497,33 +2536,47 @@ bool OverviewController::initialize() {
             info.cancelled = true;
     });
     m_mouseAxisListener = events.input.mouse.axis.listen([this](const IPointer::SAxisEvent& event, Event::SCallbackInfo& info) {
+        if (sessionLocked())
+            return;
         if (handleMouseAxis(event))
             info.cancelled = true;
     });
     m_touchDownListener = events.input.touch.down.listen([this](const ITouch::SDownEvent& event, Event::SCallbackInfo& info) {
+        if (sessionLocked())
+            return;
         if (handleTouchDown(event))
             info.cancelled = true;
     });
     m_touchMotionListener = events.input.touch.motion.listen([this](const ITouch::SMotionEvent& event, Event::SCallbackInfo& info) {
+        if (sessionLocked())
+            return;
         if (handleTouchMotion(event))
             info.cancelled = true;
     });
     m_touchUpListener = events.input.touch.up.listen([this](const ITouch::SUpEvent& event, Event::SCallbackInfo& info) {
+        if (sessionLocked())
+            return;
         if (handleTouchUp(event))
             info.cancelled = true;
     });
     m_touchCancelListener = events.input.touch.cancel.listen([this](const ITouch::SCancelEvent& event, Event::SCallbackInfo& info) {
+        if (sessionLocked())
+            return;
         if (handleTouchUp(ITouch::SUpEvent{.timeMs = event.timeMs, .touchID = event.touchID}, true))
             info.cancelled = true;
     });
     if (g_pSessionLockManager) {
-        m_sessionLockListener = g_pSessionLockManager->m_events.lock.listen([this] { stopSearchInput(); });
+        m_sessionLockListener = g_pSessionLockManager->m_events.lock.listen([this] { handleSessionLock(); });
         m_sessionUnlockListener = g_pSessionLockManager->m_events.unlock.listen([this] {
             if (isVisible())
                 scheduleVisibleStateRebuild();
         });
     }
-    m_keyboardListener = events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) { handleKeyboard(event, info); });
+    m_keyboardListener = events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) {
+        if (sessionLocked())
+            return;
+        handleKeyboard(event, info);
+    });
     m_windowOpenListener = events.window.open.listen([this](PHLWINDOW window) {
         clearWindowClosePending(window);
         handleWindowSetChange(window, WindowSetChangeKind::Open);
@@ -2602,6 +2655,9 @@ SP<IKeyboard> OverviewController::inputKeyboardWithState() const {
 }
 
 bool OverviewController::switchReleaseKeyHeld() const {
+    if (sessionLocked())
+        return false;
+
     if (!toggleSwitchModeEnabled())
         return false;
 
@@ -2661,6 +2717,9 @@ bool OverviewController::isSwitchReleaseEvent(const IKeyboard::SKeyEvent& event,
 }
 
 void OverviewController::updateToggleSwitchSessionReleaseTracking(const char* source) {
+    if (sessionLocked())
+        return;
+
     if (!m_toggleSwitchSessionActive || m_beginCloseInProgress || m_state.phase == Phase::Inactive || m_state.phase == Phase::Closing ||
         m_state.phase == Phase::ClosingSettle)
         return;
@@ -2691,6 +2750,9 @@ void OverviewController::updateToggleSwitchSessionReleaseTracking(const char* so
 }
 
 void OverviewController::scheduleToggleSwitchReleasePoll() {
+    if (sessionLocked())
+        return;
+
     if (!g_pEventLoopManager)
         return;
 
@@ -2698,6 +2760,10 @@ void OverviewController::scheduleToggleSwitchReleasePoll() {
         m_toggleSwitchReleasePollTimer = makeShared<CEventLoopTimer>(
             TOGGLE_SWITCH_RELEASE_POLL_INTERVAL,
             [this](SP<CEventLoopTimer> self, void*) {
+                if (sessionLocked()) {
+                    self->updateTimeout(std::nullopt);
+                    return;
+                }
                 updateToggleSwitchSessionReleaseTracking("poll");
 
                 if (!m_toggleSwitchSessionActive || m_beginCloseInProgress || m_state.phase == Phase::Inactive || m_state.phase == Phase::Closing ||
@@ -2733,6 +2799,9 @@ void OverviewController::clearToggleSwitchSession() {
 }
 
 SDispatchResult OverviewController::open(const std::string& args) {
+    if (sessionLocked())
+        return {};
+
     std::string error;
     const auto requestedScope = parseScopeOverride(args, error);
     if (!requestedScope)
@@ -2759,6 +2828,9 @@ bool OverviewController::blocksWorkspaceSwitchInOverviewForGestures() const {
 }
 
 SDispatchResult OverviewController::close() {
+    if (sessionLocked())
+        return {};
+
     if (m_state.phase == Phase::Inactive || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
         return {};
 
@@ -2770,6 +2842,9 @@ SDispatchResult OverviewController::close() {
 }
 
 SDispatchResult OverviewController::toggle(const std::string& args) {
+    if (sessionLocked())
+        return {};
+
     const auto toggleArguments = parseToggleArguments(args);
     if (!toggleArguments)
         return {.success = false, .error = "invalid toggle argument: " + args};
@@ -2992,6 +3067,9 @@ bool OverviewController::captureInputSuppressed() const {
 }
 
 void OverviewController::renderStage(eRenderStage stage) {
+    if (sessionLocked())
+        return;
+
     if (m_stripSnapshotRenderDepth > 0)
         return;
 
@@ -3062,6 +3140,9 @@ void OverviewController::renderStage(eRenderStage stage) {
 }
 
 void OverviewController::handleMouseMove() {
+    if (sessionLocked())
+        return;
+
     if (m_restoreScrollingFollowFocusAfterScrollMouseMove && !m_scrollGestureSession.active) {
         if (debugLogsEnabled())
             debugLog("[hymission] restore scrolling:follow_focus after scroll mouse move");
@@ -3182,6 +3263,9 @@ void OverviewController::beginGroupDrag(std::size_t windowIndex, const Vector2D&
 }
 
 bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) {
+    if (sessionLocked())
+        return false;
+
     if (m_postCloseForcedFocusLatched && !isVisible()) {
         clearPostCloseForcedFocus();
         if (m_restoreInputFollowMouseAfterPostClose) {
@@ -3461,6 +3545,9 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
 }
 
 bool OverviewController::handleMouseAxis(const IPointer::SAxisEvent& event) {
+    if (sessionLocked())
+        return false;
+
     if (!shouldHandleInput() || event.axis != WL_POINTER_AXIS_VERTICAL_SCROLL || m_draggedWindowIndex)
         return false;
 
@@ -3494,11 +3581,8 @@ bool OverviewController::handleMouseAxis(const IPointer::SAxisEvent& event) {
 }
 
 void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) {
-    // Let the locker receive every press/release, even if helper focus failed.
-    if (sessionLocked()) {
-        stopSearchInput();
+    if (sessionLocked())
         return;
-    }
 
     const auto keyboard = inputKeyboardWithState();
     if (!keyboard || !keyboard->m_xkbState)
@@ -4554,6 +4638,9 @@ SDispatchResult OverviewController::fullscreenStateDispatcherHook(std::string ar
 }
 
 SDispatchResult OverviewController::changeWorkspaceDispatcherHook(std::string args) {
+    if (sessionLocked())
+        return m_changeWorkspaceOriginal ? m_changeWorkspaceOriginal(std::move(args)) : SDispatchResult{};
+
     if (!m_changeWorkspaceOriginal)
         return {};
 
@@ -4576,6 +4663,9 @@ SDispatchResult OverviewController::changeWorkspaceDispatcherHook(std::string ar
 }
 
 SDispatchResult OverviewController::focusWorkspaceOnCurrentMonitorDispatcherHook(std::string args) {
+    if (sessionLocked())
+        return m_focusWorkspaceOnCurrentMonitorOriginal ? m_focusWorkspaceOnCurrentMonitorOriginal(std::move(args)) : SDispatchResult{};
+
     if (!m_focusWorkspaceOnCurrentMonitorOriginal)
         return {};
 
@@ -4596,6 +4686,12 @@ SDispatchResult OverviewController::focusWorkspaceOnCurrentMonitorDispatcherHook
 }
 
 void OverviewController::workspaceSwipeBeginHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e) {
+    if (sessionLocked()) {
+        if (m_workspaceSwipeBeginOriginal)
+            m_workspaceSwipeBeginOriginal(gestureThisptr, e);
+        return;
+    }
+
     if (!m_workspaceSwipeBeginOriginal)
         return;
 
@@ -4620,6 +4716,12 @@ void OverviewController::workspaceSwipeBeginHook(void* gestureThisptr, const ITr
 }
 
 void OverviewController::workspaceSwipeUpdateHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e) {
+    if (sessionLocked()) {
+        if (m_workspaceSwipeUpdateOriginal)
+            m_workspaceSwipeUpdateOriginal(gestureThisptr, e);
+        return;
+    }
+
     if (!m_workspaceSwipeUpdateOriginal)
         return;
 
@@ -4638,6 +4740,12 @@ void OverviewController::workspaceSwipeUpdateHook(void* gestureThisptr, const IT
 }
 
 void OverviewController::workspaceSwipeEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e) {
+    if (sessionLocked()) {
+        if (m_workspaceSwipeEndOriginal)
+            m_workspaceSwipeEndOriginal(gestureThisptr, e);
+        return;
+    }
+
     if (!m_workspaceSwipeEndOriginal)
         return;
 
@@ -4656,6 +4764,12 @@ void OverviewController::workspaceSwipeEndHook(void* gestureThisptr, const ITrac
 }
 
 void OverviewController::unifiedWorkspaceSwipeBeginHook(void* gestureThisptr) {
+    if (sessionLocked()) {
+        if (m_unifiedWorkspaceSwipeBeginOriginal)
+            m_unifiedWorkspaceSwipeBeginOriginal(gestureThisptr);
+        return;
+    }
+
     if (!m_unifiedWorkspaceSwipeBeginOriginal)
         return;
 
@@ -4677,6 +4791,12 @@ void OverviewController::unifiedWorkspaceSwipeBeginHook(void* gestureThisptr) {
 }
 
 void OverviewController::unifiedWorkspaceSwipeUpdateHook(void* gestureThisptr, double delta) {
+    if (sessionLocked()) {
+        if (m_unifiedWorkspaceSwipeUpdateOriginal)
+            m_unifiedWorkspaceSwipeUpdateOriginal(gestureThisptr, delta);
+        return;
+    }
+
     if (!m_unifiedWorkspaceSwipeUpdateOriginal)
         return;
 
@@ -4693,6 +4813,12 @@ void OverviewController::unifiedWorkspaceSwipeUpdateHook(void* gestureThisptr, d
 }
 
 void OverviewController::unifiedWorkspaceSwipeEndHook(void* gestureThisptr) {
+    if (sessionLocked()) {
+        if (m_unifiedWorkspaceSwipeEndOriginal)
+            m_unifiedWorkspaceSwipeEndOriginal(gestureThisptr);
+        return;
+    }
+
     if (!m_unifiedWorkspaceSwipeEndOriginal)
         return;
 
@@ -4709,6 +4835,9 @@ void OverviewController::unifiedWorkspaceSwipeEndHook(void* gestureThisptr) {
 }
 
 bool OverviewController::handleTouchDown(const ITouch::SDownEvent& event) {
+    if (sessionLocked())
+        return false;
+
     if (!isVisible() || m_state.phase != Phase::Active || getConfigInt(m_handle, "gestures:workspace_swipe_touch", 0) == 0)
         return false;
 
@@ -4759,6 +4888,9 @@ bool OverviewController::handleTouchDown(const ITouch::SDownEvent& event) {
 }
 
 bool OverviewController::handleTouchMotion(const ITouch::SMotionEvent& event) {
+    if (sessionLocked())
+        return false;
+
     if (!m_workspaceSwipeGesture.active || !m_workspaceSwipeGesture.touchActive || event.touchID != m_workspaceSwipeGesture.touchId)
         return false;
 
@@ -4777,6 +4909,9 @@ bool OverviewController::handleTouchMotion(const ITouch::SMotionEvent& event) {
 }
 
 bool OverviewController::handleTouchUp(const ITouch::SUpEvent& event, bool cancelled) {
+    if (sessionLocked())
+        return false;
+
     if (!m_workspaceSwipeGesture.active || !m_workspaceSwipeGesture.touchActive || event.touchID != m_workspaceSwipeGesture.touchId)
         return false;
 
@@ -4786,6 +4921,12 @@ bool OverviewController::handleTouchUp(const ITouch::SUpEvent& event, bool cance
 }
 
 void OverviewController::scrollMoveGestureBeginHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e) {
+    if (sessionLocked()) {
+        if (m_scrollMoveGestureBeginOriginal)
+            m_scrollMoveGestureBeginOriginal(gestureThisptr, e);
+        return;
+    }
+
     if (m_scrollMoveGestureBeginOriginal)
         m_scrollMoveGestureBeginOriginal(gestureThisptr, e);
 
@@ -4793,6 +4934,12 @@ void OverviewController::scrollMoveGestureBeginHook(void* gestureThisptr, const 
 }
 
 void OverviewController::scrollMoveGestureUpdateHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e) {
+    if (sessionLocked()) {
+        if (m_scrollMoveGestureUpdateOriginal)
+            m_scrollMoveGestureUpdateOriginal(gestureThisptr, e);
+        return;
+    }
+
     if (m_scrollMoveGestureUpdateOriginal)
         m_scrollMoveGestureUpdateOriginal(gestureThisptr, e);
 
@@ -4800,6 +4947,12 @@ void OverviewController::scrollMoveGestureUpdateHook(void* gestureThisptr, const
 }
 
 void OverviewController::scrollMoveGestureEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e) {
+    if (sessionLocked()) {
+        if (m_scrollMoveGestureEndOriginal)
+            m_scrollMoveGestureEndOriginal(gestureThisptr, e);
+        return;
+    }
+
     if (m_scrollMoveGestureEndOriginal)
         m_scrollMoveGestureEndOriginal(gestureThisptr, e);
 
@@ -5621,11 +5774,11 @@ double OverviewController::gestureSwipeDirectionLockThreshold() const {
 }
 
 bool OverviewController::allowsWorkspaceSwitchInOverview() const {
-    return isVisible() && m_state.collectionPolicy.onlyActiveWorkspace && workspaceChangeKeepsOverviewEnabled();
+    return !sessionLocked() && isVisible() && m_state.collectionPolicy.onlyActiveWorkspace && workspaceChangeKeepsOverviewEnabled();
 }
 
 bool OverviewController::shouldBlockWorkspaceSwitchInOverview() const {
-    return isVisible() && !m_state.collectionPolicy.onlyActiveWorkspace;
+    return !sessionLocked() && isVisible() && !m_state.collectionPolicy.onlyActiveWorkspace;
 }
 
 bool OverviewController::shouldOverrideWorkspaceNames(const State& state) const {
@@ -6088,6 +6241,9 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
 
 bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride requestedScope, bool recommand, eTrackpadGestureDirection direction,
                                               const IPointer::SSwipeUpdateEvent& event, float deltaScale) {
+    if (sessionLocked())
+        return false;
+
     if (m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
         return false;
 
@@ -6235,6 +6391,9 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
 }
 
 void OverviewController::updateTrackpadGesture(const IPointer::SSwipeUpdateEvent& event) {
+    if (sessionLocked())
+        return;
+
     if (!m_gestureSession.active)
         return;
 
@@ -6413,6 +6572,9 @@ void OverviewController::settleGestureAnimation(bool opening, double openness) {
 }
 
 void OverviewController::endTrackpadGesture(bool cancelled) {
+    if (sessionLocked())
+        return;
+
     if (!m_gestureSession.active)
         return;
 
@@ -6469,6 +6631,9 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
 }
 
 bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction, const IPointer::SSwipeUpdateEvent& event, float deltaScale) {
+    if (sessionLocked())
+        return false;
+
     m_scrollGestureSession = {};
     const auto stageWorkspace = isVisible() ? std::optional<PHLWORKSPACE>{} : StageController::hoveredScrollWorkspace();
     m_scrollGestureSession.stageTarget = stageWorkspace.has_value();
@@ -6569,6 +6734,9 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
 }
 
 void OverviewController::updateScrollGesture(const IPointer::SSwipeUpdateEvent& event) {
+    if (sessionLocked())
+        return;
+
     if (!m_scrollGestureSession.active)
         return;
 
@@ -6589,6 +6757,9 @@ void OverviewController::updateScrollGesture(const IPointer::SSwipeUpdateEvent& 
 }
 
 void OverviewController::endScrollGesture(bool cancelled) {
+    if (sessionLocked())
+        return;
+
     if (!m_scrollGestureSession.active)
         return;
 
@@ -6617,6 +6788,9 @@ void OverviewController::endScrollGesture(bool cancelled) {
 }
 
 bool OverviewController::beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction) {
+    if (sessionLocked())
+        return false;
+
     if (!isVisible() || !allowsWorkspaceSwitchInOverview() || m_gestureSession.active || m_state.phase != Phase::Active || m_workspaceTransition.active)
         return false;
 
@@ -6818,14 +6992,23 @@ bool OverviewController::startOverviewWorkspaceTransitionByStep(const PHLMONITOR
 }
 
 void OverviewController::updateOverviewWorkspaceSwipeGesture(double delta) {
+    if (sessionLocked())
+        return;
+
     updateOverviewWorkspaceSwipeGestureAdjusted(workspaceSwipeInvertEnabled() ? -delta : delta, false);
 }
 
 void OverviewController::setOverviewWorkspaceSwipeGestureDelta(double delta) {
+    if (sessionLocked())
+        return;
+
     updateOverviewWorkspaceSwipeGestureAdjusted(delta, true);
 }
 
 void OverviewController::updateOverviewWorkspaceSwipeGestureAdjusted(double delta, bool absolute) {
+    if (sessionLocked())
+        return;
+
     if (!m_workspaceSwipeGesture.active || !m_workspaceSwipeGesture.monitor)
         return;
 
@@ -6879,6 +7062,9 @@ void OverviewController::updateOverviewWorkspaceSwipeGestureAdjusted(double delt
 }
 
 void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
+    if (sessionLocked())
+        return;
+
     const double gestureDelta = m_workspaceSwipeGesture.progress.delta;
     const bool touchActive = m_workspaceSwipeGesture.touchActive;
     m_workspaceSwipeGesture = {};
@@ -6913,6 +7099,9 @@ void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
 }
 
 void OverviewController::updateOverviewWorkspaceTransition() {
+    if (sessionLocked())
+        return;
+
     if (!m_workspaceTransition.active || m_workspaceTransition.mode == WorkspaceTransitionMode::Gesture)
         return;
 
@@ -6943,6 +7132,9 @@ void OverviewController::updateOverviewWorkspaceTransition() {
 }
 
 void OverviewController::requestOverviewWorkspaceTransitionCommit(bool followGesture) {
+    if (sessionLocked())
+        return;
+
     if (!m_workspaceTransition.active)
         return;
 
@@ -6966,7 +7158,7 @@ void OverviewController::requestOverviewWorkspaceTransitionCommit(bool followGes
         debugLog("[hymission] defer overview workspace transition commit until after render");
 
     g_pEventLoopManager->doLater([this, generation] {
-        if (g_controller != this || generation != m_workspaceTransitionCommitGeneration)
+        if (g_controller != this || sessionLocked() || generation != m_workspaceTransitionCommitGeneration)
             return;
 
         m_workspaceTransitionCommitScheduled = false;
@@ -6989,6 +7181,9 @@ void OverviewController::requestOverviewWorkspaceTransitionCommit(bool followGes
 }
 
 void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
+    if (sessionLocked())
+        return;
+
     if (!m_workspaceTransition.active || !m_workspaceTransition.monitor)
         return;
 
@@ -9642,6 +9837,9 @@ void OverviewController::updateDropAnimation() {
 }
 
 void OverviewController::updateGroupDragSettlement() {
+    if (sessionLocked())
+        return;
+
     if (!m_groupDragSession || !m_groupDragSession->settling || m_groupDragSession->completionScheduled)
         return;
 
@@ -9657,8 +9855,9 @@ void OverviewController::updateGroupDragSettlement() {
     const auto targetWorkspace = m_groupDragSession->targetWorkspace;
     const auto frontWindow = m_groupDragSession->frontMember < m_groupDragSession->members.size() ?
         m_groupDragSession->members[m_groupDragSession->frontMember].lock() : PHLWINDOW{};
-    g_pEventLoopManager->doLater([this, commitDrop, targetWorkspace, frontWindow] {
-        if (!m_groupDragSession)
+    const auto generation = inputGeneration;
+    g_pEventLoopManager->doLater([this, generation, commitDrop, targetWorkspace, frontWindow] {
+        if (g_controller != this || sessionLocked() || generation != inputGeneration || !m_groupDragSession)
             return;
 
         const auto sourceWorkspace = frontWindow ? frontWindow->m_workspace : PHLWORKSPACE{};
@@ -10249,6 +10448,9 @@ bool OverviewController::activateWindowWorkspaceForFocus(const PHLWINDOW& window
 }
 
 void OverviewController::commitOverviewExitFocus(const PHLWINDOW& window) {
+    if (sessionLocked())
+        return;
+
     if (!window || !window->m_isMapped)
         return;
 
@@ -10518,6 +10720,9 @@ void OverviewController::queueSelectionRetargetDuringOverview(const PHLWINDOW& w
 }
 
 void OverviewController::flushQueuedSelectionRetargetDuringOverview() {
+    if (sessionLocked())
+        return;
+
     const auto queuedTarget = m_queuedOverviewSelectionTarget.lock();
     if (!queuedTarget)
         return;
@@ -10570,6 +10775,9 @@ void OverviewController::queueRealFocusDuringOverview(const PHLWINDOW& window, b
 }
 
 void OverviewController::flushQueuedRealFocusDuringOverview() {
+    if (sessionLocked())
+        return;
+
     const auto queuedTarget = m_queuedOverviewLiveFocusTarget.lock();
     if (!queuedTarget)
         return;
@@ -10960,7 +11168,7 @@ void OverviewController::scheduleVisibleStateRebuild() {
     m_visibleStateRebuildScheduled = true;
     const auto generation = ++m_visibleStateRebuildGeneration;
     g_pEventLoopManager->doLater([this, generation] {
-        if (g_controller != this || generation != m_visibleStateRebuildGeneration)
+        if (g_controller != this || sessionLocked() || generation != m_visibleStateRebuildGeneration)
             return;
 
         m_visibleStateRebuildScheduled = false;
@@ -11005,7 +11213,7 @@ void OverviewController::scheduleWorkspaceChangeHandling(const PHLWORKSPACE& wor
     m_workspaceChangeHandlingScheduled = true;
     const auto generation = ++m_workspaceChangeHandlingGeneration;
     g_pEventLoopManager->doLater([this, generation] {
-        if (g_controller != this || generation != m_workspaceChangeHandlingGeneration)
+        if (g_controller != this || sessionLocked() || generation != m_workspaceChangeHandlingGeneration)
             return;
 
         m_workspaceChangeHandlingScheduled = false;
@@ -11056,7 +11264,7 @@ void OverviewController::schedulePendingWindowGeometryRetry(const PHLWINDOW& win
     m_pendingWindowGeometryRetryScheduled = true;
     const auto generation = ++m_pendingWindowGeometryRetryGeneration;
     g_pEventLoopManager->doLater([this, generation] {
-        if (g_controller != this || generation != m_pendingWindowGeometryRetryGeneration)
+        if (g_controller != this || sessionLocked() || generation != m_pendingWindowGeometryRetryGeneration)
             return;
 
         m_pendingWindowGeometryRetryScheduled = false;
@@ -11185,7 +11393,7 @@ SDispatchResult OverviewController::runHookedDispatcher(PostCloseDispatcher disp
     if (!original)
         return {.success = false, .error = "fullscreen dispatcher hook unavailable"};
 
-    if (!isVisible())
+    if (sessionLocked() || !isVisible())
         return original(std::move(args));
 
     if (m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
@@ -11307,6 +11515,9 @@ CRegion OverviewController::transformRegionForWindow(const PHLWINDOW& window, co
 
 void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope, PHLWINDOW preferredSelectedWindow,
                                    const std::vector<WorkspaceOverride>& workspaceOverrides) {
+    if (sessionLocked())
+        return;
+
     setAnimationsEnabledOverride(false);
     clearToggleSwitchSession();
 
@@ -11517,6 +11728,9 @@ bool OverviewController::retargetGestureScope(ScopeOverride requestedScope) {
 }
 
 void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVisualOverride, bool deferFullscreenMutations) {
+    if (sessionLocked())
+        return;
+
     if (!isVisible())
         return;
 
@@ -11752,6 +11966,25 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
     damageOwnedMonitors();
 }
 
+void OverviewController::handleSessionLock() {
+    ++inputGeneration;
+    // Discard ownership without calling any gesture completion/commit path.
+    m_gestureSession = {};
+    m_scrollGestureSession = {};
+    m_workspaceSwipeGesture = {};
+    clearToggleSwitchSession();
+    clearOverviewWorkspaceTransition();
+    clearRelayoutProgressAnimation();
+    m_restoreScrollingFollowFocusAfterScrollMouseMove = false;
+    m_closeButtonPressLatched = false;
+    m_groupLabelPressLatched = false;
+    m_ignorePostCloseMouseMoveCount = 0;
+    m_state.closeMode = CloseMode::Abort;
+    m_state.pendingExitFocus.reset();
+    clearPostCloseDispatcher();
+    deactivate();
+}
+
 void OverviewController::deactivate() {
     cancelAndClearTimer(m_stripRefreshTimer);
     stopSearchInput();
@@ -11768,7 +12001,7 @@ void OverviewController::deactivate() {
     const auto* desiredFullscreenBackup = fullscreenBackupForWindow(m_state.pendingExitFocus);
     const auto originalFullscreenWindow = desiredFullscreenBackup ? desiredFullscreenBackup->originalFullscreenWindow : PHLWINDOW{};
     const auto originalFullscreenMode = desiredFullscreenBackup ? desiredFullscreenBackup->originalFullscreenMode : FSMODE_NONE;
-    const auto desiredFocus = m_state.closeMode != CloseMode::Abort && m_state.pendingExitFocus && m_state.pendingExitFocus->m_isMapped ? m_state.pendingExitFocus : PHLWINDOW{};
+    const auto desiredFocus = !sessionLocked() && m_state.closeMode != CloseMode::Abort && m_state.pendingExitFocus && m_state.pendingExitFocus->m_isMapped ? m_state.pendingExitFocus : PHLWINDOW{};
     const auto postCloseDispatcher = desiredFocus ? m_postCloseDispatcher : PostCloseDispatcher::None;
     const auto postCloseDispatcherArgs = desiredFocus ? m_postCloseDispatcherArgs : std::string{};
     const bool shouldDelayRestoreNativeAnimations = m_animationsEnabledOverridden && m_state.closeMode != CloseMode::Abort;
@@ -11962,8 +12195,9 @@ void OverviewController::scheduleDeactivate() {
         return;
 
     m_deactivateScheduled = true;
-    g_pEventLoopManager->doLater([this] {
-        if (g_controller != this)
+    const auto generation = inputGeneration;
+    g_pEventLoopManager->doLater([this, generation] {
+        if (g_controller != this || sessionLocked() || generation != inputGeneration)
             return;
 
         m_deactivateScheduled = false;
@@ -11989,6 +12223,9 @@ void OverviewController::damageOwnedMonitors() const {
 }
 
 void OverviewController::updateAnimation() {
+    if (sessionLocked())
+        return;
+
     if (m_state.phase == Phase::ClosingSettle) {
         const auto now = std::chrono::steady_clock::now();
         if (m_state.settleStart == std::chrono::steady_clock::time_point{}) {
@@ -12945,7 +13182,7 @@ void OverviewController::debugLog(const std::string& message) const {
         return;
 
     if (Log::logger)
-        Log::logger->log(Log::DEBUG, message);
+        Log::logger->log(Log::DEBUG, escapeLogControls(message));
 
     appendPrivateDebugLog(message);
 }
@@ -12955,7 +13192,7 @@ void OverviewController::debugSurfaceLog(const std::string& message) const {
         return;
 
     if (Log::logger)
-        Log::logger->log(Log::DEBUG, message);
+        Log::logger->log(Log::DEBUG, escapeLogControls(message));
 
     appendPrivateDebugLog(message);
 }
@@ -14266,8 +14503,9 @@ void OverviewController::scheduleWorkspaceStripSnapshotRefresh() {
         return;
 
     m_stripSnapshotRefreshScheduled = true;
-    g_pEventLoopManager->doLater([this] {
-        if (g_controller != this)
+    const auto generation = inputGeneration;
+    g_pEventLoopManager->doLater([this, generation] {
+        if (g_controller != this || sessionLocked() || generation != inputGeneration)
             return;
 
         m_stripSnapshotRefreshScheduled = false;

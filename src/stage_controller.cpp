@@ -1,6 +1,7 @@
 #include "stage_controller.hpp"
 #include "stage_logic.hpp"
 #include "stage_edge_effect.hpp"
+#include "input_guard.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -39,6 +40,7 @@
 #include <hyprland/src/layout/target/Target.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/SessionLockManager.hpp>
+
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/output/Monitor.hpp>
@@ -403,6 +405,7 @@ struct StageController::Impl {
     double visibilityDelta = 0;
     bool visibilityGesture = false;
     Clock::time_point visibilityStart;
+    void cancelInput();
     void applyVisibility(double progress);
     void settleVisibility(bool visible);
     bool enabled = false;
@@ -539,6 +542,10 @@ struct StageController::Impl {
     static void dragThunk(Layout::Supplementary::CDragStateController* drag) { instance->endDrag(drag); }
     static void windowFocusThunk(Desktop::CFocusState* focus, PHLWINDOW window, Desktop::eFocusReason reason, SP<CWLSurfaceResource> surface) {
         auto* self = instance;
+        if (sessionLocked()) {
+            reinterpret_cast<WindowFocusFn>(self->windowFocusHook->m_original)(focus, std::move(window), reason, std::move(surface));
+            return;
+        }
         const bool explicitFocus = reason == Desktop::FOCUS_REASON_KEYBIND || reason == Desktop::FOCUS_REASON_DISPATCH_FOCUSWINDOW ||
             reason == Desktop::FOCUS_REASON_DISPATCH_MOVEWINDOWINTOGROUP ||
             reason == Desktop::FOCUS_REASON_CLICK || reason == Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_HARD ||
@@ -564,6 +571,10 @@ struct StageController::Impl {
     static void scrollFocusThunk(Layout::Tiled::CScrollingAlgorithm* algorithm, SP<Layout::ITarget> target,
                                  Layout::Tiled::CScrollingAlgorithm::eInputMode input) {
         auto* self = instance;
+        if (sessionLocked()) {
+            reinterpret_cast<ScrollFocusFn>(self->scrollFocusHook->m_original)(algorithm, std::move(target), input);
+            return;
+        }
         const auto original = reinterpret_cast<ScrollFocusFn>(self->scrollFocusHook->m_original);
         const auto workspace = target ? target->workspace() : PHLWORKSPACE{};
         const auto screen = workspace ? self->screenFor(workspace->m_monitor.lock()) : nullptr;
@@ -602,6 +613,10 @@ struct StageController::Impl {
     }
     static void swipeBeginThunk(CUnifiedWorkspaceSwipeGesture* gesture) {
         auto* self = instance;
+        if (sessionLocked()) {
+            self->swipeBeginOriginal(gesture);
+            return;
+        }
         const auto monitor = Desktop::focusState()->monitor();
         if (self->swipe)
             self->clearSwipe();
@@ -617,6 +632,10 @@ struct StageController::Impl {
     static void workspaceAnimationThunk(PHLWORKSPACE workspace, Animation::Workspace::eAnimationType type, bool left, bool instant,
                                         std::optional<std::string> style) {
         auto* self = instance;
+        if (sessionLocked()) {
+            reinterpret_cast<WorkspaceAnimationFn>(self->workspaceAnimationHook->m_original)(workspace, type, left, instant, std::move(style));
+            return;
+        }
         // A prepared Stage swipe retains animation ownership through commit,
         // even when its destination is fullscreen and hides the resting strip.
         const bool settlingSwipe = self->swipe && self->swipe->prepared && self->swipe->committed && workspace &&
@@ -639,6 +658,10 @@ struct StageController::Impl {
     }
     static void changeWorkspaceThunk(Monitor::CMonitor* monitor, const PHLWORKSPACE& workspace, bool internal, bool noMouseMove, bool noFocus) {
         auto* self = instance;
+        if (sessionLocked()) {
+            reinterpret_cast<ChangeWorkspaceFn>(self->changeWorkspaceHook->m_original)(monitor, workspace, internal, noMouseMove, noFocus);
+            return;
+        }
         if (!self->dropTrace.empty() && self->dropTrace.size() < 24 &&
             Clock::now() - self->dropTraceStart < std::chrono::seconds(2)) {
             self->dropTrace.push_back({{"event", "workspace_request"}, {"phase", self->dropPhase},
@@ -780,6 +803,8 @@ struct StageController::Impl {
     }
     static PHLWINDOW windowAtThunk(const Desktop::CViewHitTester* tester, const Vector2D& position, uint16_t properties, PHLWINDOW ignore) {
         auto* self = instance;
+        if (sessionLocked())
+            return reinterpret_cast<WindowAtFn>(self->hitHook->m_original)(tester, position, properties, ignore);
         const auto candidate = reinterpret_cast<WindowAtFn>(self->hitHook->m_original)(tester, position, properties, ignore);
         if (candidate && candidate->m_pinned && candidate->m_isFloating)
             return candidate;
@@ -790,11 +815,11 @@ struct StageController::Impl {
 };
 
 bool StageController::Impl::blocked() const {
-    return (g_pSessionLockManager && g_pSessionLockManager->isSessionLocked()) || (overviewSuspended && overviewSuspended());
+    return sessionLocked() || (overviewSuspended && overviewSuspended());
 }
 
 bool StageController::Impl::renderBlocked(const PHLMONITOR& monitor) const {
-    if (g_pSessionLockManager && g_pSessionLockManager->isSessionLocked())
+    if (sessionLocked())
         return true;
     if (sidebarProgress && sidebarProgress(monitor))
         return false;
@@ -994,6 +1019,9 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
 }
 
 void StageController::Impl::updateSwipe(double delta) {
+    if (sessionLocked())
+        return;
+
     if (!swipe || swipe->released)
         return;
     ++swipeUpdates;
@@ -1051,6 +1079,9 @@ void StageController::Impl::updateSwipe(double delta) {
 }
 
 void StageController::Impl::endSwipe() {
+    if (sessionLocked())
+        return;
+
     if (!swipe || swipe->released)
         return;
     const auto monitor = swipe->monitor.lock();
@@ -1256,6 +1287,8 @@ void StageController::Impl::initialize() {
     listeners.emplace_back(events.window.title.listen([this](PHLWINDOW) { request(); }));
     listeners.emplace_back(events.window.moveToWorkspace.listen([this](PHLWINDOW, PHLWORKSPACE) { request(); }));
     listeners.emplace_back(events.input.mouse.move.listen([this](const Vector2D& position, Event::SCallbackInfo& info) {
+        if (sessionLocked())
+            return;
         if (const auto workspace = hoverCenterGuardWorkspace.lock()) {
             const auto monitor = workspace->m_monitor.lock();
             if (!enabled || blocked() || !setting("stage_click_hover_recenter_guard", 1) ||
@@ -1270,16 +1303,31 @@ void StageController::Impl::initialize() {
             info.cancelled = true;
         }
     }));
-    listeners.emplace_back(events.input.mouse.button.listen([this](const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) { const auto copy = event; button(copy, info); }));
-    listeners.emplace_back(events.input.mouse.axis.listen([this](const IPointer::SAxisEvent& event, Event::SCallbackInfo& info) { axis(event, info); }));
+    listeners.emplace_back(events.input.mouse.button.listen([this](const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
+        if (sessionLocked())
+            return;
+        const auto copy = event;
+        button(copy, info);
+    }));
+    listeners.emplace_back(events.input.mouse.axis.listen([this](const IPointer::SAxisEvent& event, Event::SCallbackInfo& info) {
+        if (sessionLocked())
+            return;
+        axis(event, info);
+    }));
     listeners.emplace_back(events.gesture.swipe.update.listen([this](const IPointer::SSwipeUpdateEvent&, Event::SCallbackInfo&) {
+        if (sessionLocked())
+            return;
         ++rawSwipeUpdates;
     }));
     listeners.emplace_back(events.gesture.swipe.end.listen([this](const IPointer::SSwipeEndEvent& event, Event::SCallbackInfo&) {
+        if (sessionLocked())
+            return;
         if (swipe)
             swipe->cancelled = event.cancelled;
     }));
     listeners.emplace_back(events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo&) {
+        if (sessionLocked())
+            return;
         if (event.state == WL_KEYBOARD_KEY_STATE_PRESSED)
             silentDropWindow.reset();
         const auto* drag = g_layoutManager->dragController().get();
@@ -1305,13 +1353,72 @@ void StageController::Impl::initialize() {
             request();
     }));
     if (g_pSessionLockManager) {
-        listeners.emplace_back(g_pSessionLockManager->m_events.lock.listen([this] { request(); }));
+        listeners.emplace_back(g_pSessionLockManager->m_events.lock.listen([this] { cancelInput(); }));
         listeners.emplace_back(g_pSessionLockManager->m_events.unlock.listen([this] { request(); }));
     }
     request();
 }
 
+void StageController::Impl::cancelInput() {
+    deferred.reset();
+    canvasRelease.reset();
+    canvasScrolls.clear();
+    stopTimer(refreshTimer);
+    stopTimer(motionTimer);
+    clearSwipe();
+    if (g_pUnifiedWorkspaceSwipe) {
+        g_pUnifiedWorkspaceSwipe->m_workspaceBegin.reset();
+        g_pUnifiedWorkspaceSwipe->m_monitor.reset();
+        g_pUnifiedWorkspaceSwipe->m_delta = 0;
+        g_pUnifiedWorkspaceSwipe->m_initialDirection = 0;
+        g_pUnifiedWorkspaceSwipe->m_avgSpeed = 0;
+        g_pUnifiedWorkspaceSwipe->m_speedPoints = 0;
+        g_pUnifiedWorkspaceSwipe->m_touchID = -1;
+    }
+    // Release a native grab without running Stage's drop/activation tail.
+    if (auto* drag = g_layoutManager->dragController().get(); dragHook && drag && drag->target())
+        reinterpret_cast<DragEndFn>(dragHook->m_original)(drag);
+
+    clearDragHover();
+    thumbnailDrag.reset();
+    pressed.reset();
+    pressedSyntheticId = 0;
+    pressMonitor.reset();
+    reorderArmed = false;
+    swallowedButtons.clear();
+    lastDragged.reset();
+    cancelDrop = false;
+    silentDropWindow.reset();
+    silentDropSource.reset();
+    hoverCenterGuardWorkspace.reset();
+    hoverFocus = false;
+    visibilityGesture = false;
+    visibilityDelta = 0;
+    // Return to the last committed visibility, without an animation/gesture end.
+    visibility = visibilityFrom = visibilityTarget = runtimeVisible.value_or(setting("stage_enabled", 0) != 0) ? 1 : 0;
+    overviewExitScreens.clear();
+    stagePassQueued = false;
+    for (auto& screen : screens) {
+        screen.suspended = true;
+        screen.hovered.reset();
+        screen.reorderHover.reset();
+        screen.flights.clear();
+        screen.departingCards.clear();
+        screen.paneTransition = false;
+        screen.frozenWidth.reset();
+        screen.shown = screen.slideFrom = screen.covered ? 0 : 1;
+        for (auto& card : screen.cards)
+            card.shift = 0;
+        damage(screen);
+    }
+    updatePreviewLiveness();
+    forceRefresh = true;
+}
+
 void StageController::Impl::request(bool dirty) {
+    if (sessionLocked())
+        return;
+
     if (shuttingDown || rendering)
         return;
     forceRefresh |= dirty;
@@ -1324,6 +1431,9 @@ void StageController::Impl::request(bool dirty) {
 }
 
 void StageController::Impl::afterRecheck(Layout::CSpace* space) {
+    if (sessionLocked())
+        return;
+
     if (!enabled || !space)
         return;
     const auto workspace = space->workspace();
@@ -1391,6 +1501,9 @@ std::vector<StageController::Impl::Card> StageController::Impl::cardsForWorkspac
 }
 
 void StageController::Impl::sync() {
+    if (sessionLocked())
+        return;
+
     if (syncing || shuttingDown)
         return;
     if (g_pHyprRenderer && g_pHyprRenderer->m_renderData.pMonitor) {
@@ -1642,6 +1755,9 @@ void StageController::Impl::sync() {
 }
 
 void StageController::Impl::armRefresh() {
+    if (sessionLocked())
+        return;
+
     stopTimer(refreshTimer);
     if (!enabled || !g_pEventLoopManager)
         return;
@@ -1653,6 +1769,9 @@ void StageController::Impl::armRefresh() {
 }
 
 void StageController::Impl::armMotion() {
+    if (sessionLocked())
+        return;
+
     if (motionTimer || !enabled)
         return;
     motionTimer = makeShared<CEventLoopTimer>(std::chrono::milliseconds(16), [this](SP<CEventLoopTimer>, void*) {
@@ -1663,6 +1782,9 @@ void StageController::Impl::armMotion() {
 }
 
 void StageController::Impl::motion() {
+    if (sessionLocked())
+        return;
+
     bool again = false;
     const auto now = Clock::now();
     if (!visibilityGesture && visibility != visibilityTarget) {
@@ -1799,6 +1921,9 @@ std::pair<StageController::Impl::Screen*, std::optional<std::size_t>> StageContr
 }
 
 void StageController::Impl::pointer() {
+    if (sessionLocked())
+        return;
+
     if (!enabled || rendering || (inputSuppressed && inputSuppressed()))
         return;
     const auto point = g_pInputManager->getMouseCoordsInternal();
@@ -1973,6 +2098,9 @@ void StageController::Impl::updateDragHover() {
 }
 
 void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
+    if (sessionLocked())
+        return;
+
     if (event.state == WL_POINTER_BUTTON_STATE_PRESSED)
         silentDropWindow.reset();
     if (rendering || (inputSuppressed && inputSuppressed()))
@@ -2106,6 +2234,9 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
 }
 
 void StageController::Impl::axis(const IPointer::SAxisEvent& event, Event::SCallbackInfo& info) {
+    if (sessionLocked())
+        return;
+
     silentDropWindow.reset();
     if (info.cancelled)
         return;
@@ -2128,6 +2259,9 @@ void StageController::Impl::axis(const IPointer::SAxisEvent& event, Event::SCall
 }
 
 void StageController::Impl::finishThumbnailDrag() {
+    if (sessionLocked())
+        return;
+
     updateDragHover();
     const auto window = thumbnailDrag.lock();
     auto destination = dragHover ? dragHover->workspace.lock() : nullptr;
@@ -2177,6 +2311,9 @@ void StageController::Impl::finishThumbnailDrag() {
 }
 
 void StageController::Impl::activate(const PHLWORKSPACE& workspace, bool cardClick) {
+    if (sessionLocked())
+        return;
+
     silentDropWindow.reset();
     if (!workspace || workspace->m_isSpecialWorkspace)
         return;
@@ -2201,6 +2338,9 @@ void StageController::Impl::activate(const PHLWORKSPACE& workspace, bool cardCli
 // is restored afterwards; an endpoint that ends empty is then reaped exactly
 // as Hyprland reaps it on its own.
 void StageController::Impl::swapWorkspaces(const PHLWORKSPACE& a, const PHLWORKSPACE& b) {
+    if (sessionLocked())
+        return;
+
     if (!a || !b || a == b)
         return;
     std::vector<PHLWINDOW> aWindows, bWindows;
@@ -2229,6 +2369,10 @@ void StageController::Impl::swapWorkspaces(const PHLWORKSPACE& a, const PHLWORKS
 }
 
 void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController* drag) {
+    if (sessionLocked()) {
+        reinterpret_cast<DragEndFn>(dragHook->m_original)(drag);
+        return;
+    }
     PHLWORKSPACE destination;
     PHLWINDOW window;
     Vector2D dropPoint;
@@ -2291,6 +2435,9 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
 void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PHLWINDOW& window, const CBox& dropOrigin,
                                      float dropRadius, const Vector2D& dropPoint, const Vector2D& grabOffset,
                                      std::optional<Vector2D> floatingCenter, std::optional<stage::EdgeViewport> originViewport, bool edgeTransfer) {
+    if (sessionLocked())
+        return;
+
     // Use the compositor's normal move path after its drag controller has
     // restored tiling/floating and completed the pointer grab.
     const bool sameWorkspace = destination && window && window->m_workspace == destination;
@@ -3460,6 +3607,9 @@ std::optional<Rect> StageController::holdRegion(const std::string& name) const {
 }
 
 bool StageController::beginVisibilityGesture() {
+    if (sessionLocked())
+        return false;
+
     auto* self = Impl::instance;
     if (!self || self->blocked() || self->swipe || self->visibilityGesture)
         return false;
@@ -3476,6 +3626,9 @@ bool StageController::beginVisibilityGesture() {
 }
 
 void StageController::updateVisibilityGesture(double delta) {
+    if (sessionLocked())
+        return;
+
     auto* self = Impl::instance;
     if (!self || !self->visibilityGesture)
         return;
@@ -3489,6 +3642,9 @@ void StageController::updateVisibilityGesture(double delta) {
 }
 
 void StageController::endVisibilityGesture(bool cancelled) {
+    if (sessionLocked())
+        return;
+
     auto* self = Impl::instance;
     if (!self || !self->visibilityGesture)
         return;
@@ -3634,6 +3790,9 @@ std::optional<stage::OverviewEndpoint> StageController::overviewDestination(cons
 }
 
 void StageController::finishOverview() {
+    if (sessionLocked())
+        return;
+
     auto* self = Impl::instance;
     if (!self)
         return;
@@ -3661,6 +3820,9 @@ void StageController::finishOverview() {
 }
 
 bool StageController::beginWorkspaceSwipe(void* gesture, void (*original)(void*)) {
+    if (sessionLocked())
+        return false;
+
     auto* self = Impl::instance;
     const auto monitor = Desktop::focusState()->monitor();
     if (!self || !original || !monitor || !self->ownsTransition(monitor->m_activeWorkspace, true))
@@ -3671,6 +3833,9 @@ bool StageController::beginWorkspaceSwipe(void* gesture, void (*original)(void*)
 }
 
 bool StageController::updateWorkspaceSwipe(void* gesture, double delta) {
+    if (sessionLocked())
+        return false;
+
     auto* self = Impl::instance;
     if (!self || !self->swipe || self->swipe->native != gesture)
         return false;
@@ -3679,6 +3844,9 @@ bool StageController::updateWorkspaceSwipe(void* gesture, double delta) {
 }
 
 bool StageController::endWorkspaceSwipe(void* gesture) {
+    if (sessionLocked())
+        return false;
+
     auto* self = Impl::instance;
     if (!self || !self->swipe || self->swipe->native != gesture)
         return false;
@@ -3688,6 +3856,9 @@ bool StageController::endWorkspaceSwipe(void* gesture) {
 }
 
 bool StageController::beginTrackpadWorkspaceSwipe() {
+    if (sessionLocked())
+        return false;
+
     auto* self = Impl::instance;
     auto* native = g_pUnifiedWorkspaceSwipe.get();
     if (!self || !native || (native->isGestureInProgress() && !self->swipe))
@@ -3708,6 +3879,9 @@ bool StageController::beginTrackpadWorkspaceSwipe() {
 }
 
 void StageController::updateTrackpadWorkspaceSwipe(double delta) {
+    if (sessionLocked())
+        return;
+
     auto* self = Impl::instance;
     if (!self || !self->swipe || self->swipe->released)
         return;
@@ -3716,6 +3890,9 @@ void StageController::updateTrackpadWorkspaceSwipe(double delta) {
 }
 
 void StageController::endTrackpadWorkspaceSwipe(bool cancelled) {
+    if (sessionLocked())
+        return;
+
     auto* self = Impl::instance;
     if (!self || !self->swipe)
         return;
@@ -3732,6 +3909,9 @@ void StageController::rememberCanvasScroll(const PHLWORKSPACE& workspace, double
 }
 
 void StageController::Impl::restoreCanvasScroll(const PHLWORKSPACE& workspace) {
+    if (sessionLocked())
+        return;
+
     if (!enabled || !scrollingWorkspace(workspace))
         return;
     const auto saved = std::ranges::find_if(canvasScrolls, [&](const auto& entry) {
@@ -3753,6 +3933,9 @@ void StageController::Impl::restoreCanvasScroll(const PHLWORKSPACE& workspace) {
 }
 
 void StageController::Impl::beginCanvasActivation(const PHLWORKSPACE& workspace) {
+    if (sessionLocked())
+        return;
+
     if (!enabled || blocked() || !workspace || !g_pEventLoopManager)
         return;
     const auto saved = std::ranges::find_if(canvasScrolls, [&](const auto& entry) { return entry.workspace == workspace; });

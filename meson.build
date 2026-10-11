@@ -109,3 +109,10 @@ private_debug_log_test = executable('hymission-private-debug-log-test',
   install: false,
 )
 test('hymission-private-debug-log-test', private_debug_log_test, timeout: 10)
+
+input_guard_test = executable('hymission-input-guard-test',
+  'tools/input_guard_test.cpp',
+  include_directories: include_directories('src'),
+  install: false,
+)
+test('hymission-input-guard-test', input_guard_test)

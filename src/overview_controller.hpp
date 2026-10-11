@@ -802,6 +802,7 @@ class OverviewController {
                    const std::vector<WorkspaceOverride>& workspaceOverrides = {});
     void beginClose(CloseMode mode = CloseMode::Normal, std::optional<double> fromVisualOverride = std::nullopt, bool deferFullscreenMutations = false);
     [[nodiscard]] bool retargetGestureScope(ScopeOverride requestedScope);
+    void handleSessionLock();
     void deactivate();
     void scheduleDeactivate();
     void damageOwnedMonitors() const;

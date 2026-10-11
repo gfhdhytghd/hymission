@@ -12,6 +12,21 @@ int main() {
     require(temp, "temporary directory");
     const fs::path dir(temp), log = dir / "hymission-debug.log", target = dir / "target";
     try {
+        std::string controls;
+        std::string expected;
+        constexpr char hex[] = "0123456789abcdef";
+        for (unsigned char c = 0; c < 0x20; ++c) {
+            controls += static_cast<char>(c);
+            expected += "\\x";
+            expected += hex[c >> 4]; expected += hex[c & 15];
+        }
+        controls += '\x7f'; expected += "\\x7f";
+        require(hymission::escapeLogControls(controls) == expected, "all ASCII controls escaped");
+        require(hymission::escapeLogControls("title\n\r\t\x1b[31m") == "title\\x0a\\x0d\\x09\\x1b[31m", "log injection escaped");
+        require(hymission::escapeLogControls("中文 café 🎉") == "中文 café 🎉", "UTF-8 metadata preserved");
+        require(hymission::escapeLogControls("\xc2\x85\xe2\x80\xa8\xe2\x80\xa9") == "\\u0085\\u2028\\u2029", "Unicode line controls escaped");
+        require(hymission::escapeLogControls("\x85\x9b") == "\\x85\\x9b", "raw C1 controls escaped");
+        require(hymission::escapeLogControls(expected) == expected, "escaping is idempotent");
         setenv("XDG_RUNTIME_DIR", temp, 1);
         const auto previous = umask(0022);
         hymission::appendPrivateDebugLog("first");
@@ -22,6 +37,10 @@ int main() {
         require(stat(log.c_str(), &info) == 0 && (info.st_mode & 0777) == 0600, "existing permissions tightened");
         std::ifstream input(log); std::string contents((std::istreambuf_iterator<char>(input)), {});
         require(contents == "first\nsecond\n", "append preserves messages");
+        input.close();
+        hymission::appendPrivateDebugLog("class\nforged\r\x1b");
+        input.open(log); contents.assign(std::istreambuf_iterator<char>(input), {});
+        require(contents == "first\nsecond\nclass\\x0aforged\\x0d\\x1b\n", "private sink escapes metadata");
         input.close(); fs::remove(log);
         { std::ofstream out(target); out << "unchanged"; }
         fs::create_symlink(target, log);
