@@ -35,6 +35,30 @@ https://github.com/user-attachments/assets/7d711730-72f6-4165-94fa-af38bae37385
 
 
 
+## Development branch compatibility
+
+`hyprland-master` follows Hyprland's current development branch, now named
+`main` upstream. Stable releases remain on `master`; compatibility fixes for
+unreleased Hyprland APIs belong on `hyprland-master`.
+
+The initial compatibility check **fails** against upstream `663b29b846e4`;
+see the [compatibility baseline](docs/compatibility/hyprland-master.md).
+This branch must not yet be treated as compatible with development HEAD.
+
+The branch includes a reproducible Nix build. To check the latest upstream HEAD:
+
+```sh
+nix flake update hyprland
+nix build -L .#hymission
+```
+
+Commit the updated `flake.lock` with any required API fixes after the build and
+offline tests pass. The compatibility workflow checks fresh upstream HEAD daily
+and on branch pushes/PRs, and records resolved input revisions. GitHub schedules
+only activate when the workflow also exists on the repository's default branch.
+A successful build does not establish live compositor behavior; runtime
+acceptance is separate and plugin reloads must be performed from a safe context.
+
 ## Installation
 
 ### Install on Omarchy
