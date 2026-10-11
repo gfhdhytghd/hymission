@@ -4,6 +4,35 @@
   "site_url": "https://gfhdhytghd.github.io/hymission/",
   "releases": [
     {
+      "tag": "v0.11.0-v0.56.2",
+      "version": "0.11.0",
+      "hyprland": "0.56.2",
+      "published_at": "2026-10-11T21:39:02Z",
+      "headline": "Complete session-lock input safety, HDR Stage strips and steadier Stage clicks",
+      "sections": [
+        {
+          "title": "Session-lock input safety",
+          "items": [
+            "While the session is locked, every overview and Stage input listener and gesture hook yields to the lock screen: keyboard, pointer, touch, workspace swipes and custom gestures are no longer inspected or cancelled, so they all reach the locker.",
+            "Locking closes the overview immediately and cancels in-flight gestures, swipes, touch tracking, drags, Stage interactions and toggle polling without committing them; nothing stale resumes after unlocking.",
+            "Debug logs escape control characters in window titles, classes and workspace names."
+          ]
+        },
+        {
+          "title": "Stage",
+          "items": [
+            "After clicking a Stage card to switch workspaces, hover no longer recenters the scrolling layout while the pointer keeps moving right; the first leftward motion ends the guard. Set `stage_click_hover_recenter_guard = 0` to disable it."
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            "Workspace strip snapshots on HDR monitors keep FP16 precision, so thumbnails no longer clip or shift HDR colors."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.10.2-v0.56.2",
       "version": "0.10.2",
       "hyprland": "0.56.2",
