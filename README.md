@@ -850,8 +850,10 @@ This keeps normal workspace names untouched outside overview. While overview is 
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `debug_logs` | bool | `0` | Enable overview debug logging. |
+| `debug_logs` | bool | `0` | Enable overview debug logging (includes window titles/classes and workspace names). |
 | `debug_surface_logs` | bool | `0` | Enable more verbose surface-level debug logging. |
+
+Debug output also goes to Hyprland’s logger. The separate log is `$XDG_RUNTIME_DIR/hymission-debug.log`, restricted to the current user (`0600`). File logging is skipped unless the runtime directory is private and user-owned; symbolic links, hard links and non-regular log files are rejected. There is no `/tmp` fallback. Older versions wrote `/tmp/hymission-debug.log`; existing copies may contain desktop information and should be removed by their owner.
 
 ## Development
 

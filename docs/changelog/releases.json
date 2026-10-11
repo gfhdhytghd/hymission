@@ -4,6 +4,23 @@
   "site_url": "https://gfhdhytghd.github.io/hymission/",
   "releases": [
     {
+      "tag": "v0.10.1-v0.56.2",
+      "version": "0.10.1",
+      "hyprland": "0.56.2",
+      "published_at": "2026-10-11T19:08:19Z",
+      "headline": "Keep debug logs private to the current user",
+      "sections": [
+        {
+          "title": "Debug log privacy",
+          "items": [
+            "Move the separate debug log from shared `/tmp` to a validated, user-owned private `XDG_RUNTIME_DIR`, with no temporary-directory fallback.",
+            "Restrict the log to `0600` before writing, including existing files. Reject symbolic links, hard links, non-regular files and unsafe runtime directories. Handle interrupted and partial writes.",
+            "Document the sensitive desktop information in debug output and owner cleanup of logs created by older releases. Hyprland logger output is unchanged."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.10.0-v0.56.2",
       "version": "0.10.0",
       "hyprland": "0.56.2",

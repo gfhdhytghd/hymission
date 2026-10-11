@@ -81,6 +81,7 @@
 #include <hyprutils/math/Region.hpp>
 
 #include "overview_logic.hpp"
+#include "private_debug_log.hpp"
 
 extern char** environ;
 
@@ -12913,11 +12914,7 @@ void OverviewController::debugLog(const std::string& message) const {
     if (Log::logger)
         Log::logger->log(Log::DEBUG, message);
 
-    std::ofstream out("/tmp/hymission-debug.log", std::ios::app);
-    if (!out.is_open())
-        return;
-
-    out << message << '\n';
+    appendPrivateDebugLog(message);
 }
 
 void OverviewController::debugSurfaceLog(const std::string& message) const {
@@ -12927,11 +12924,7 @@ void OverviewController::debugSurfaceLog(const std::string& message) const {
     if (Log::logger)
         Log::logger->log(Log::DEBUG, message);
 
-    std::ofstream out("/tmp/hymission-debug.log", std::ios::app);
-    if (!out.is_open())
-        return;
-
-    out << message << '\n';
+    appendPrivateDebugLog(message);
 }
 
 std::string OverviewController::debugWorkspaceLabel(const PHLWORKSPACE& workspace) const {
