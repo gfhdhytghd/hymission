@@ -674,6 +674,7 @@ hl.config({
             stage_active_glow = 0,
             stage_even_spacing = 0,
             stage_drop_follow = 0,
+            stage_click_hover_recenter_guard = 1,
             stage_maximize_cover_strip = 0,
         },
     },
@@ -722,6 +723,7 @@ dispatcher is `hymission:stage_toggle`; Lua also supports `dispatch("stage_toggl
 | `stage_backdrop` | `0` | When enabled (`1`), draw every card over the desktop region of the monitor's background and bottom layer surfaces (wallpaper and background-layer dashboards), so previews match what the desktop shows; `0` (default) keeps cards transparent. Refreshes every two seconds while visible. |
 | `stage_active_glow` | `0` | Outline the active workspace card with a soft glow in the `focus_selected_color`; `0` disables the outline. Only meaningful with `stage_show_active = 1`. |
 | `stage_even_spacing` | `0` | Stretch the vertical card gaps so the stack spans the full sidebar height evenly instead of clustering at the top; `0` clusters cards at the top. Only meaningful with `stage_empty_slots > 0`. |
+| `stage_click_hover_recenter_guard` | `1` | After clicking a Stage card to switch workspaces, suppress hover-induced scrolling-layout recentering while moving right. The first leftward motion ends the guard. Hover focus and explicit click/keyboard focus remain available. `0` disables the guard. |
 | `stage_drop_follow` | `0` | After dropping a window, stay on the current workspace; `1` follows the moved window. |
 | `stage_maximize_cover_strip` | `0` | Maximization fills the right desktop; `1` lets maximization also cover the sidebar. True fullscreen always covers the output. |
 | `stage_refresh_ms` | `16` | Live preview repaint scheduling interval, clamped to `1`–`16` ms. Each repaint reads current window surfaces and sends native frame feedback; hidden sidebars stop repainting. Actual frame rate depends on output refresh, client updates and rendering load. |

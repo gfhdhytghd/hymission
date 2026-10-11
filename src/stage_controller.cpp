@@ -417,6 +417,9 @@ struct StageController::Impl {
     bool maximizeCover = false;
     bool smartisan = false;
     stage::Settings settings;
+    PHLWORKSPACEREF hoverCenterGuardWorkspace;
+    double hoverCenterGuardX = 0;
+    bool hoverFocus = false;
     PHLWORKSPACEREF pressed;
     WORKSPACEID pressedSyntheticId = 0;
     Vector2D pressPoint;
@@ -518,7 +521,7 @@ struct StageController::Impl {
     void finishThumbnailDrag();
     void button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info);
     void axis(const IPointer::SAxisEvent& event, Event::SCallbackInfo& info);
-    void activate(const PHLWORKSPACE& workspace);
+    void activate(const PHLWORKSPACE& workspace, bool cardClick = false);
     void swapWorkspaces(const PHLWORKSPACE& a, const PHLWORKSPACE& b);
     void correctFloating(const PHLMONITOR& monitor, const CBox& desktop);
     void damage(const Screen& screen);
@@ -552,7 +555,9 @@ struct StageController::Impl {
         const auto workspace = window ? window->m_workspace : PHLWORKSPACE{};
         if (explicitFocus && reason != Desktop::FOCUS_REASON_WORKSPACE_CHANGE)
             std::erase_if(self->canvasScrolls, [&](const auto& saved) { return saved.workspace == workspace; });
+        const bool previousHoverFocus = std::exchange(self->hoverFocus, reason == Desktop::FOCUS_REASON_FFM);
         reinterpret_cast<WindowFocusFn>(self->windowFocusHook->m_original)(focus, std::move(window), reason, std::move(surface));
+        self->hoverFocus = previousHoverFocus;
         if (reason == Desktop::FOCUS_REASON_WORKSPACE_CHANGE)
             self->restoreCanvasScroll(workspace);
     }
@@ -562,6 +567,12 @@ struct StageController::Impl {
         const auto original = reinterpret_cast<ScrollFocusFn>(self->scrollFocusHook->m_original);
         const auto workspace = target ? target->workspace() : PHLWORKSPACE{};
         const auto screen = workspace ? self->screenFor(workspace->m_monitor.lock()) : nullptr;
+        // Keep FFM focus, but leave the scrolling camera in place while the
+        // pointer travels right from a clicked Stage card into the desktop.
+        if (self->hoverFocus && input == Layout::Tiled::CScrollingAlgorithm::INPUT_MODE_SOFT &&
+            self->enabled && !self->blocked() && setting("stage_click_hover_recenter_guard", 1) &&
+            workspace && self->hoverCenterGuardWorkspace == workspace && workspace->isVisible())
+            return;
         const double minimum = numberSetting("scrolling:follow_min_visible", 0);
         if (input != Layout::Tiled::CScrollingAlgorithm::INPUT_MODE_SOFT || minimum <= 0 ||
             !screen || !self->interactive(*screen) || !scrollingWorkspace(workspace) ||
@@ -635,6 +646,9 @@ struct StageController::Impl {
         }
         if (self->swipe && self->swipe->monitor == monitor->m_self && (!self->swipe->released || self->swipe->target != workspace))
             self->clearSwipe();
+        if (const auto guarded = self->hoverCenterGuardWorkspace.lock(); guarded &&
+            guarded->m_monitor.lock().get() == monitor && guarded != workspace)
+            self->hoverCenterGuardWorkspace.reset();
         if (monitor->m_activeWorkspace != workspace)
             self->beginCanvasActivation(workspace);
         reinterpret_cast<ChangeWorkspaceFn>(self->changeWorkspaceHook->m_original)(monitor, workspace, internal, noMouseMove, noFocus);
@@ -1242,6 +1256,13 @@ void StageController::Impl::initialize() {
     listeners.emplace_back(events.window.title.listen([this](PHLWINDOW) { request(); }));
     listeners.emplace_back(events.window.moveToWorkspace.listen([this](PHLWINDOW, PHLWORKSPACE) { request(); }));
     listeners.emplace_back(events.input.mouse.move.listen([this](const Vector2D& position, Event::SCallbackInfo& info) {
+        if (const auto workspace = hoverCenterGuardWorkspace.lock()) {
+            const auto monitor = workspace->m_monitor.lock();
+            if (!enabled || blocked() || !setting("stage_click_hover_recenter_guard", 1) ||
+                !monitor || monitor->m_activeWorkspace != workspace || position.x < hoverCenterGuardX)
+                hoverCenterGuardWorkspace.reset();
+            hoverCenterGuardX = position.x;
+        }
         pointer();
         const auto* drag = g_layoutManager->dragController().get();
         if (!info.cancelled && hit(position).first && (!drag || !drag->target()) && !g_pInputManager->hasHeldButtons()) {
@@ -2012,7 +2033,7 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
                 // still preserves the camera exactly as scrolled.
                 if (clicked)
                     std::erase_if(canvasScrolls, [&](const auto& saved) { return saved.workspace == workspace; });
-                activate(workspace);
+                activate(workspace, true);
                 if (clicked && clicked->m_isMapped && !clicked->isHidden() && clicked->m_workspace == workspace) {
                     const bool alreadyFocused = Desktop::focusState()->window() == clicked;
                     Desktop::focusState()->fullWindowFocus(clicked, Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_HARD);
@@ -2026,7 +2047,7 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
                 }
             } else if (pressedSynthetic && card.syntheticId == pressedSynthetic && !card.workspace.lock()) {
                 if (const auto monitor = screen->monitor.lock())
-                    activate(ensureWorkspace(monitor, pressedSynthetic));
+                    activate(ensureWorkspace(monitor, pressedSynthetic), true);
             }
         }
         for (auto& s : screens) {
@@ -2155,15 +2176,21 @@ void StageController::Impl::finishThumbnailDrag() {
     }
 }
 
-void StageController::Impl::activate(const PHLWORKSPACE& workspace) {
+void StageController::Impl::activate(const PHLWORKSPACE& workspace, bool cardClick) {
     silentDropWindow.reset();
     if (!workspace || workspace->m_isSpecialWorkspace)
         return;
     const auto monitor = workspace->m_monitor.lock();
     if (!monitor)
         return;
+    hoverCenterGuardWorkspace.reset();
+    const bool switched = monitor->m_activeWorkspace != workspace;
     Desktop::focusState()->rawMonitorFocus(monitor);
     monitor->changeWorkspace(workspace, false, true);
+    if (cardClick && switched && scrollingWorkspace(workspace) && setting("stage_click_hover_recenter_guard", 1)) {
+        hoverCenterGuardWorkspace = workspace;
+        hoverCenterGuardX = g_pInputManager->getMouseCoordsInternal().x;
+    }
     request();
 }
 
