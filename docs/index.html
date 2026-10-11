@@ -167,7 +167,7 @@
     <h1>hymission</h1>
     <p class="lede">Release history of the hymission overview and Stage workspace sidebar plugin for Hyprland. Each version tag names the plugin version followed by the Hyprland release it was built for.</p>
     <ul class="actions">
-      <li><a class="button primary" href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.9.1.1-v0.56.2">Latest: v0.9.1.1-v0.56.2</a></li>
+      <li><a class="button primary" href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.10.0-v0.56.2">Latest: v0.10.0-v0.56.2</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission#installation">Installation</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission/releases">All GitHub releases</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission">Source code</a></li>
@@ -178,7 +178,7 @@
   <nav class="toc" aria-labelledby="toc-title">
     <h2 id="toc-title">Versions</h2>
     <ol>
-      <li><a href="#unreleased">Unreleased <span>next</span></a></li>
+      <li><a href="#v0-10-0-v0-56-2">0.10.0 <span>2026-10-11</span></a></li>
       <li><a href="#v0-9-1-1-v0-56-2">0.9.1.1 <span>2026-10-10</span></a></li>
       <li><a href="#v0-9-1-v0-56-2">0.9.1 <span>2026-10-10</span></a></li>
       <li><a href="#v0-8-0-v0-56-2">0.8.0 <span>2026-09-12</span></a></li>
@@ -203,24 +203,39 @@
   <main id="changelog" tabindex="-1">
     <ol class="timeline" aria-label="Releases, newest first">
       <li>
-        <article class="entry unreleased" id="unreleased" aria-labelledby="unreleased-title">
+        <article class="entry" id="v0-10-0-v0-56-2" aria-labelledby="v0-10-0-v0-56-2-title">
           <div class="entry-head">
-            <h2 id="unreleased-title"><a href="#unreleased">Unreleased</a></h2>
-            <div class="meta"><span class="badge pending">Not yet released</span><span>Since v0.9.1.1-v0.56.2</span></div>
+            <h2 id="v0-10-0-v0-56-2-title"><a href="#v0-10-0-v0-56-2">0.10.0</a></h2>
+            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-10-11T07:59:41Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.10.0-v0.56.2</code></div>
           </div>
-          <p class="summary">Stage scrolling layout fixes since the latest release. These changes are not part of a published release.</p>
+          <p class="headline">Stage framebuffer crash fixes and Omarchy integration</p>
+          <h3>Stage rendering and color formats</h3>
+          <ul>
+            <li>Fix the invalid framebuffer-format allocation path implicated in the DCI-P3 crash reports: preserve supported alpha and FP16 formats, validate mirror attachments, and fall back to hard clipping when temporary-layer allocation fails.</li>
+            <li>Preserve the native CGLFramebuffer contract required by Hyprland texture blur, fixing the subsequent native blur crash introduced by the initial allocator repair.</li>
+          </ul>
           <h3>Stage sidebar</h3>
           <ul>
             <li>Single-column scrolling workspaces resize with the visible desktop when Stage opens or closes, keeping the column fitted. Multiple-column workspaces retain their window sizes and translate as a whole.</li>
           </ul>
-          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/compare/v0.9.1.1-v0.56.2...master">Compare v0.9.1.1-v0.56.2…master</a></div>
+          <h3>Omarchy integration</h3>
+          <ul>
+            <li>Add an Omarchy shell service, manifest, bindings, defaults, preview and setup bridge. Detect existing plugin instances, rebuild for relevant changes and provide setup/rebuild notifications.</li>
+            <li>Handle service startup and hot-load, wait for the notification server, and use actionable rebuild notifications.</li>
+          </ul>
+          <h3>Validation</h3>
+          <ul>
+            <li>CMake Release build passed all six CTest checks against Hyprland 0.56.2, including framebuffer allocation/render tests and a native framebuffer ABI probe. Meson Release build passed all five tests.</li>
+            <li>Live P3/HDR output stability and allocated native window blur remain unverified. No compositor reload or plugin load/unload was performed. Source release without prebuilt plugin binaries.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.10.0-v0.56.2">Release notes for v0.10.0-v0.56.2 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.9.1.1-v0.56.2...v0.10.0-v0.56.2">Compare with v0.9.1.1-v0.56.2</a></div>
         </article>
       </li>
       <li>
         <article class="entry" id="v0-9-1-1-v0-56-2" aria-labelledby="v0-9-1-1-v0-56-2-title">
           <div class="entry-head">
             <h2 id="v0-9-1-1-v0-56-2-title"><a href="#v0-9-1-1-v0-56-2">0.9.1.1</a></h2>
-            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-10-10T09:18:22Z">Oct 10, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.9.1.1-v0.56.2</code></div>
+            <div class="meta"><time datetime="2026-10-10T09:18:22Z">Oct 10, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.9.1.1-v0.56.2</code></div>
           </div>
           <p class="headline">Stage activation at screen edges and card gaps</p>
           <h3>Stage click targets</h3>

@@ -4,6 +4,42 @@
   "site_url": "https://gfhdhytghd.github.io/hymission/",
   "releases": [
     {
+      "tag": "v0.10.0-v0.56.2",
+      "version": "0.10.0",
+      "hyprland": "0.56.2",
+      "published_at": "2026-10-11T07:59:41Z",
+      "headline": "Stage framebuffer crash fixes and Omarchy integration",
+      "sections": [
+        {
+          "title": "Stage rendering and color formats",
+          "items": [
+            "Fix the invalid framebuffer-format allocation path implicated in the DCI-P3 crash reports: preserve supported alpha and FP16 formats, validate mirror attachments, and fall back to hard clipping when temporary-layer allocation fails.",
+            "Preserve the native CGLFramebuffer contract required by Hyprland texture blur, fixing the subsequent native blur crash introduced by the initial allocator repair."
+          ]
+        },
+        {
+          "title": "Stage sidebar",
+          "items": [
+            "Single-column scrolling workspaces resize with the visible desktop when Stage opens or closes, keeping the column fitted. Multiple-column workspaces retain their window sizes and translate as a whole."
+          ]
+        },
+        {
+          "title": "Omarchy integration",
+          "items": [
+            "Add an Omarchy shell service, manifest, bindings, defaults, preview and setup bridge. Detect existing plugin instances, rebuild for relevant changes and provide setup/rebuild notifications.",
+            "Handle service startup and hot-load, wait for the notification server, and use actionable rebuild notifications."
+          ]
+        },
+        {
+          "title": "Validation",
+          "items": [
+            "CMake Release build passed all six CTest checks against Hyprland 0.56.2, including framebuffer allocation/render tests and a native framebuffer ABI probe. Meson Release build passed all five tests.",
+            "Live P3/HDR output stability and allocated native window blur remain unverified. No compositor reload or plugin load/unload was performed. Source release without prebuilt plugin binaries."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.9.1.1-v0.56.2",
       "version": "0.9.1.1",
       "hyprland": "0.56.2",
@@ -432,17 +468,5 @@
         }
       ]
     }
-  ],
-  "unreleased": {
-    "since": "v0.9.1.1-v0.56.2",
-    "summary": "Stage scrolling layout fixes since the latest release. These changes are not part of a published release.",
-    "sections": [
-      {
-        "title": "Stage sidebar",
-        "items": [
-          "Single-column scrolling workspaces resize with the visible desktop when Stage opens or closes, keeping the column fitted. Multiple-column workspaces retain their window sizes and translate as a whole."
-        ]
-      }
-    ]
-  }
+  ]
 }
