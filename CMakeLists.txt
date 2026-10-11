@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-project(hymission VERSION "0.9.1.1")
+project(hymission VERSION "0.10.2")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -69,6 +69,13 @@ add_executable(hymission-layout-demo
 target_include_directories(hymission-layout-demo PRIVATE src)
 
 if(BUILD_TESTING)
+  add_executable(hymission-input-guard-test tools/input_guard_test.cpp)
+  target_include_directories(hymission-input-guard-test PRIVATE src)
+  add_test(NAME hymission-input-guard-test COMMAND hymission-input-guard-test)
+  add_executable(hymission-private-debug-log-test tools/private_debug_log_test.cpp)
+  target_include_directories(hymission-private-debug-log-test PRIVATE src)
+  add_test(NAME hymission-private-debug-log-test COMMAND hymission-private-debug-log-test)
+  set_tests_properties(hymission-private-debug-log-test PROPERTIES TIMEOUT 10)
   find_program(HYPRLAND_TEST_EXECUTABLE Hyprland)
   if(HYPRLAND_TEST_EXECUTABLE)
     add_library(hymission-stage-edge-native-probe MODULE tools/stage_edge_native_contract_probe.cpp)

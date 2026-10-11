@@ -802,6 +802,7 @@ class OverviewController {
                    const std::vector<WorkspaceOverride>& workspaceOverrides = {});
     void beginClose(CloseMode mode = CloseMode::Normal, std::optional<double> fromVisualOverride = std::nullopt, bool deferFullscreenMutations = false);
     [[nodiscard]] bool retargetGestureScope(ScopeOverride requestedScope);
+    void handleSessionLock();
     void deactivate();
     void scheduleDeactivate();
     void damageOwnedMonitors() const;
@@ -1066,6 +1067,8 @@ class OverviewController {
     CHyprSignalListener       m_touchUpListener;
     CHyprSignalListener       m_touchCancelListener;
     CHyprSignalListener       m_keyboardListener;
+    CHyprSignalListener       m_sessionLockListener;
+    CHyprSignalListener       m_sessionUnlockListener;
     CHyprSignalListener       m_windowOpenListener;
     CHyprSignalListener       m_windowDestroyListener;
     CHyprSignalListener       m_windowCloseListener;

@@ -1,5 +1,5 @@
 project('hymission', 'cpp',
-  version: '0.9.1.1',
+  version: '0.10.2',
   default_options: ['buildtype=release'],
 )
 
@@ -102,3 +102,17 @@ search_child_process_test = executable('hymission-search-child-process-test',
   install: false,
 )
 test('search-child-process-test', search_child_process_test, timeout: 10)
+
+private_debug_log_test = executable('hymission-private-debug-log-test',
+  'tools/private_debug_log_test.cpp',
+  include_directories: include_directories('src'),
+  install: false,
+)
+test('hymission-private-debug-log-test', private_debug_log_test, timeout: 10)
+
+input_guard_test = executable('hymission-input-guard-test',
+  'tools/input_guard_test.cpp',
+  include_directories: include_directories('src'),
+  install: false,
+)
+test('hymission-input-guard-test', input_guard_test)

@@ -4,6 +4,77 @@
   "site_url": "https://gfhdhytghd.github.io/hymission/",
   "releases": [
     {
+      "tag": "v0.10.2-v0.56.2",
+      "version": "0.10.2",
+      "hyprland": "0.56.2",
+      "published_at": "2026-10-11T19:55:58Z",
+      "headline": "Stop search input capture when the session locks",
+      "sections": [
+        {
+          "title": "Session-lock input safety",
+          "items": [
+            "Cancel active search on the session-lock event, discard queued keys and stop the helper focus timer and IPC channel.",
+            "Pass keyboard events through while locked before inspecting keyboard state or cancelling input. Guard overview input handling, search startup, focus retries and helper IPC against session lock.",
+            "Do not restart search or replay pending keys after unlocking; rebuild the visible overview without its previous search filter.",
+            "Verified with CMake and Meson builds, existing regression suites and static path review. Actual locker input and unlock behavior remain pending live validation."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.10.1-v0.56.2",
+      "version": "0.10.1",
+      "hyprland": "0.56.2",
+      "published_at": "2026-10-11T19:08:19Z",
+      "headline": "Keep debug logs private to the current user",
+      "sections": [
+        {
+          "title": "Debug log privacy",
+          "items": [
+            "Move the separate debug log from shared `/tmp` to a validated, user-owned private `XDG_RUNTIME_DIR`, with no temporary-directory fallback.",
+            "Restrict the log to `0600` before writing, including existing files. Reject symbolic links, hard links, non-regular files and unsafe runtime directories. Handle interrupted and partial writes.",
+            "Document the sensitive desktop information in debug output and owner cleanup of logs created by older releases. Hyprland logger output is unchanged."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.10.0-v0.56.2",
+      "version": "0.10.0",
+      "hyprland": "0.56.2",
+      "published_at": "2026-10-11T07:59:41Z",
+      "headline": "Stage framebuffer crash fixes and Omarchy integration",
+      "sections": [
+        {
+          "title": "Stage rendering and color formats",
+          "items": [
+            "Fix the invalid framebuffer-format allocation path implicated in the DCI-P3 crash reports: preserve supported alpha and FP16 formats, validate mirror attachments, and fall back to hard clipping when temporary-layer allocation fails.",
+            "Preserve the native CGLFramebuffer contract required by Hyprland texture blur, fixing the subsequent native blur crash introduced by the initial allocator repair."
+          ]
+        },
+        {
+          "title": "Stage sidebar",
+          "items": [
+            "Single-column scrolling workspaces resize with the visible desktop when Stage opens or closes, keeping the column fitted. Multiple-column workspaces retain their window sizes and translate as a whole."
+          ]
+        },
+        {
+          "title": "Omarchy integration",
+          "items": [
+            "Add an Omarchy shell service, manifest, bindings, defaults, preview and setup bridge. Detect existing plugin instances, rebuild for relevant changes and provide setup/rebuild notifications.",
+            "Handle service startup and hot-load, wait for the notification server, and use actionable rebuild notifications."
+          ]
+        },
+        {
+          "title": "Validation",
+          "items": [
+            "CMake Release build passed all six CTest checks against Hyprland 0.56.2, including framebuffer allocation/render tests and a native framebuffer ABI probe. Meson Release build passed all five tests.",
+            "Live P3/HDR output stability and allocated native window blur remain unverified. No compositor reload or plugin load/unload was performed. Source release without prebuilt plugin binaries."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.9.1.1-v0.56.2",
       "version": "0.9.1.1",
       "hyprland": "0.56.2",

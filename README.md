@@ -37,6 +37,28 @@ https://github.com/user-attachments/assets/7d711730-72f6-4165-94fa-af38bae37385
 
 ## Installation
 
+### Install on Omarchy
+
+Hymission ships as an [Omarchy](https://omarchy.org/) shell plugin. Add and enable it with:
+
+```sh
+omarchy plugin add https://github.com/gfhdhytghd/hymission.git --enable
+```
+
+On first enable a terminal opens, installs any missing build dependencies with `pacman` (it asks for your password), and compiles the plugin against the Hyprland you are running. The build lives in `~/.cache/io.github.gfhdhytghd.hymission/`; nothing is installed system-wide and your Hyprland config files are not edited. When the build finishes the plugin loads and these bindings are registered at runtime:
+
+| Input | Action | Replaces Omarchy default |
+| --- | --- | --- |
+| `Super + Tab` | Mission Control | Next workspace |
+| `Super + Shift + Tab` | Mission Control across all workspaces | Previous workspace |
+| Three-finger vertical swipe | Open or close Mission Control | — |
+
+A key you bound yourself is never taken over; it is skipped and logged instead. To choose your own bindings and settings, copy [`omarchy/defaults.lua`](omarchy/defaults.lua) to `~/.config/hymission/omarchy.lua` and edit it. When that file exists it replaces the defaults above, and it is applied after every config reload. Configure `plugin.hymission` there rather than in `hyprland.lua`: the plugin is not loaded yet when your main config first runs.
+
+After a Hyprland update, a notification offers to rebuild. `omarchy plugin update` pulls new versions and asks for a rebuild only when the native code changed. If you previously installed Hymission with `hyprpm`, run `hyprpm disable hymission` first so only one copy is loaded.
+
+`omarchy plugin disable io.github.gfhdhytghd.hymission` unloads the plugin and restores Omarchy's bindings. `omarchy plugin remove io.github.gfhdhytghd.hymission` does the same and deletes the checkout; remove `~/.cache/io.github.gfhdhytghd.hymission` as well to reclaim the build space.
+
 ### Install with `hyprpm`
 
 `hyprpm` is the preferred user-facing install path in the Hyprland ecosystem.
@@ -652,6 +674,7 @@ hl.config({
             stage_active_glow = 0,
             stage_even_spacing = 0,
             stage_drop_follow = 0,
+            stage_click_hover_recenter_guard = 1,
             stage_maximize_cover_strip = 0,
         },
     },
@@ -670,6 +693,9 @@ hl.plugin.hymission.gesture({
 Swipe right to reveal Stage and continuously reserve space on the desktop; swipe
 left to hide it. In scrolling layouts, Stage translates the tape while retaining
 its native sizing viewport and window sizes; the visible desktop clips overflow.
+Exception: a workspace with exactly one native scrolling column resizes its
+sizing viewport to the visible desktop width so the single column continues to fit.
+Stacked or grouped windows in that column count as one column.
 Reversing the swipe reverses progress. Release past halfway to
 commit; cancellation restores the previous state. Keyboard toggles and release
 settling use `stage_transition_ms`. The runtime choice lasts until plugin reload.
@@ -697,6 +723,7 @@ dispatcher is `hymission:stage_toggle`; Lua also supports `dispatch("stage_toggl
 | `stage_backdrop` | `0` | When enabled (`1`), draw every card over the desktop region of the monitor's background and bottom layer surfaces (wallpaper and background-layer dashboards), so previews match what the desktop shows; `0` (default) keeps cards transparent. Refreshes every two seconds while visible. |
 | `stage_active_glow` | `0` | Outline the active workspace card with a soft glow in the `focus_selected_color`; `0` disables the outline. Only meaningful with `stage_show_active = 1`. |
 | `stage_even_spacing` | `0` | Stretch the vertical card gaps so the stack spans the full sidebar height evenly instead of clustering at the top; `0` clusters cards at the top. Only meaningful with `stage_empty_slots > 0`. |
+| `stage_click_hover_recenter_guard` | `1` | After clicking a Stage card to switch workspaces, suppress hover-induced scrolling-layout recentering while moving right. The first leftward motion ends the guard. Hover focus and explicit click/keyboard focus remain available. `0` disables the guard. |
 | `stage_drop_follow` | `0` | After dropping a window, stay on the current workspace; `1` follows the moved window. |
 | `stage_maximize_cover_strip` | `0` | Maximization fills the right desktop; `1` lets maximization also cover the sidebar. True fullscreen always covers the output. |
 | `stage_refresh_ms` | `16` | Live preview repaint scheduling interval, clamped to `1`–`16` ms. Each repaint reads current window surfaces and sends native frame feedback; hidden sidebars stop repainting. Actual frame rate depends on output refresh, client updates and rendering load. |
@@ -825,8 +852,12 @@ This keeps normal workspace names untouched outside overview. While overview is 
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `debug_logs` | bool | `0` | Enable overview debug logging. |
+| `debug_logs` | bool | `0` | Enable overview debug logging (includes window titles/classes and workspace names). |
 | `debug_surface_logs` | bool | `0` | Enable more verbose surface-level debug logging. |
+
+Locking the session cancels active search, discards pending search keys and stops helper focus retries. Hymission passes keyboard events through while locked; unlocking does not restart search or replay buffered keys.
+
+Debug output also goes to Hyprland’s logger. The separate log is `$XDG_RUNTIME_DIR/hymission-debug.log`, restricted to the current user (`0600`). File logging is skipped unless the runtime directory is private and user-owned; symbolic links, hard links and non-regular log files are rejected. There is no `/tmp` fallback. Older versions wrote `/tmp/hymission-debug.log`; existing copies may contain desktop information and should be removed by their owner.
 
 ## Development
 
@@ -918,6 +949,9 @@ If you override default Hyprland bindings (e.g. rebinding `SUPER+TAB` to `hymiss
 - In other setups: prefer overriding bindings in your own Lua config files (loaded after defaults) rather than editing default files directly.
 
 ### Omarchy 4 integration example
+
+> [!TIP]
+> On Omarchy, [Install on Omarchy](#install-on-omarchy) sets all of this up for you and keeps Omarchy's own files untouched. The manual pattern below is for setups that load Hymission some other way.
 
 Omarchy 4 uses a pure Lua config (`configProvider: lua`). Here is a tested integration pattern:
 
