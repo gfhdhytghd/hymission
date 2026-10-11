@@ -432,5 +432,17 @@
         }
       ]
     }
-  ]
+  ],
+  "unreleased": {
+    "since": "v0.9.1.1-v0.56.2",
+    "summary": "Stage scrolling layout fixes since the latest release. These changes are not part of a published release.",
+    "sections": [
+      {
+        "title": "Stage sidebar",
+        "items": [
+          "Single-column scrolling workspaces resize with the visible desktop when Stage opens or closes, keeping the column fitted. Multiple-column workspaces retain their window sizes and translate as a whole."
+        ]
+      }
+    ]
+  }
 }

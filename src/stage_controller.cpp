@@ -85,6 +85,14 @@ bool scrollingWorkspace(const PHLWORKSPACE& workspace) {
         Layout::Supplementary::algoMatcher()->getNameForTiledAlgo(&typeid(*algorithm->tiledAlgo())) == "scrolling";
 }
 
+bool preservesScrollingWidth(const PHLWORKSPACE& workspace) {
+    if (!scrollingWorkspace(workspace))
+        return false;
+    auto* scrolling = dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(workspace->m_space->algorithm()->tiledAlgo().get());
+    const std::size_t columns = scrolling && scrolling->m_scrollingData ? scrolling->m_scrollingData->columns.size() : 0;
+    return stage::preserveScrollingWidth(true, columns);
+}
+
 bool scrollingTiled(const PHLWINDOW& window) {
     return window && !window->m_isFloating && !window->m_pinned && scrollingWorkspace(window->m_workspace);
 }
@@ -254,6 +262,7 @@ struct StageController::Impl {
         Clock::time_point backgroundRendered{};
         std::optional<std::size_t> reorderHover;
         bool covered = false;
+        bool preserveScrollingWidth = false;
         bool suspended = false;
         bool revealFromBottom = false;
         double shown = 1;
@@ -1307,9 +1316,12 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
         return;
     // Each invocation starts from the original recheckWorkArea output. Retain
     // workspace gaps, including float gaps, and never compound our reservation.
+    // Count native columns, including stacked/grouped targets in one column.
+    // A single column follows the visible desktop width; a multi-column tape
+    // keeps its sizing viewport and is only translated and clipped.
     for (auto* box : {&space->m_workArea, &space->m_floatingWorkArea}) {
         const auto area = stage::reservedWorkArea(rect(*box), screen->geometry.reservation, visibility, screen->right,
-                                                  box == &space->m_workArea && scrollingWorkspace(workspace));
+                                                  box == &space->m_workArea && preservesScrollingWidth(workspace));
         *box = hymission::box(area);
     }
     if (!syncing && !sameBox(screen->base, baseArea(monitor)))
@@ -1535,6 +1547,9 @@ void StageController::Impl::sync() {
         }
         const WORKSPACEID active = monitor->m_activeWorkspace ? monitor->m_activeWorkspace->m_id : WORKSPACE_INVALID;
         const bool changedActive = screen->active != active;
+        const bool preserveWidth = preservesScrollingWidth(monitor->m_activeWorkspace);
+        const bool changedWidthPolicy = screen->preserveScrollingWidth != preserveWidth;
+        screen->preserveScrollingWidth = preserveWidth;
         screen->active = active;
         const auto mode = monitor->m_activeWorkspace ? Fullscreen::controller()->getFullscreenModes(monitor->m_activeWorkspace).internal : Fullscreen::FSMODE_NONE;
         const bool cover = stage::coversStrip(mode == Fullscreen::FSMODE_FULLSCREEN ? stage::CoverMode::Fullscreen :
@@ -1559,7 +1574,7 @@ void StageController::Impl::sync() {
             screen->paneTransition = false;
             screen->departingCards.clear();
         }
-        if (changedGeometry || changedPolicy || changedCover || reconfigure)
+        if (changedGeometry || changedPolicy || changedWidthPolicy || changedCover || reconfigure)
             relayout.push_back(monitor);
         for (auto& card : screen->cards) {
             if (changedGeometry) {
