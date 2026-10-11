@@ -154,7 +154,7 @@ menu() {
 menu_consent() {
   local labels answer
   if [[ -t 0 && -t 1 && -f $DIR/omarchy/menu.json && ! -f $CACHE/menu-consent ]]; then
-    labels=$(menu_entries | jq -r 'to_entries | map(.value.label // .key) | join(", ")')
+    labels=$(menu_entries | jq -r '[.[] | .label] | if length > 1 then (.[:-1] | join(", ")) + " and " + .[-1] else .[0] end')
     read -r -p "Use $TITLE for Omarchy's $labels menu entries? [Y/n] " answer || return 0
     case $answer in
       "" | [Yy] | [Yy][Ee][Ss]) printf 'yes\n' >"$CACHE/menu-consent" ;;

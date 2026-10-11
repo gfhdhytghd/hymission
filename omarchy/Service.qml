@@ -44,10 +44,15 @@ Item {
     poll.start()
   }
 
-  function notify(body, action) {
+  // Critical toasts stay until handled; Omarchy expires the rest within 30 s.
+  function notify(body, action, critical) {
     if (notifier.running) return
-    notifier.command = ["notify-send", "-a", title, "-i", "system-software-install"]
-      .concat(action ? ["-A", "setup=" + action] : []).concat([title, body])
+    // The shell's notification server may still be starting alongside us.
+    notifier.command = ["bash", "-c",
+      'wait="${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-notification-wait"; [[ ! -x $wait ]] || "$wait" 15 >/dev/null; exec notify-send "$@"',
+      "bash", "-a", title, "-i", "system-software-install",
+      "-u", critical ? "critical" : "normal", "-t", "30000"]
+      .concat(action ? ["-A", "default=" + action] : []).concat([title, body])
     notifier.running = true
   }
 
@@ -62,7 +67,7 @@ Item {
       poll.stop()
       if (s.outdated && !notified) {
         notified = true
-        notify("An update was downloaded. Rebuild to use it.", "Rebuild")
+        notify("An update is ready. Click to rebuild.", "Rebuild", false)
       }
     } else if (settingUp) {
       return
@@ -70,10 +75,10 @@ Item {
       openSetup()
     } else if (s.state === "stale" && !notified) {
       notified = true
-      notify("Hyprland was updated. Rebuild the plugin to load it again.", "Rebuild")
+      notify("Hyprland was updated. Click to rebuild and load the plugin again.", "Rebuild", true)
     } else if (s.state === "foreign" && !notified) {
       notified = true
-      notify("Another copy is already loaded (hyprpm?). Disable it to let Omarchy manage " + title + ".", "")
+      notify("Another copy is already loaded (hyprpm?). Disable it to let Omarchy manage " + title + ".", "", false)
     }
   }
 
@@ -84,7 +89,7 @@ Item {
       else {
         poll.stop()
         root.settingUp = false
-        root.notify("The plugin could not be started. Check the setup terminal or shell log.", "Rebuild")
+        root.notify("The plugin could not be started. Click to run setup again.", "Rebuild", true)
       }
     }
     stdout: StdioCollector { onStreamFinished: root.handle(text.trim().split("\n").pop()) }
@@ -102,7 +107,7 @@ Item {
 
   Process {
     id: notifier
-    stdout: StdioCollector { onStreamFinished: if (text.trim() === "setup") root.openSetup() }
+    stdout: StdioCollector { onStreamFinished: if (text.trim() === "default") root.openSetup() }
   }
 
   // Setup runs in its own terminal; pick up its result as soon as it lands.
@@ -125,6 +130,9 @@ Item {
     }
   }
 
+  // The shell passes the manifest at creation on startup and assigns it later
+  // on hot-load, so handle both.
+  Component.onCompleted: if (manifest) run(starter, "start")
   onManifestChanged: if (manifest) run(starter, "start")
 
   // Reconcile from files after shell teardown settles. Inline so checkout
