@@ -85,6 +85,14 @@ bool scrollingWorkspace(const PHLWORKSPACE& workspace) {
         Layout::Supplementary::algoMatcher()->getNameForTiledAlgo(&typeid(*algorithm->tiledAlgo())) == "scrolling";
 }
 
+bool preservesScrollingWidth(const PHLWORKSPACE& workspace) {
+    if (!scrollingWorkspace(workspace))
+        return false;
+    auto* scrolling = dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(workspace->m_space->algorithm()->tiledAlgo().get());
+    const std::size_t columns = scrolling && scrolling->m_scrollingData ? scrolling->m_scrollingData->columns.size() : 0;
+    return stage::preserveScrollingWidth(true, columns);
+}
+
 bool scrollingTiled(const PHLWINDOW& window) {
     return window && !window->m_isFloating && !window->m_pinned && scrollingWorkspace(window->m_workspace);
 }
@@ -254,6 +262,7 @@ struct StageController::Impl {
         Clock::time_point backgroundRendered{};
         std::optional<std::size_t> reorderHover;
         bool covered = false;
+        bool preserveScrollingWidth = false;
         bool suspended = false;
         bool revealFromBottom = false;
         double shown = 1;
@@ -1307,9 +1316,12 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
         return;
     // Each invocation starts from the original recheckWorkArea output. Retain
     // workspace gaps, including float gaps, and never compound our reservation.
+    // Count native columns, including stacked/grouped targets in one column.
+    // A single column follows the visible desktop width; a multi-column tape
+    // keeps its sizing viewport and is only translated and clipped.
     for (auto* box : {&space->m_workArea, &space->m_floatingWorkArea}) {
         const auto area = stage::reservedWorkArea(rect(*box), screen->geometry.reservation, visibility, screen->right,
-                                                  box == &space->m_workArea && scrollingWorkspace(workspace));
+                                                  box == &space->m_workArea && preservesScrollingWidth(workspace));
         *box = hymission::box(area);
     }
     if (!syncing && !sameBox(screen->base, baseArea(monitor)))
@@ -1535,6 +1547,9 @@ void StageController::Impl::sync() {
         }
         const WORKSPACEID active = monitor->m_activeWorkspace ? monitor->m_activeWorkspace->m_id : WORKSPACE_INVALID;
         const bool changedActive = screen->active != active;
+        const bool preserveWidth = preservesScrollingWidth(monitor->m_activeWorkspace);
+        const bool changedWidthPolicy = screen->preserveScrollingWidth != preserveWidth;
+        screen->preserveScrollingWidth = preserveWidth;
         screen->active = active;
         const auto mode = monitor->m_activeWorkspace ? Fullscreen::controller()->getFullscreenModes(monitor->m_activeWorkspace).internal : Fullscreen::FSMODE_NONE;
         const bool cover = stage::coversStrip(mode == Fullscreen::FSMODE_FULLSCREEN ? stage::CoverMode::Fullscreen :
@@ -1559,7 +1574,7 @@ void StageController::Impl::sync() {
             screen->paneTransition = false;
             screen->departingCards.clear();
         }
-        if (changedGeometry || changedPolicy || changedCover || reconfigure)
+        if (changedGeometry || changedPolicy || changedWidthPolicy || changedCover || reconfigure)
             relayout.push_back(monitor);
         for (auto& card : screen->cards) {
             if (changedGeometry) {
@@ -3377,16 +3392,44 @@ void StageController::Impl::settleVisibility(bool visible) {
 }
 
 bool StageController::toggleVisibility() {
+    return setVisibility(!m_impl->runtimeVisible.value_or(setting("stage_enabled", 0) != 0));
+}
+
+bool StageController::setVisibility(bool visible) {
     auto& self = *m_impl;
     if (self.blocked() || self.swipe || self.visibilityGesture)
         return false;
-    const bool visible = !self.runtimeVisible.value_or(setting("stage_enabled", 0) != 0);
+    const bool previous = self.runtimeVisible.value_or(setting("stage_enabled", 0) != 0);
+    if (previous == visible && !visible)
+        return true;
     self.runtimeVisible = visible;
     self.sync();
     if (!self.enabled)
         return false;
-    self.settleVisibility(visible);
+    // Repeated requests must not restart an in-flight visibility animation.
+    if (previous != visible)
+        self.settleVisibility(visible);
     return true;
+}
+
+std::optional<Rect> StageController::holdRegion(const std::string& name) const {
+    const auto& self = *m_impl;
+    if (!self.enabled || self.blocked() || !self.runtimeVisible.value_or(setting("stage_enabled", 0) != 0))
+        return std::nullopt;
+    for (const auto& screen : self.screens) {
+        auto monitor = screen.monitor.lock();
+        if (!monitor || monitor->m_name != name || screen.covered || screen.suspended ||
+            self.renderBlocked(monitor) || monitor->m_activeSpecialWorkspace)
+            continue;
+        // Target geometry remains stable through the zero-progress opening frame.
+        const auto region = stage::holdStrip({monitor->m_position.x, monitor->m_position.y,
+                                             monitor->m_size.x, monitor->m_size.y},
+                                            rect(screen.base), screen.geometry.reservation, screen.right);
+        if (region.width <= 0 || region.height <= 0)
+            return std::nullopt;
+        return region;
+    }
+    return std::nullopt;
 }
 
 bool StageController::beginVisibilityGesture() {

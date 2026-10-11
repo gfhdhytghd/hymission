@@ -13,15 +13,29 @@ inline double visibilityGestureProgress(double start, double displacement, doubl
     return std::clamp(start + displacement / std::max(1.0, distance), 0.0, 1.0);
 }
 
-// Scrolling columns retain their native width: Stage moves the entire tape,
+constexpr bool preserveScrollingWidth(bool scrolling, std::size_t columnCount) {
+    return scrolling && columnCount != 1;
+}
+
+// Multiple scrolling columns retain their native width: Stage moves the entire tape,
 // while its rendering viewport clips the part behind the sidebar/output edge.
-inline Rect reservedWorkArea(Rect area, double reservation, double progress, bool right, bool scrolling) {
+inline Rect reservedWorkArea(Rect area, double reservation, double progress, bool right, bool preserveWidth) {
     const double amount = std::min(std::max(0.0, reservation * std::clamp(progress, 0.0, 1.0)), std::max(0.0, area.width - 1));
     if (!right)
         area.x += amount;
-    if (!scrolling)
+    if (!preserveWidth)
         area.width -= amount;
     return area;
+}
+
+// Extend the actual Stage reservation through output/bar gaps to the physical
+// edge. Inputs and result are already global logical rectangles.
+inline Rect holdStrip(const Rect& output, const Rect& base, double reservation, bool right) {
+    const double amount = std::clamp(reservation, 0.0, base.width);
+    const double boundary = std::clamp(right ? base.x + base.width - amount : base.x + amount,
+                                       output.x, output.x + output.width);
+    return {right ? boundary : output.x, output.y,
+            right ? output.x + output.width - boundary : boundary - output.x, output.height};
 }
 
 inline Rect visibilityDesktop(const Rect& base, const Rect& stageDesktop, double progress) {

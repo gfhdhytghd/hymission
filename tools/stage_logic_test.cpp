@@ -49,6 +49,21 @@ int main() {
     ok &= expect(near(visibleAxisFraction({-1550, -700, 190, 400}, {-1500, -700, 1000, 800}, true), 0.14),
         "global monitor offsets do not change follow percentage");
     {
+        const hymission::Rect output{-1000, -200, 1000, 800};
+        const hymission::Rect work{-980, -170, 950, 740};
+        const auto left = holdStrip(output, work, 120, false);
+        const auto right = holdStrip(output, work, 120, true);
+        ok &= expect(near(left.x, -1000) && near(left.y, -200) && near(left.width, 140) && near(left.height, 800),
+                     "left hold strip includes actual Stage width, gap and output reservations");
+        ok &= expect(near(right.x, -150) && near(right.width, 150) && near(right.height, 800),
+                     "right hold strip reaches the global logical output edge");
+        ok &= expect(near(holdStrip(output, work, 200, false).width, 220), "hold width follows dynamic Stage geometry");
+        ok &= expect(near(holdStrip(output, work, 9999, false).width, 970), "hold reservation clamps to available work area");
+        ok &= expect(hymission::normalizeHymissionDispatcher("stage_open") == "hymission:stage_open" &&
+                     hymission::normalizeHymissionDispatcher("hymission.stage_close") == "hymission:stage_close",
+                     "idempotent Stage aliases resolve in Lua dispatch routing");
+    }
+    {
         const hymission::Rect full{-1920, 30, 1920, 1050};
         const hymission::Rect inset{-1680, 30, 1680, 1050};
         const auto hidden = visibilityDesktop(full, inset, 0);
@@ -65,11 +80,19 @@ int main() {
                  hymission::normalizeHymissionDispatcher("hymission.stage_toggle") == "hymission:stage_toggle" &&
                  hymission::normalizeHymissionDispatcher("hymission:stage_toggle") == "hymission:stage_toggle",
                  "Lua Stage action names route to the continuous Stage gesture dispatcher");
+    ok &= expect(!preserveScrollingWidth(true, 1) && preserveScrollingWidth(true, 2) && preserveScrollingWidth(true, 0) &&
+                 !preserveScrollingWidth(false, 1), "only a native single scrolling column uses the resized desktop viewport");
     for (const double progress : {0.0, 0.25, 0.5, 1.0, 0.5, 0.0}) {
         const hymission::Rect native{-1440, 30, 1440, 842};
         const auto scrolling = reservedWorkArea(native, 240, progress, false, true);
         ok &= expect(near(scrolling.width, native.width) && near(scrolling.height, native.height) &&
                      near(scrolling.x, native.x + 240 * progress), "scrolling tape translates on advance and reversal without changing its sizing viewport");
+        for (const bool sidebarRight : {false, true}) {
+            const auto single = reservedWorkArea(native, 240, progress, sidebarRight, preserveScrollingWidth(true, 1));
+            ok &= expect(near(single.width, native.width - 240 * progress) && near(single.height, native.height) &&
+                         near(single.x, native.x + (sidebarRight ? 0 : 240 * progress)),
+                         "single-column sizing follows Stage on either side throughout opening, closing and reversal");
+        }
         const auto tiled = reservedWorkArea(native, 240, progress, false, false);
         ok &= expect(near(tiled.x + tiled.width, native.x + native.width), "ordinary tiled layout retains its right desktop edge");
         const auto right = reservedWorkArea(native, 240, progress, true, true);

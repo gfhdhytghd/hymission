@@ -25,6 +25,8 @@ class StageController {
     StageController& operator=(const StageController&) = delete;
     void initialize();
     bool toggleVisibility();
+    bool setVisibility(bool visible);
+    std::optional<Rect> holdRegion(const std::string& monitor) const;
     static bool beginVisibilityGesture();
     static void updateVisibilityGesture(double delta);
     static void endVisibilityGesture(bool cancelled);
