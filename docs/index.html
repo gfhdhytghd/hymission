@@ -167,7 +167,7 @@
     <h1>hymission</h1>
     <p class="lede">Release history of the hymission overview and Stage workspace sidebar plugin for Hyprland. Each version tag names the plugin version followed by the Hyprland release it was built for.</p>
     <ul class="actions">
-      <li><a class="button primary" href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.10.2-v0.56.2">Latest: v0.10.2-v0.56.2</a></li>
+      <li><a class="button primary" href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.11.0-v0.56.2">Latest: v0.11.0-v0.56.2</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission#installation">Installation</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission/releases">All GitHub releases</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission">Source code</a></li>
@@ -178,6 +178,7 @@
   <nav class="toc" aria-labelledby="toc-title">
     <h2 id="toc-title">Versions</h2>
     <ol>
+      <li><a href="#v0-11-0-v0-56-2">0.11.0 <span>2026-10-11</span></a></li>
       <li><a href="#v0-10-2-v0-56-2">0.10.2 <span>2026-10-11</span></a></li>
       <li><a href="#v0-10-1-v0-56-2">0.10.1 <span>2026-10-11</span></a></li>
       <li><a href="#v0-10-0-v0-56-2">0.10.0 <span>2026-10-11</span></a></li>
@@ -205,10 +206,34 @@
   <main id="changelog" tabindex="-1">
     <ol class="timeline" aria-label="Releases, newest first">
       <li>
+        <article class="entry" id="v0-11-0-v0-56-2" aria-labelledby="v0-11-0-v0-56-2-title">
+          <div class="entry-head">
+            <h2 id="v0-11-0-v0-56-2-title"><a href="#v0-11-0-v0-56-2">0.11.0</a></h2>
+            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-10-11T21:39:11Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.11.0-v0.56.2</code></div>
+          </div>
+          <p class="headline">Complete session-lock input safety, HDR Stage strips and steadier Stage clicks</p>
+          <h3>Session-lock input safety</h3>
+          <ul>
+            <li>While the session is locked, every overview and Stage input listener and gesture hook yields to the lock screen: keyboard, pointer, touch, workspace swipes and custom gestures are no longer inspected or cancelled, so they all reach the locker.</li>
+            <li>Locking closes the overview immediately and cancels in-flight gestures, swipes, touch tracking, drags, Stage interactions and toggle polling without committing them; nothing stale resumes after unlocking.</li>
+            <li>Debug logs escape control characters in window titles, classes and workspace names.</li>
+          </ul>
+          <h3>Stage</h3>
+          <ul>
+            <li>After clicking a Stage card to switch workspaces, hover no longer recenters the scrolling layout while the pointer keeps moving right; the first leftward motion ends the guard. Set <code>stage_click_hover_recenter_guard = 0</code> to disable it.</li>
+          </ul>
+          <h3>Fixed</h3>
+          <ul>
+            <li>Workspace strip snapshots on HDR monitors keep FP16 precision, so thumbnails no longer clip or shift HDR colors.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.11.0-v0.56.2">Release notes for v0.11.0-v0.56.2 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.10.2-v0.56.2...v0.11.0-v0.56.2">Compare with v0.10.2-v0.56.2</a></div>
+        </article>
+      </li>
+      <li>
         <article class="entry" id="v0-10-2-v0-56-2" aria-labelledby="v0-10-2-v0-56-2-title">
           <div class="entry-head">
             <h2 id="v0-10-2-v0-56-2-title"><a href="#v0-10-2-v0-56-2">0.10.2</a></h2>
-            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-10-11T19:55:58Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.10.2-v0.56.2</code></div>
+            <div class="meta"><time datetime="2026-10-11T19:57:09Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.10.2-v0.56.2</code></div>
           </div>
           <p class="headline">Stop search input capture when the session locks</p>
           <h3>Session-lock input safety</h3>
@@ -225,7 +250,7 @@
         <article class="entry" id="v0-10-1-v0-56-2" aria-labelledby="v0-10-1-v0-56-2-title">
           <div class="entry-head">
             <h2 id="v0-10-1-v0-56-2-title"><a href="#v0-10-1-v0-56-2">0.10.1</a></h2>
-            <div class="meta"><time datetime="2026-10-11T19:08:19Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.10.1-v0.56.2</code></div>
+            <div class="meta"><time datetime="2026-10-11T19:08:56Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.10.1-v0.56.2</code></div>
           </div>
           <p class="headline">Keep debug logs private to the current user</p>
           <h3>Debug log privacy</h3>
@@ -241,7 +266,7 @@
         <article class="entry" id="v0-10-0-v0-56-2" aria-labelledby="v0-10-0-v0-56-2-title">
           <div class="entry-head">
             <h2 id="v0-10-0-v0-56-2-title"><a href="#v0-10-0-v0-56-2">0.10.0</a></h2>
-            <div class="meta"><time datetime="2026-10-11T07:59:41Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.10.0-v0.56.2</code></div>
+            <div class="meta"><time datetime="2026-10-11T08:00:35Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.10.0-v0.56.2</code></div>
           </div>
           <p class="headline">Stage framebuffer crash fixes and Omarchy integration</p>
           <h3>Stage rendering and color formats</h3>
