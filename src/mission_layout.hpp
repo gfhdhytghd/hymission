@@ -64,6 +64,8 @@ struct LayoutConfig {
     bool   rankScaleByInputOrder = false;
 };
 
+[[nodiscard]] LayoutConfig normalizeLayoutConfig(LayoutConfig config);
+
 class MissionControlLayout {
   public:
     [[nodiscard]] std::vector<WindowSlot> compute(const std::vector<WindowInput>& windows, const Rect& area, const LayoutConfig& config = {}) const;

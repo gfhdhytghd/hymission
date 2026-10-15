@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "overview_logic.hpp"
+#include "numeric_config.hpp"
+#include <limits>
 
 namespace {
 
@@ -381,6 +383,34 @@ int main() {
     ok &= expect(spatialPickDirectionForKeys(*spatialF, *spatialD) == SpatialPickDirection::Left, "FD should be a left route");
     ok &= expect(spatialPickDirectionForKeys(*spatialF, *spatialG) == SpatialPickDirection::Right, "FG should be a right route");
     ok &= expect(!spatialPickDirectionForKeys(*spatialF, *spatialPickKeyIndex('1')), "non-adjacent second keys should not resolve a direction");
+
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    for (double invalid : {nan, inf, -inf}) {
+        ok &= expect(finiteConfig(invalid, 140, 0, 2000) == 140, "invalid animation duration must use its finite default");
+        ok &= expect(!gestureScale(std::to_string(invalid)), "non-finite gesture scales must be rejected");
+        const auto mixed = computeSpatialPickMap({{invalid, 0.5}, {0.5, 0.5}, {0.5, invalid}});
+        ok &= expect(mixed.routes.size() == 1 && mixed.routes[0].windowIndex == 1,
+                     "invalid spatial centers must be skipped without renumbering valid windows");
+        for (const auto nearest : mixed.nearestWindowByKey)
+            ok &= expect(nearest == 1, "nearest spatial windows must retain their original index");
+        const auto empty = computeSpatialPickMap({{invalid, invalid}});
+        ok &= expect(empty.routes.empty(), "all-invalid spatial input must have no routes");
+        for (const auto nearest : empty.nearestWindowByKey)
+            ok &= expect(!nearest, "all-invalid spatial input must have no nearest window");
+        const auto rect = lerpRect({0, 0, 100, 100}, {100, 80, 50, 60}, invalid);
+        ok &= expectRect(rect, {100, 80, 50, 60}, "invalid animation progress must complete with finite geometry");
+    }
+    ok &= expect(computeSpatialPickMap({{1e308, 1e308}}).routes.empty(), "overflowed costs must fail safely instead of looping");
+    ok &= expect(finiteConfig(1e308, 140, 0, 2000) == 2000, "large finite configuration must be bounded");
+    ok &= expect(animationMovePercent("slide nan%") == 100 && animationMovePercent("slide inf%") == 100 &&
+                 animationMovePercent("slide 50%") == 50 && animationMovePercent("slide -20%") == 0 &&
+                 animationMovePercent("slide 1e9%") == 1000, "workspace animation percentages must be finite and bounded");
+    ok &= expect(gestureScale("0.01") == 0.1F && gestureScale("100") == 10.F && !gestureScale("1abc"),
+                 "gesture scales must use the host range and consume the entire token");
+    ok &= expect(gestureFingerCount("2") == 2 && gestureFingerCount("9") == 9 && !gestureFingerCount("-1") &&
+                 !gestureFingerCount("1") && !gestureFingerCount("10") && !gestureFingerCount("3abc") &&
+                 !gestureFingerCount("9999999999999999999999999999"), "gesture finger counts must be decimal and in 2-9");
 
     const auto twoWindowSpatial = computeSpatialPickMap({{0.25, 0.5}, {0.75, 0.5}});
     std::string leftSpatialKeys;

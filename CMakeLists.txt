@@ -126,6 +126,7 @@ if(BUILD_TESTING)
   target_link_directories(hymission-overview-logic-test PRIVATE ${HYPR_DEPS_LIBRARY_DIRS} ${GLIB_LIBRARY_DIRS})
   target_link_libraries(hymission-overview-logic-test PRIVATE ${HYPR_DEPS_LIBRARIES} ${GLIB_LIBRARIES})
   add_test(NAME hymission-overview-logic-test COMMAND hymission-overview-logic-test)
+  set_tests_properties(hymission-overview-logic-test PROPERTIES TIMEOUT 10)
 endif()
 
 install(TARGETS hymission LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})

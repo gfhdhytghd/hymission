@@ -1,4 +1,5 @@
 #include "overview_controller.hpp"
+#include "numeric_config.hpp"
 #include "stage_controller.hpp"
 
 #include <algorithm>
@@ -416,7 +417,7 @@ long getConfigInt(HANDLE handle, const char* name, long fallback) {
     return fallback;
 }
 
-double getConfigFloat(HANDLE handle, const char* name, double fallback) {
+double getConfigFloat(HANDLE handle, const char* name, double fallback, double minimum, double maximum) {
     (void)handle;
 
     const auto value = Config::mgr()->getConfigValue(name);
@@ -424,10 +425,10 @@ double getConfigFloat(HANDLE handle, const char* name, double fallback) {
         return fallback;
 
     if (*value.type == typeid(Config::FLOAT))
-        return static_cast<double>(**reinterpret_cast<Config::FLOAT* const*>(value.dataptr));
+        return finiteConfig(static_cast<double>(**reinterpret_cast<Config::FLOAT* const*>(value.dataptr)), fallback, minimum, maximum);
 
     if (*value.type == typeid(Config::INTEGER))
-        return static_cast<double>(**reinterpret_cast<Config::INTEGER* const*>(value.dataptr));
+        return finiteConfig(static_cast<double>(**reinterpret_cast<Config::INTEGER* const*>(value.dataptr)), fallback, minimum, maximum);
 
     return fallback;
 }
@@ -802,24 +803,6 @@ bool shouldWrapWorkspaceIds(const WORKSPACEID targetId, const WORKSPACEID curren
     return std::min(targetId, currentId) == lowestID && std::max(targetId, currentId) == highestID;
 }
 
-float animationMovePercent(std::string style) {
-    std::ranges::transform(style, style.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-
-    std::istringstream stream(style);
-    std::string        token;
-    float              movePercent = 100.F;
-    while (stream >> token) {
-        if (!token.empty() && token.back() == '%') {
-            try {
-                movePercent = std::stof(token.substr(0, token.size() - 1));
-            } catch (...) {
-            }
-        }
-    }
-
-    return movePercent;
-}
-
 Vector2D predictedWorkspaceAnimationOffset(HANDLE handle, const PHLMONITOR& monitor, const PHLWORKSPACE& workspace, bool left, bool incoming) {
     if (!monitor || !workspace)
         return {};
@@ -865,7 +848,7 @@ Vector2D predictedWorkspaceAnimationOffset(HANDLE handle, const PHLMONITOR& moni
 }
 
 double clampUnit(double value) {
-    return std::clamp(value, 0.0, 1.0);
+    return finiteConfig(value, 1.0, 0.0, 1.0);
 }
 
 bool hasUsableWindowSize(const Vector2D& size) {
@@ -1132,13 +1115,17 @@ struct FramebufferBlitRect {
 };
 
 std::optional<FramebufferBlitRect> rectToFramebufferBlitRect(const Rect& rect, const Vector2D& framebufferSize) {
-    const GLint framebufferWidth = std::max(1, static_cast<int>(std::lround(framebufferSize.x)));
-    const GLint framebufferHeight = std::max(1, static_cast<int>(std::lround(framebufferSize.y)));
+    if (!std::isfinite(rect.x) || !std::isfinite(rect.y) || !std::isfinite(rect.width) || !std::isfinite(rect.height) ||
+        !std::isfinite(framebufferSize.x) || !std::isfinite(framebufferSize.y) || framebufferSize.x < 1.0 || framebufferSize.y < 1.0 ||
+        framebufferSize.x > std::numeric_limits<GLint>::max() || framebufferSize.y > std::numeric_limits<GLint>::max())
+        return std::nullopt;
+    const GLint framebufferWidth = static_cast<GLint>(framebufferSize.x);
+    const GLint framebufferHeight = static_cast<GLint>(framebufferSize.y);
 
-    const GLint left = std::clamp(static_cast<GLint>(std::floor(rect.x)), 0, framebufferWidth);
-    const GLint right = std::clamp(static_cast<GLint>(std::ceil(rect.x + rect.width)), 0, framebufferWidth);
-    const GLint topFromTop = std::clamp(static_cast<GLint>(std::floor(rect.y)), 0, framebufferHeight);
-    const GLint bottomFromTop = std::clamp(static_cast<GLint>(std::ceil(rect.y + rect.height)), 0, framebufferHeight);
+    const GLint left = static_cast<GLint>(std::clamp(std::floor(rect.x), 0.0, static_cast<double>(framebufferWidth)));
+    const GLint right = static_cast<GLint>(std::clamp(std::ceil(rect.x + rect.width), 0.0, static_cast<double>(framebufferWidth)));
+    const GLint topFromTop = static_cast<GLint>(std::clamp(std::floor(rect.y), 0.0, static_cast<double>(framebufferHeight)));
+    const GLint bottomFromTop = static_cast<GLint>(std::clamp(std::ceil(rect.y + rect.height), 0.0, static_cast<double>(framebufferHeight)));
     const GLint bottom = framebufferHeight - bottomFromTop;
     const GLint top = framebufferHeight - topFromTop;
 
@@ -4384,7 +4371,7 @@ void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, co
     const Rect   shadowRect = inflateRect(previewRect, borderSize + shadowRange, borderSize + shadowRange);
     CBox         shadowBox = toBox(rectToMonitorRenderLocal(shadowRect, monitor)).round();
     const double renderScale = renderScaleForMonitor(monitor);
-    const float  shadowScale = std::clamp(static_cast<float>(*PSHADOWSCALE), 0.0F, 1.0F);
+    const float  shadowScale = static_cast<float>(finiteConfig(*PSHADOWSCALE, 1.0, 0.0, 1.0));
     shadowBox.scaleFromCenter(shadowScale);
     const auto shadowOffset = *PSHADOWOFFSET;
     shadowBox.translate(Vector2D{shadowOffset.x * decorationScale * renderScale, shadowOffset.y * decorationScale * renderScale});
@@ -5094,8 +5081,8 @@ CRegion OverviewController::surfaceVisibleRegionHook(void* surfacePassThisptr, b
 }
 
 LayoutConfig OverviewController::loadLayoutConfig() const {
-    const double outerPadding = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding", 32));
-    return {
+    const double outerPadding = std::clamp(getConfigInt(m_handle, "plugin:hymission:outer_padding", 32), 0L, 4096L);
+    return normalizeLayoutConfig({
         .engine = parseLayoutEngine(getConfigString(m_handle, "plugin:hymission:layout_engine", "grid")),
         .outerPaddingTop = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_top", static_cast<long>(outerPadding))),
         .outerPaddingRight = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_right", static_cast<long>(outerPadding))),
@@ -5103,15 +5090,15 @@ LayoutConfig OverviewController::loadLayoutConfig() const {
         .outerPaddingLeft = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_left", static_cast<long>(outerPadding))),
         .rowSpacing = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:row_spacing", 32)),
         .columnSpacing = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:column_spacing", 32)),
-        .smallWindowBoost = getConfigFloat(m_handle, "plugin:hymission:small_window_boost", 1.35),
-        .maxPreviewScale = getConfigFloat(m_handle, "plugin:hymission:max_preview_scale", 0.95),
+        .smallWindowBoost = getConfigFloat(m_handle, "plugin:hymission:small_window_boost", 1.35, 0.1, 4),
+        .maxPreviewScale = getConfigFloat(m_handle, "plugin:hymission:max_preview_scale", 0.95, 0, 4),
         .minWindowLength = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:min_window_length", 120)),
         .minPreviewShortEdge = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:min_preview_short_edge", 32)),
-        .layoutSpaceWeight = getConfigFloat(m_handle, "plugin:hymission:layout_space_weight", 0.10),
-        .layoutScaleWeight = getConfigFloat(m_handle, "plugin:hymission:layout_scale_weight", 1.0),
-        .minSlotScale = getConfigFloat(m_handle, "plugin:hymission:min_slot_scale", 0.10),
-        .naturalScaleFlex = getConfigFloat(m_handle, "plugin:hymission:natural_scale_flex", 0.22),
-    };
+        .layoutSpaceWeight = getConfigFloat(m_handle, "plugin:hymission:layout_space_weight", 0.10, 0, 100),
+        .layoutScaleWeight = getConfigFloat(m_handle, "plugin:hymission:layout_scale_weight", 1.0, 0, 100),
+        .minSlotScale = getConfigFloat(m_handle, "plugin:hymission:min_slot_scale", 0.10, 0, 4),
+        .naturalScaleFlex = getConfigFloat(m_handle, "plugin:hymission:natural_scale_flex", 0.22, 0, 0.25),
+    });
 }
 
 LayoutConfig OverviewController::layoutConfigForState(const State& state) const {
@@ -5140,7 +5127,7 @@ LayoutConfig OverviewController::layoutConfigForState(const State& state) const 
     }
 
     if (state.collectionPolicy.onlyActiveWorkspace)
-        config.maxPreviewScale = getConfigFloat(m_handle, "plugin:hymission:workspace_overview_max_preview_scale", config.maxPreviewScale);
+        config.maxPreviewScale = getConfigFloat(m_handle, "plugin:hymission:workspace_overview_max_preview_scale", config.maxPreviewScale, 0, 4);
     return config;
 }
 
@@ -5196,7 +5183,7 @@ std::string OverviewController::hoverRelayoutAnimationConfig() const {
 }
 
 double OverviewController::hoverRelayoutDurationMs() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hover_relayout_duration", RELAYOUT_DURATION_MS), 0.0, 2000.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hover_relayout_duration", RELAYOUT_DURATION_MS, 0, 2000), 0.0, 2000.0);
 }
 
 HoverRelayoutCurve OverviewController::hoverRelayoutCurve() const {
@@ -5204,11 +5191,11 @@ HoverRelayoutCurve OverviewController::hoverRelayoutCurve() const {
 }
 
 double OverviewController::selectedExpandScale() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:selected_expand_scale", SELECTED_WINDOW_LAYOUT_EMPHASIS), 1.0, 2.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:selected_expand_scale", SELECTED_WINDOW_LAYOUT_EMPHASIS, 1, 2), 1.0, 2.0);
 }
 
 double OverviewController::hoverExpandScale() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hover_expand_scale", SELECTED_WINDOW_LAYOUT_EMPHASIS), 1.0, 2.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hover_expand_scale", SELECTED_WINDOW_LAYOUT_EMPHASIS, 1, 2), 1.0, 2.0);
 }
 
 bool OverviewController::focusFollowsMouseEnabled() const {
@@ -5292,15 +5279,15 @@ bool OverviewController::hideBarAnimationBlurEnabled() const {
 }
 
 double OverviewController::hideBarAnimationMoveMultiplier() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_move_multiplier", 0.8), 0.0, 2.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_move_multiplier", 0.8, 0, 2), 0.0, 2.0);
 }
 
 double OverviewController::hideBarAnimationScaleDivisor() const {
-    return std::max(1.0, getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_scale_divisor", 1.1));
+    return std::max(1.0, getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_scale_divisor", 1.1, 1, 100));
 }
 
 double OverviewController::hideBarAnimationAlphaEnd() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_alpha_end", 0.0), 0.0, 1.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_alpha_end", 0.0, 0, 1), 0.0, 1.0);
 }
 
 bool OverviewController::barSingleMissionControlEnabled() const {
@@ -5344,11 +5331,11 @@ bool OverviewController::pickLabelsDirectActivateEnabled() const {
 }
 
 double OverviewController::focusHoverThickness() const {
-    return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:focus_hover_thickness", HOVER_THICKNESS));
+    return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:focus_hover_thickness", HOVER_THICKNESS, 0, 128));
 }
 
 double OverviewController::focusSelectedThickness() const {
-    return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:focus_selected_thickness", OUTLINE_THICKNESS));
+    return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:focus_selected_thickness", OUTLINE_THICKNESS, 0, 128));
 }
 
 bool OverviewController::backdropBlurEnabled() const {
@@ -5440,11 +5427,11 @@ bool OverviewController::niriModeEnabled() const {
 }
 
 double OverviewController::niriScrollPixelsPerDelta() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_scroll_pixels_per_delta", 1.0), 0.0, 20.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_scroll_pixels_per_delta", 1.0, 0, 20), 0.0, 20.0);
 }
 
 double OverviewController::niriWorkspaceScale() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_workspace_scale", 1.0), 0.05, 1.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_workspace_scale", 1.0, 0.05, 1), 0.05, 1.0);
 }
 
 double OverviewController::niriScrollingPreviewGap() const {
@@ -5804,7 +5791,7 @@ double OverviewController::workspaceSwipeViewportDistance(const PHLMONITOR& moni
         return 1.0;
 
     const double gaps = static_cast<double>(getConfigInt(m_handle, "general:gaps_workspaces", 0));
-    return (axis == WorkspaceTransitionAxis::Vertical ? static_cast<double>(monitor->m_size.y) : static_cast<double>(monitor->m_size.x)) + gaps;
+    return finiteConfig((axis == WorkspaceTransitionAxis::Vertical ? static_cast<double>(monitor->m_size.y) : static_cast<double>(monitor->m_size.x)) + gaps, 1.0, 1.0, 1000000.0);
 }
 
 int OverviewController::resolveOverviewWorkspaceSwipeStep(eTrackpadGestureDirection direction, double totalDelta, double lastDelta) const {
@@ -5818,7 +5805,7 @@ int OverviewController::resolveOverviewWorkspaceSwipeStep(eTrackpadGestureDirect
         adjustedLast = -adjustedLast;
     }
 
-    const double cancelRatio = std::clamp(getConfigFloat(m_handle, "gestures:workspace_swipe_cancel_ratio", 0.5), 0.0, 1.0);
+    const double cancelRatio = std::clamp(getConfigFloat(m_handle, "gestures:workspace_swipe_cancel_ratio", 0.5, 0, 1), 0.0, 1.0);
     const double distanceThreshold = gestureSwipeDistance() * cancelRatio;
     const double speedThreshold = gestureForceSpeedThreshold();
     const double decisive = std::abs(adjustedLast) >= speedThreshold ? adjustedLast : adjustedTotal;
@@ -5958,7 +5945,7 @@ void OverviewController::clearRegisteredTrackpadGestures() {
 void OverviewController::rememberRegisteredTrackpadGesture(const GestureRegistration& gesture) {
     std::erase_if(m_registeredGestures, [&](const GestureRegistration& existing) {
         return existing.fingerCount == gesture.fingerCount && existing.direction == gesture.direction && existing.modMask == gesture.modMask &&
-            std::abs(existing.deltaScale - gesture.deltaScale) <= 0.0001F && existing.disableInhibit == gesture.disableInhibit;
+            existing.deltaScale == gesture.deltaScale && existing.disableInhibit == gesture.disableInhibit;
     });
     m_registeredGestures.push_back(gesture);
 }
@@ -6010,12 +5997,10 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
     if (tokens.size() < 3)
         return fallbackToHyprlandGesture();
 
-    std::size_t fingerCount = 0;
-    try {
-        fingerCount = static_cast<std::size_t>(std::stoul(tokens[0]));
-    } catch (const std::exception&) {
-        return fallbackToHyprlandGesture();
-    }
+    const auto parsedFingerCount = gestureFingerCount(tokens[0]);
+    if (!parsedFingerCount)
+        return std::string{"invalid gesture finger count: "} + tokens[0];
+    const std::size_t fingerCount = *parsedFingerCount;
 
     const auto direction = g_pTrackpadGestures->dirForString(tokens[1]);
     const bool axisDirection = direction == TRACKPAD_GESTURE_DIR_VERTICAL || direction == TRACKPAD_GESTURE_DIR_HORIZONTAL;
@@ -6035,11 +6020,10 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
         }
 
         if (token.starts_with("scale:")) {
-            try {
-                deltaScale = std::stof(trimCopy(token.substr(6)));
-            } catch (const std::exception&) {
+            const auto parsedScale = gestureScale(trimCopy(token.substr(6)));
+            if (!parsedScale)
                 return std::string{"invalid gesture scale: "} + token;
-            }
+            deltaScale = *parsedScale;
             continue;
         }
 
@@ -7021,7 +7005,7 @@ void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
     if (!m_workspaceTransition.active)
         return;
 
-    const double cancelRatio = std::clamp(getConfigFloat(m_handle, "gestures:workspace_swipe_cancel_ratio", 0.5), 0.0, 1.0);
+    const double cancelRatio = std::clamp(getConfigFloat(m_handle, "gestures:workspace_swipe_cancel_ratio", 0.5, 0, 1), 0.0, 1.0);
     const double gestureDistance = gestureSwipeDistance();
     const double speedThreshold = gestureForceSpeedThreshold();
     const double visualSpeedThreshold = speedThreshold * (m_workspaceTransition.distance / gestureDistance);
@@ -8336,7 +8320,8 @@ const SpatialPickMap& OverviewController::spatialPickMapForCurrentState() const 
         canvas.height = bottom - canvas.y;
     }
 
-    if (!haveCanvas || canvas.width <= 0.0 || canvas.height <= 0.0)
+    if (!haveCanvas || !std::isfinite(canvas.x) || !std::isfinite(canvas.y) || !std::isfinite(canvas.width) ||
+        !std::isfinite(canvas.height) || canvas.width <= 0.0 || canvas.height <= 0.0)
         canvas = makeRect(0.0, 0.0, 1.0, 1.0);
 
     const auto cacheMatches = [&] {
@@ -8362,9 +8347,13 @@ const SpatialPickMap& OverviewController::spatialPickMapForCurrentState() const 
     std::vector<SpatialPickPoint> centers;
     centers.reserve(m_state.windows.size());
 
+    std::vector<std::size_t> centerIndices;
     for (const auto& managed : m_state.windows) {
         next.windows.emplace_back(managed.window);
         const Rect rect = currentPreviewRect(managed);
+        if (!std::isfinite(rect.centerX()) || !std::isfinite(rect.centerY()))
+            continue;
+        centerIndices.push_back(next.windows.size() - 1);
         centers.push_back({
             .x = std::clamp((rect.centerX() - canvas.x) / canvas.width, 0.0, 1.0),
             .y = std::clamp((rect.centerY() - canvas.y) / canvas.height, 0.0, 1.0),
@@ -8372,6 +8361,12 @@ const SpatialPickMap& OverviewController::spatialPickMapForCurrentState() const 
     }
 
     next.map = computeSpatialPickMap(centers);
+    for (auto& route : next.map.routes)
+        route.windowIndex = centerIndices[route.windowIndex];
+    for (auto& nearest : next.map.nearestWindowByKey) {
+        if (nearest)
+            nearest = centerIndices[*nearest];
+    }
     m_spatialPickCache = std::move(next);
     return m_spatialPickCache->map;
 }
@@ -14432,7 +14427,7 @@ void OverviewController::refreshWorkspaceStripSnapshots() {
 }
 
 void OverviewController::armWorkspaceStripRefreshTimer() {
-    const auto interval = getConfigInt(m_handle, "plugin:hymission:workspace_strip_refresh_ms", 500);
+    const auto interval = std::clamp(getConfigInt(m_handle, "plugin:hymission:workspace_strip_refresh_ms", 500), 0L, 60000L);
     if (interval <= 0 || !shouldContinuouslyRefreshWorkspaceStripSnapshots() || m_state.stripEntries.empty())
         return;
 

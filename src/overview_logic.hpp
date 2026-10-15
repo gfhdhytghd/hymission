@@ -11,6 +11,8 @@
 
 namespace hymission {
 
+[[nodiscard]] float animationMovePercent(std::string style);
+
 // The teardown handoff must not inherit native workspace-animation visibility.
 // Pinned windows and active workspaces on every monitor remain eligible.
 [[nodiscard]] inline bool shouldSuppressOverviewExitWindow(bool handingOff, bool rawCapture, bool pinned, bool hasWorkspace, bool activeWorkspace) {

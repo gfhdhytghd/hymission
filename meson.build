@@ -93,7 +93,7 @@ overview_logic_test = executable('hymission-overview-logic-test',
   install: false,
 )
 
-test('hymission-overview-logic-test', overview_logic_test)
+test('hymission-overview-logic-test', overview_logic_test, timeout: 10)
 
 search_child_process_test = executable('hymission-search-child-process-test',
   'tools/search_child_process_test.cpp',
