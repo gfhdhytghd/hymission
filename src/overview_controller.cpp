@@ -3557,15 +3557,13 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
         // ensureSearchInputFocus may stop an expired search. Let this event
         // continue through normal overview handling in that case.
         if (m_searchActive) {
-            switch (searchKeyAction(focused, event.state == WL_KEYBOARD_KEY_STATE_PRESSED && keysym == XKB_KEY_Escape)) {
-                case SearchKeyAction::Forward:
-                    return;
-                case SearchKeyAction::Stop:
+            const auto route = routeSearchKey(
+                searchKeyAction(focused, event.state == WL_KEYBOARD_KEY_STATE_PRESSED && keysym == XKB_KEY_Escape),
+                [this] {
                     stopSearchInput();
                     rebuildVisibleState({}, true);
-                    // Leave Escape uncancelled so compositor keybinds can run.
-                    return;
-                case SearchKeyAction::Buffer:
+                },
+                [&] {
                     if (m_searchPendingKeys.size() < 256) {
                         auto* state = keyboard->m_xkbState;
                         m_searchPendingKeys.push_back({event,
@@ -3577,8 +3575,10 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
                     info.cancelled = true;
                     if (m_searchFocusTimer)
                         wl_event_source_timer_update(m_searchFocusTimer, SearchFocusWait::RETRY_MS);
-                    return;
-            }
+                });
+            if (route == SearchKeyRoute::Helper)
+                return;
+            // Resume normal overview handling, including its cancellation of Escape.
         }
     }
 

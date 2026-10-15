@@ -6,12 +6,30 @@
 namespace hymission {
 
 enum class SearchKeyAction { Forward, Buffer, Stop };
+enum class SearchKeyRoute { Helper, Overview };
 
 // Escape must remain a way out while a spawned helper is not yet usable.
 inline SearchKeyAction searchKeyAction(bool focused, bool escapePressed) {
     if (focused)
         return SearchKeyAction::Forward;
     return escapePressed ? SearchKeyAction::Stop : SearchKeyAction::Buffer;
+}
+
+// Stopping an unavailable helper must resume overview handling of this same
+// event. Returning directly to the compositor would leak it to the client below.
+template <typename StopSearch, typename BufferKey>
+[[nodiscard]] SearchKeyRoute routeSearchKey(SearchKeyAction action, StopSearch stopSearch, BufferKey bufferKey) {
+    switch (action) {
+        case SearchKeyAction::Stop:
+            stopSearch();
+            return SearchKeyRoute::Overview;
+        case SearchKeyAction::Buffer:
+            bufferKey();
+            return SearchKeyRoute::Helper;
+        case SearchKeyAction::Forward:
+            return SearchKeyRoute::Helper;
+    }
+    return SearchKeyRoute::Overview;
 }
 
 class SearchFocusWait {
