@@ -130,3 +130,10 @@ deferred_snapshot_test = executable('hymission-deferred-snapshot-test',
   install: false,
 )
 test('hymission-deferred-snapshot-test', deferred_snapshot_test)
+
+search_focus_test = executable('hymission-search-focus-test',
+  'tools/search_focus_test.cpp',
+  include_directories: include_directories('src'),
+  install: false,
+)
+test('hymission-search-focus-test', search_focus_test, timeout: 5)

@@ -3551,29 +3551,39 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
         return;
     }
 
+    const xkb_keysym_t keysym = xkb_state_key_get_one_sym(keyboard->m_xkbState, event.keycode + 8);
     if (m_searchActive && m_searchInputFd >= 0) {
-        // A spawned helper is not necessarily mapped or focused yet. Never let
-        // search keystrokes reach the application underneath the overview.
-        if (!ensureSearchInputFocus()) {
-            if (m_searchPendingKeys.size() < 256) {
-                auto* state = keyboard->m_xkbState;
-                m_searchPendingKeys.push_back({event,
-                    xkb_state_serialize_mods(state, XKB_STATE_MODS_DEPRESSED),
-                    xkb_state_serialize_mods(state, XKB_STATE_MODS_LATCHED),
-                    xkb_state_serialize_mods(state, XKB_STATE_MODS_LOCKED),
-                    xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE)});
+        const bool focused = ensureSearchInputFocus();
+        // ensureSearchInputFocus may stop an expired search. Let this event
+        // continue through normal overview handling in that case.
+        if (m_searchActive) {
+            switch (searchKeyAction(focused, event.state == WL_KEYBOARD_KEY_STATE_PRESSED && keysym == XKB_KEY_Escape)) {
+                case SearchKeyAction::Forward:
+                    return;
+                case SearchKeyAction::Stop:
+                    stopSearchInput();
+                    rebuildVisibleState({}, true);
+                    // Leave Escape uncancelled so compositor keybinds can run.
+                    return;
+                case SearchKeyAction::Buffer:
+                    if (m_searchPendingKeys.size() < 256) {
+                        auto* state = keyboard->m_xkbState;
+                        m_searchPendingKeys.push_back({event,
+                            xkb_state_serialize_mods(state, XKB_STATE_MODS_DEPRESSED),
+                            xkb_state_serialize_mods(state, XKB_STATE_MODS_LATCHED),
+                            xkb_state_serialize_mods(state, XKB_STATE_MODS_LOCKED),
+                            xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE)});
+                    }
+                    info.cancelled = true;
+                    if (m_searchFocusTimer)
+                        wl_event_source_timer_update(m_searchFocusTimer, SearchFocusWait::RETRY_MS);
+                    return;
             }
-            info.cancelled = true;
-            if (m_searchFocusTimer)
-                wl_event_source_timer_update(m_searchFocusTimer, 8);
         }
-        return;
     }
 
     if (event.state != WL_KEYBOARD_KEY_STATE_PRESSED)
         return;
-
-    const xkb_keysym_t keysym = xkb_state_key_get_one_sym(keyboard->m_xkbState, event.keycode + 8);
 
     if (!overviewTextInputAllowed(keyboard->getModifiers(), HL_MODIFIER_CTRL | HL_MODIFIER_ALT | HL_MODIFIER_META)) {
         clearPickLabelPrefixState();
@@ -3652,7 +3662,19 @@ bool OverviewController::ensureSearchInputFocus() {
         return false;
     }
 
-    if (!m_searchActive || m_searchInputPid <= 0 || !g_pSeatManager)
+    if (!m_searchActive || m_searchInputPid <= 0)
+        return false;
+
+    const auto now = SearchFocusWait::Clock::now();
+    m_searchFocusWait.begin(now);
+    if (m_searchFocusWait.expired(now)) {
+        stopSearchInput();
+        if (isVisible() && m_state.phase != Phase::Closing && m_state.phase != Phase::ClosingSettle)
+            rebuildVisibleState({}, true);
+        notifySearchFailureOnce("[hymission] search input helper timed out waiting for keyboard focus");
+        return false;
+    }
+    if (!g_pSeatManager)
         return false;
 
     for (const auto& layer : Desktop::viewState()->layers()) {
@@ -3681,6 +3703,7 @@ bool OverviewController::ensureSearchInputFocus() {
             }
         }
         m_searchPendingKeys.clear();
+        m_searchFocusWait.reset();
         return true;
     }
     return false;
@@ -3736,6 +3759,8 @@ bool OverviewController::startSearchInput() {
     m_searchInputFd = sockets[0];
     m_searchInputPid = pid;
     m_searchActive = true;
+    m_searchFocusWait.reset();
+    m_searchFocusWait.begin(SearchFocusWait::Clock::now());
     m_searchPreeditActive = false;
     m_searchQuery.clear();
     m_searchNormalizedQuery.clear();
@@ -3755,18 +3780,19 @@ bool OverviewController::startSearchInput() {
     m_searchFocusTimer = wl_event_loop_add_timer(loop, [](void* data) {
         auto* controller = static_cast<OverviewController*>(data);
         if (controller->m_searchActive && !controller->ensureSearchInputFocus() && controller->m_searchFocusTimer)
-            wl_event_source_timer_update(controller->m_searchFocusTimer, 8);
+            wl_event_source_timer_update(controller->m_searchFocusTimer, SearchFocusWait::RETRY_MS);
         return 0;
     }, this);
     if (!m_searchFocusTimer) {
         stopSearchInput();
         return false;
     }
-    wl_event_source_timer_update(m_searchFocusTimer, 8);
+    wl_event_source_timer_update(m_searchFocusTimer, SearchFocusWait::RETRY_MS);
     return true;
 }
 
 void OverviewController::stopSearchInput(bool clearSearchState) {
+    m_searchFocusWait.reset();
     if (m_searchFocusTimer) {
         wl_event_source_remove(m_searchFocusTimer);
         m_searchFocusTimer = nullptr;

@@ -1,5 +1,6 @@
 #pragma once
 #include "search_child_process.hpp"
+#include "search_focus.hpp"
 #include "deferred_snapshot.hpp"
 #include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 
@@ -1089,6 +1090,7 @@ class OverviewController {
     std::string               m_searchQuery;
     std::string               m_searchNormalizedQuery;
     wl_event_source*          m_searchFocusTimer = nullptr;
+    SearchFocusWait           m_searchFocusWait;
     struct PendingSearchKey {
         IKeyboard::SKeyEvent event;
         uint32_t depressed = 0, latched = 0, locked = 0, group = 0;
