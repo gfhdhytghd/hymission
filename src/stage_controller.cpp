@@ -68,7 +68,7 @@
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
 #include <hyprland/src/layout/supplementary/WorkspaceAlgoMatcher.hpp>
 
-#include "vendor/nlohmann/json.hpp"
+#include "state_json.hpp"
 
 namespace hymission {
 namespace {
@@ -3527,7 +3527,7 @@ std::string StageController::Impl::stateJson() const {
                                      {"scroll", screen.scroll}, {"max_scroll", screen.geometry.maxScroll}, {"covered", screen.covered}, {"suspended", screen.suspended},
                                      {"cards", cards}});
     }
-    return result.dump() + "\n";
+    return dumpStateJson(result) + "\n";
 }
 
 StageController::StageController(HANDLE handle, std::function<bool()> suspended,

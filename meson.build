@@ -137,3 +137,10 @@ search_focus_test = executable('hymission-search-focus-test',
   install: false,
 )
 test('hymission-search-focus-test', search_focus_test, timeout: 5)
+
+state_json_test = executable('hymission-state-json-test',
+  'tools/state_json_test.cpp',
+  include_directories: include_directories('src'),
+  install: false,
+)
+test('hymission-state-json-test', state_json_test)

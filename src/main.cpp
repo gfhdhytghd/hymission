@@ -15,7 +15,7 @@ extern "C" {
 #include <lua.h>
 }
 
-#include "vendor/nlohmann/json.hpp"
+#include "state_json.hpp"
 #include "overview_controller.hpp"
 #include "stage_controller.hpp"
 #include "dispatcher_names.hpp"
@@ -490,8 +490,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             const auto split = args.find(' ');
             const auto r = split != std::string::npos && g_stageController ?
                 g_stageController->holdRegion(args.substr(split + 1)) : std::nullopt;
-            return r ? nlohmann::json{{"x", r->x}, {"y", r->y}, {"width", r->width}, {"height", r->height},
-                                      {"monitor", args.substr(split + 1)}, {"visible", true}}.dump() : "null";
+            return r ? hymission::dumpStateJson(nlohmann::json{{"x", r->x}, {"y", r->y}, {"width", r->width}, {"height", r->height},
+                                      {"monitor", args.substr(split + 1)}, {"visible", true}}) : "null";
         },
     });
 

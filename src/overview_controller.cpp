@@ -31,7 +31,7 @@
 #include <unistd.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
-#include "vendor/nlohmann/json.hpp"
+#include "state_json.hpp"
 
 #define private public
 #include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
@@ -2878,7 +2878,7 @@ std::string OverviewController::overviewStateJson() const {
     };
 
     if (!isVisible())
-        return root.dump() + "\n";
+        return dumpStateJson(root) + "\n";
 
     std::size_t zIndex = 0;
     for (const auto& managed : m_state.windows) {
@@ -2919,7 +2919,7 @@ std::string OverviewController::overviewStateJson() const {
         root["windows"].push_back(std::move(item));
     }
 
-    return root.dump() + "\n";
+    return dumpStateJson(root) + "\n";
 }
 
 std::string OverviewController::handleRawWindowRenderCommand(const std::string& args) {
