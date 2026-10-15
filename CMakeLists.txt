@@ -69,6 +69,9 @@ add_executable(hymission-layout-demo
 target_include_directories(hymission-layout-demo PRIVATE src)
 
 if(BUILD_TESTING)
+  add_executable(hymission-config-command-test tools/config_command_test.cpp)
+  target_include_directories(hymission-config-command-test PRIVATE src)
+  add_test(NAME hymission-config-command-test COMMAND hymission-config-command-test)
   add_executable(hymission-input-guard-test tools/input_guard_test.cpp)
   target_include_directories(hymission-input-guard-test PRIVATE src)
   add_test(NAME hymission-input-guard-test COMMAND hymission-input-guard-test)

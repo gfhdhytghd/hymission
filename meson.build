@@ -116,3 +116,10 @@ input_guard_test = executable('hymission-input-guard-test',
   install: false,
 )
 test('hymission-input-guard-test', input_guard_test)
+
+config_command_test = executable('hymission-config-command-test',
+  'tools/config_command_test.cpp',
+  include_directories: include_directories('src'),
+  install: false,
+)
+test('hymission-config-command-test', config_command_test)
