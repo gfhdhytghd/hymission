@@ -2355,6 +2355,7 @@ OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
 }
 
 OverviewController::~OverviewController() {
+    cancelAndClearTimer(m_hiddenStripProxyRefreshTimer);
     cancelAndClearTimer(m_stripRefreshTimer);
     stopSearchInput();
     setDamageTrackingOverride(false);
@@ -3045,6 +3046,7 @@ void OverviewController::renderStage(eRenderStage stage) {
         flushQueuedRealFocusDuringOverview();
         renderBackdrop();
     } else if (stage == RENDER_POST_WINDOWS) {
+        scheduleHiddenStripLayerProxyRefresh();
         if (m_deactivatePending) {
             if (debugLogsEnabled())
                 debugLog("[hymission] post-windows queue deferred deactivate");
@@ -8049,7 +8051,7 @@ bool OverviewController::shouldSyncRealFocusDuringOverview() const {
 }
 
 bool OverviewController::insideRenderLifecycle() const {
-    return m_surfaceRenderDataTransformDepth > 0 || m_stripSnapshotRenderDepth > 0 || (g_pHyprOpenGL && g_pHyprRenderer->m_renderData.pMonitor);
+    return m_surfaceRenderDataTransformDepth > 0 || m_stripSnapshotRenderDepth > 0 || (g_pHyprRenderer && g_pHyprRenderer->m_renderData.pMonitor);
 }
 
 bool OverviewController::ownsMonitor(const PHLMONITOR& monitor) const {
@@ -8959,6 +8961,8 @@ double OverviewController::hiddenStripLayerProgress(const PHLLS& layer, const PH
 }
 
 void OverviewController::clearHiddenStripLayerProxies() {
+    cancelAndClearTimer(m_hiddenStripProxyRefreshTimer);
+    m_hiddenStripProxyRefresh.reset();
     m_hiddenStripLayerProxies.clear();
 }
 
@@ -8975,6 +8979,11 @@ const OverviewController::HiddenStripLayerProxy* OverviewController::hiddenStrip
 }
 
 bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const PHLMONITOR& monitor) {
+    if (insideRenderLifecycle() || (g_pHyprRenderer && g_pHyprRenderer->m_renderData.pMonitor)) {
+        m_hiddenStripProxyRefresh.request();
+        scheduleHiddenStripLayerProxyRefresh();
+        return false;
+    }
     if (!layer || !monitor || !g_pHyprRenderer || !g_pHyprOpenGL || !shouldHideLayerSurface(layer, monitor))
         return false;
 
@@ -8996,6 +9005,9 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
     const int fbWidth = std::max(1, static_cast<int>(std::ceil(proxyRectGlobal.width * renderScaleForMonitor(monitor))));
     const int fbHeight = std::max(1, static_cast<int>(std::ceil(proxyRectGlobal.height * renderScaleForMonitor(monitor))));
 
+    // Snapshot rendering can emit render events; keep our overlay out of it.
+    ++m_stripSnapshotRenderDepth;
+    Hyprutils::Utils::CScopeGuard restoreDepth{[this] { --m_stripSnapshotRenderDepth; }};
     g_pHyprOpenGL->makeEGLCurrent();
     auto sourceFramebuffer = layerFramebufferFor(layer);
     if (!sourceFramebuffer || !sourceFramebuffer->isAllocated() || !sourceFramebuffer->getTexture()) {
@@ -9014,21 +9026,12 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
         return false;
     }
 
-    auto* existing = hiddenStripLayerProxyFor(layer, monitor);
-    if (!existing) {
-        HiddenStripLayerProxy proxy;
-        proxy.layer = layer;
-        proxy.monitor = monitor;
-        proxy.capturedRectGlobal = capturedRectGlobal;
-        proxy.proxyRectGlobal = proxyRectGlobal;
-        proxy.snapshotSize = Vector2D{static_cast<double>(fbWidth), static_cast<double>(fbHeight)};
-        proxy.framebuffer = createFramebuffer("hymission hidden strip layer");
-        for (auto& blurredFramebuffer : proxy.blurredFramebuffers)
-            blurredFramebuffer = createFramebuffer("hymission hidden strip layer blur");
-        m_hiddenStripLayerProxies.push_back(std::move(proxy));
-        existing = &m_hiddenStripLayerProxies.back();
-    }
-
+    // Build into fresh storage. Allocation, cropping, blitting or blur failure
+    // must not destroy the last usable proxy (including its old geometry).
+    HiddenStripLayerProxy candidate;
+    candidate.layer = layer;
+    candidate.monitor = monitor;
+    auto* existing = &candidate;
     existing->capturedRectGlobal = capturedRectGlobal;
     existing->proxyRectGlobal = proxyRectGlobal;
     existing->snapshotSize = Vector2D{static_cast<double>(fbWidth), static_cast<double>(fbHeight)};
@@ -9038,6 +9041,9 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
         if (!blurredFramebuffer)
             blurredFramebuffer = createFramebuffer("hymission hidden strip layer blur");
     }
+
+    if (!existing->framebuffer)
+        return false;
 
     if (!existing->framebuffer->isAllocated() || std::abs(existing->framebuffer->m_size.x - fbWidth) > 0.5 || std::abs(existing->framebuffer->m_size.y - fbHeight) > 0.5) {
         existing->framebuffer->release();
@@ -9054,6 +9060,8 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
     }
 
     for (auto& blurredFramebuffer : existing->blurredFramebuffers) {
+        if (!blurredFramebuffer)
+            return false;
         if (!blurredFramebuffer->isAllocated() || std::abs(blurredFramebuffer->m_size.x - fbWidth) > 0.5 || std::abs(blurredFramebuffer->m_size.y - fbHeight) > 0.5) {
             blurredFramebuffer->release();
             if (!blurredFramebuffer->alloc(fbWidth, fbHeight)) {
@@ -9159,10 +9167,34 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
             out << "[hymission] strip-bar capture blur build failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name;
             debugLog(out.str());
         }
-        return true;
+        return false;
     }
 
+    if (auto* previous = hiddenStripLayerProxyFor(layer, monitor))
+        *previous = std::move(candidate);
+    else
+        m_hiddenStripLayerProxies.push_back(std::move(candidate));
     return true;
+}
+
+void OverviewController::scheduleHiddenStripLayerProxyRefresh() {
+    if (!m_hiddenStripProxyRefresh.pending() || m_hiddenStripProxyRefreshTimer || !g_pEventLoopManager)
+        return;
+
+    armOrRescheduleTimer(m_hiddenStripProxyRefreshTimer, std::chrono::milliseconds(1), [this](SP<CEventLoopTimer>, void*) {
+        cancelAndClearTimer(m_hiddenStripProxyRefreshTimer);
+        if (g_controller != this || sessionLocked())
+            return;
+        // A nested event loop may fire this during rendering. Leave it pending;
+        // POST_WINDOWS will queue the next attempt. Never self-reschedule here.
+        if (insideRenderLifecycle() || (g_pHyprRenderer && g_pHyprRenderer->m_renderData.pMonitor))
+            return;
+        if (m_hiddenStripProxyRefresh.pending()) {
+            syncHiddenStripLayerProxies();
+            if (isVisible())
+                damageOwnedMonitors();
+        }
+    });
 }
 
 void OverviewController::syncHiddenStripLayerProxies() {
@@ -9170,6 +9202,13 @@ void OverviewController::syncHiddenStripLayerProxies() {
         clearHiddenStripLayerProxies();
         return;
     }
+
+    m_hiddenStripProxyRefresh.request();
+    if (!m_hiddenStripProxyRefresh.take(insideRenderLifecycle() || (g_pHyprRenderer && g_pHyprRenderer->m_renderData.pMonitor))) {
+        scheduleHiddenStripLayerProxyRefresh();
+        return;
+    }
+    cancelAndClearTimer(m_hiddenStripProxyRefreshTimer);
 
     std::vector<std::pair<PHLLS, PHLMONITOR>> desired;
     for (const auto& layer : Desktop::viewState()->layers()) {
@@ -9184,9 +9223,6 @@ void OverviewController::syncHiddenStripLayerProxies() {
             out << "[hymission] strip-bar sync namespace=" << layer->m_namespace << " monitor="
                 << (monitor ? monitor->m_name : std::string("<null-monitor>")) << " captured=" << (captured ? 1 : 0);
             debugLog(out.str());
-        }
-        if (!captured) {
-            std::erase_if(m_hiddenStripLayerProxies, [&](const HiddenStripLayerProxy& proxy) { return proxy.layer == layer && proxy.monitor == monitor; });
         }
     }
 
@@ -11570,7 +11606,6 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     if (m_state.selectedIndex && *m_state.selectedIndex < m_state.windows.size())
         latchHoverSelectionAnchor(g_pInputManager->getMouseCoordsInternal());
     applyWorkspaceNameOverrides(m_state);
-    clearHiddenStripLayerProxies();
     syncHiddenStripLayerProxies();
     setInputFollowMouseOverride(true);
     setScrollingFollowFocusOverride(true);
@@ -11737,7 +11772,6 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
     m_state.deferredFullscreenWorkspaceClear = false;
     m_state.deferredHiddenFullscreenReapply = false;
     m_deactivatePending = false;
-    clearHiddenStripLayerProxies();
     syncHiddenStripLayerProxies();
 
     if (debugLogsEnabled()) {

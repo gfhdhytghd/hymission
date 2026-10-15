@@ -1,5 +1,6 @@
 #pragma once
 #include "search_child_process.hpp"
+#include "deferred_snapshot.hpp"
 #include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 
 #include <array>
@@ -717,6 +718,7 @@ class OverviewController {
     [[nodiscard]] double                        hiddenStripLayerProgress(const PHLLS& layer, const PHLMONITOR& monitor) const;
     void                                        clearHiddenStripLayerProxies();
     void                                        syncHiddenStripLayerProxies();
+    void                                        scheduleHiddenStripLayerProxyRefresh();
     [[nodiscard]] bool                          captureHiddenStripLayerProxy(const PHLLS& layer, const PHLMONITOR& monitor);
     [[nodiscard]] HiddenStripLayerProxy*        hiddenStripLayerProxyFor(const PHLLS& layer, const PHLMONITOR& monitor);
     [[nodiscard]] const HiddenStripLayerProxy*  hiddenStripLayerProxyFor(const PHLLS& layer, const PHLMONITOR& monitor) const;
@@ -1006,6 +1008,8 @@ class OverviewController {
     std::vector<FullscreenAlphaBackup> m_fullscreenAlphaBackups;
     StripPreviewContext      m_stripPreviewContext;
     std::vector<HiddenStripLayerProxy> m_hiddenStripLayerProxies;
+    DeferredSnapshotRefresh m_hiddenStripProxyRefresh;
+    SP<CEventLoopTimer> m_hiddenStripProxyRefreshTimer;
     bool                     m_applyingWorkspaceTransitionCommit = false;
     bool                     m_applyingThumbnailNewWindowPlacement = false;
     bool                     m_rebuildVisibleStateAfterWorkspaceTransitionCommit = false;

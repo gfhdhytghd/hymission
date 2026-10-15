@@ -123,3 +123,10 @@ config_command_test = executable('hymission-config-command-test',
   install: false,
 )
 test('hymission-config-command-test', config_command_test)
+
+deferred_snapshot_test = executable('hymission-deferred-snapshot-test',
+  'tools/deferred_snapshot_test.cpp',
+  include_directories: include_directories('src'),
+  install: false,
+)
+test('hymission-deferred-snapshot-test', deferred_snapshot_test)
