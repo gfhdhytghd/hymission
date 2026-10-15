@@ -1,4 +1,8 @@
 #pragma once
+
+#include "workspace_key.hpp"
+#include <hyprland/src/desktop/view/window/WindowPresentation.hpp>
+#include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include "search_child_process.hpp"
 #include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 
@@ -114,15 +118,16 @@ class OverviewController {
     void handleWorkspaceChange(PHLWORKSPACE workspace);
     void handleMonitorChange(PHLMONITOR monitor);
     bool                shouldRenderWindowHook(const PHLWINDOW& window, const PHLMONITOR& monitor);
-    float               effectiveAlphaHook(void* windowThisptr);
-    void                borderDrawHook(void* borderDecorationThisptr, const PHLMONITOR& monitor, const float& alpha);
-    void                customShadowHook(void*, const CBox&, int, float, int, const Config::CGradientValueData&, float);
-    void                shadowDrawHook(void* shadowDecorationThisptr, const PHLMONITOR& monitor, const float& alpha);
-    void                groupBarDrawHook(void* groupBarDecorationThisptr, const PHLMONITOR& monitor, const float& alpha);
+    Render::SWindowRenderPresentation effectiveAlphaHook(const Desktop::View::CWindowPresentation* presentation, Render::eSceneMode mode);
+    void                borderDrawHook(void* borderDecorationThisptr, const PHLMONITOR& monitor, const float& alpha, const Render::SWindowRenderPresentation& presentation);
+    void                customShadowHook(void*, const CBox&, int, float, int, const Config::CGradientValueData&, float, const Render::SWindowRenderPresentation&);
+    void                shadowDrawHook(void* shadowDecorationThisptr, const PHLMONITOR& monitor, const float& alpha, const Render::SWindowRenderPresentation& presentation);
+    void                groupBarDrawHook(void* groupBarDecorationThisptr, const PHLMONITOR& monitor, const float& alpha, const Render::SWindowRenderPresentation& presentation);
     void                calculateUVForSurfaceHook(const PHLWINDOW& window, SP<CWLSurfaceResource> surface, const PHLMONITOR& monitor, bool main, const Vector2D& projSize,
                                                   const Vector2D& projSizeUnscaled, bool fixMisalignedFSV1);
     void                rendererDrawElementHook(void* rendererThisptr, WP<IPassElement> element, const CRegion& damage);
     void                renderLayerHook(void* rendererThisptr, PHLLS layer, PHLMONITOR monitor, const Time::steady_tp& now, bool popups, bool lockscreen);
+    std::optional<Config::Actions::ActionResult> queueNativeFullscreenAction(std::function<Config::Actions::ActionResult()> action);
     [[nodiscard]] SDispatchResult fullscreenDispatcherHook(std::string args);
     [[nodiscard]] SDispatchResult fullscreenStateDispatcherHook(std::string args);
     [[nodiscard]] SDispatchResult changeWorkspaceDispatcherHook(std::string args);
@@ -142,7 +147,7 @@ class OverviewController {
     void                       workspaceSwipeBeginHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e);
     void                       workspaceSwipeUpdateHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureUpdate& e);
     void                       workspaceSwipeEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e);
-    void                       unifiedWorkspaceSwipeBeginHook(void* gestureThisptr);
+    bool                       unifiedWorkspaceSwipeBeginHook(void* gestureThisptr, PHLMONITOR monitor);
     void                       unifiedWorkspaceSwipeUpdateHook(void* gestureThisptr, double delta);
     void                       unifiedWorkspaceSwipeEndHook(void* gestureThisptr);
     [[nodiscard]] bool         handleTouchDown(const ITouch::SDownEvent& event);
@@ -243,7 +248,7 @@ class OverviewController {
 
         PHLMONITOR               monitor;
         PHLWORKSPACE             workspace;
-        WORKSPACEID              workspaceId = WORKSPACE_INVALID;
+        WorkspaceKey             workspaceId = WORKSPACE_INVALID;
         std::string              workspaceName;
         Rect                     rect;
         std::shared_ptr<Snapshot> snapshot;
@@ -270,7 +275,7 @@ class OverviewController {
         PHLMONITOR                            monitor;
         SP<Render::IFramebuffer>              framebuffer;
         SP<Render::ITexture>                  texture;
-        WORKSPACEID                           workspaceId = WORKSPACE_INVALID;
+        WorkspaceKey                          workspaceId = WORKSPACE_INVALID;
         Rect                                  from;
         Rect                                  to;
         double                                initialDim = 1.0;
@@ -365,7 +370,7 @@ class OverviewController {
     struct GestureRegistration {
         std::size_t               fingerCount = 0;
         eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_NONE;
-        uint32_t                  modMask = 0;
+        Input::ModifierMask       modMask = Input::HL_MODIFIER_NONE;
         float                     deltaScale = 1.0F;
         bool                      disableInhibit = false;
     };
@@ -414,7 +419,7 @@ class OverviewController {
     struct WorkspaceOverride {
         MONITORID    monitorId = MONITOR_INVALID;
         PHLWORKSPACE workspace;
-        WORKSPACEID  workspaceId = WORKSPACE_INVALID;
+        WorkspaceKey workspaceId = WORKSPACE_INVALID;
         std::string  workspaceName;
         bool         syntheticEmpty = false;
     };
@@ -442,7 +447,7 @@ class OverviewController {
         int                                    initialDirection = 0;
         double                                 avgSpeed = 0.0;
         int                                    speedPoints = 0;
-        WORKSPACEID                            targetWorkspaceId = WORKSPACE_INVALID;
+        WorkspaceKey                           targetWorkspaceId = WORKSPACE_INVALID;
         std::string                            targetWorkspaceName;
         bool                                   targetWorkspaceSyntheticEmpty = false;
         State                                  sourceState;
@@ -492,29 +497,28 @@ class OverviewController {
     };
 
     using SurfaceGetTexBoxFn = CBox (*)(void*);
-    using SurfaceBoundingBoxFn = std::optional<CBox> (*)(void*);
-    using SurfaceOpaqueRegionFn = CRegion (*)(void*);
-    using SurfaceVisibleRegionFn = CRegion (*)(void*, bool&);
-    using SurfaceDrawFn = std::vector<UP<IPassElement>> (*)(void*);
-    using SurfaceBlurNeedsFn = bool (*)(void*);
+    using SurfaceBoundingBoxFn = std::optional<CBox> (*)(void*, Render::CRenderContext&);
+    using SurfaceOpaqueRegionFn = CRegion (*)(void*, Render::CRenderContext&);
+    using SurfaceVisibleRegionFn = CRegion (*)(void*, Render::CRenderContext&, bool&);
+    using SurfaceDrawFn = std::vector<UP<IPassElement>> (*)(void*, Render::CRenderContext&);
+    using SurfaceBlurNeedsFn = bool (*)(void*, Render::CRenderContext&);
     using ShouldRenderWindowFn = bool (*)(void*, PHLWINDOW, PHLMONITOR);
-    using EffectiveAlphaFn = float (*)(void*);
-    using RendererDrawElementFn = void (*)(void*, WP<IPassElement>, const CRegion&);
-    using RenderLayerFn = void (*)(void*, PHLLS, PHLMONITOR, const Time::steady_tp&, bool, bool);
-    using CustomShadowFn = void (*)(void*, const CBox&, int, float, int, const Config::CGradientValueData&, float);
-    using BorderDrawFn = void (*)(void*, PHLMONITOR, const float&);
-    using CalculateUVForSurfaceFn = void (*)(void*, PHLWINDOW, SP<CWLSurfaceResource>, PHLMONITOR, bool, const Vector2D&, const Vector2D&, bool);
+    using EffectiveAlphaFn = Render::SWindowRenderPresentation (*)(const Desktop::View::CWindowPresentation*, Render::eSceneMode);
+    using RendererDrawElementFn = void (*)(void*, Render::CRenderContext&, WP<IPassElement>, const CRegion&);
+    using RenderLayerFn = void (*)(void*, Render::CRenderContext&, PHLLS, PHLMONITOR, const Time::steady_tp&, bool, bool);
+    using CustomShadowFn = void (*)(void*, Render::CRenderContext&, const CBox&, int, float, int, const Config::CGradientValueData&, float, const Render::SWindowRenderPresentation&);
+    using BorderDrawFn = void (*)(void*, Render::CRenderContext&, PHLMONITOR, const float&, const Render::SWindowRenderPresentation&);
+    using CalculateUVForSurfaceFn = void (*)(void*, Render::CRenderContext&, PHLWINDOW, SP<CWLSurfaceResource>, PHLMONITOR, bool, const Vector2D&, const Vector2D&, bool);
     using DispatcherHandler = std::function<SDispatchResult(std::string)>;
     using WorkspaceSwipeBeginFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureBegin&);
     using WorkspaceSwipeUpdateFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureUpdate&);
     using WorkspaceSwipeEndFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureEnd&);
-    using UnifiedWorkspaceSwipeBeginFn = void (*)(void*);
+    using UnifiedWorkspaceSwipeBeginFn = bool (*)(void*, PHLMONITOR);
     using UnifiedWorkspaceSwipeUpdateFn = void (*)(void*, double);
     using UnifiedWorkspaceSwipeEndFn = void (*)(void*);
     using ScrollMoveGestureBeginFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureBegin&);
     using ScrollMoveGestureUpdateFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureUpdate&);
     using ScrollMoveGestureEndFn = void (*)(void*, const ITrackpadGesture::STrackpadGestureEnd&);
-    using HandleGestureFn = std::optional<std::string> (*)(void*, const std::string&, const std::string&);
     [[nodiscard]] LayoutConfig loadLayoutConfig() const;
     [[nodiscard]] LayoutConfig layoutConfigForState(const State& state) const;
     [[nodiscard]] CollectionPolicy loadCollectionPolicy(ScopeOverride requestedScope) const;
@@ -686,9 +690,9 @@ class OverviewController {
     [[nodiscard]] bool         workspaceSwipeUsesVerticalAxis(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] double       workspaceSwipeViewportDistance(const PHLMONITOR& monitor, WorkspaceTransitionAxis axis) const;
     [[nodiscard]] std::optional<Rect> workspaceTransitionRectForWindow(const PHLWINDOW& window) const;
-    [[nodiscard]] bool         resolveOverviewWorkspaceTargetByStep(const PHLMONITOR& monitor, int step, WORKSPACEID& workspaceId, std::string& workspaceName,
+    [[nodiscard]] bool         resolveOverviewWorkspaceTargetByStep(const PHLMONITOR& monitor, int step, WorkspaceKey& workspaceId, std::string& workspaceName,
                                                                     PHLWORKSPACE& workspace, bool& syntheticEmpty) const;
-    [[nodiscard]] bool         beginOverviewWorkspaceTransition(const PHLMONITOR& monitor, WORKSPACEID workspaceId, std::string workspaceName, PHLWORKSPACE workspace,
+    [[nodiscard]] bool         beginOverviewWorkspaceTransition(const PHLMONITOR& monitor, WorkspaceKey workspaceId, std::string workspaceName, PHLWORKSPACE workspace,
                                                                bool syntheticEmpty, WorkspaceTransitionMode mode);
     [[nodiscard]] bool         beginExternalOverviewWorkspaceTransition(const PHLWORKSPACE& workspace);
     [[nodiscard]] bool         startOverviewWorkspaceTransitionByStep(const PHLMONITOR& monitor, int step, WorkspaceTransitionMode mode);
@@ -896,6 +900,7 @@ class OverviewController {
     CFunctionHook*            m_surfaceNeedsPrecomputeBlurHook = nullptr;
     CFunctionHook*            m_shouldRenderWindowHook = nullptr;
     CFunctionHook*            m_effectiveAlphaHook = nullptr;
+    CFunctionHook*            m_decorationGradientHook = nullptr;
     CFunctionHook*            m_rendererDrawElementHook = nullptr;
     CFunctionHook*            m_renderLayerHook = nullptr;
     CFunctionHook*            m_borderDrawHook = nullptr;
@@ -914,7 +919,6 @@ class OverviewController {
     CFunctionHook*            m_scrollMoveGestureBeginFunctionHook = nullptr;
     CFunctionHook*            m_scrollMoveGestureUpdateFunctionHook = nullptr;
     CFunctionHook*            m_scrollMoveGestureEndFunctionHook = nullptr;
-    CFunctionHook*            m_handleGestureHook = nullptr;
     SurfaceGetTexBoxFn        m_surfaceTexBoxOriginal = nullptr;
     SurfaceBoundingBoxFn      m_surfaceBoundingBoxOriginal = nullptr;
     SurfaceOpaqueRegionFn     m_surfaceOpaqueRegionOriginal = nullptr;
@@ -947,7 +951,6 @@ class OverviewController {
     ScrollMoveGestureBeginFn  m_scrollMoveGestureBeginOriginal = nullptr;
     ScrollMoveGestureUpdateFn m_scrollMoveGestureUpdateOriginal = nullptr;
     ScrollMoveGestureEndFn    m_scrollMoveGestureEndOriginal = nullptr;
-    HandleGestureFn           m_handleGestureOriginal = nullptr;
     bool                      m_hooksActive = false;
     bool                      m_inputFollowMouseOverridden = false;
     long                      m_inputFollowMouseBackup = 1;
@@ -993,6 +996,7 @@ class OverviewController {
     std::vector<PHLWINDOWREF> m_closePendingWindows;
     bool                      m_postCloseForcedFocusLatched = false;
     std::size_t               m_ignorePostCloseMouseMoveCount = 0;
+    std::function<Config::Actions::ActionResult()> m_postCloseNativeAction;
     PostCloseDispatcher       m_postCloseDispatcher = PostCloseDispatcher::None;
     std::string               m_postCloseDispatcherArgs;
     std::vector<GestureRegistration> m_registeredGestures;
@@ -1059,6 +1063,7 @@ class OverviewController {
     std::size_t               m_postOpenRefreshFrames = 0;
 
     CHyprSignalListener       m_renderStageListener;
+    CHyprSignalListener       m_scanoutPreChecksListener;
     CHyprSignalListener       m_mouseMoveListener;
     CHyprSignalListener       m_mouseButtonListener;
     CHyprSignalListener       m_mouseAxisListener;

@@ -11,7 +11,10 @@
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprutils/utils/ScopeGuard.hpp>
 
+#include "render_context.hpp"
+
 namespace hymission {
+
 namespace {
 using Render::GL::g_pHyprOpenGL;
 
@@ -50,9 +53,9 @@ struct GLState {
         g_pHyprOpenGL->setViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
         g_pHyprOpenGL->blend(blend);
         g_pHyprOpenGL->setCapStatus(GL_STENCIL_TEST, stencil);
-        g_pHyprOpenGL->scissor(CBox{scissor[0], scissor[1], scissor[2], scissor[3]}, false);
+        g_pHyprOpenGL->scissor(renderContext(), CBox{scissor[0], scissor[1], scissor[2], scissor[3]}, false);
         if (!scissoring)
-            g_pHyprOpenGL->scissor(nullptr);
+            g_pHyprOpenGL->disableScissor();
     }
 };
 
@@ -121,7 +124,7 @@ bool StageEdgeEffect::ensureShader() {
     if (!m_program) {
         if (m_error.empty())
             m_error = "could not create edge shader";
-        Log::logger->log(Log::ERR, "[hymission] Stage edge effect unavailable; retaining hard clip: {}", m_error);
+        LOG(Log::ERR, "[hymission] Stage edge effect unavailable; retaining hard clip: {}", m_error);
     }
     return m_program != 0;
 }
@@ -137,7 +140,7 @@ SP<Render::IFramebuffer> StageEdgeEffect::bufferFor(const PHLMONITOR& monitor, c
     const auto fail = [&]() -> SP<Render::IFramebuffer> {
         if (m_error.empty()) {
             m_error = "unsupported or unavailable scrolling window framebuffer";
-            Log::logger->log(Log::ERR, "[hymission] Stage edge effect unavailable; retaining hard clip: {} (format {}, mirror {})",
+            LOG(Log::ERR, "[hymission] Stage edge effect unavailable; retaining hard clip: {} (format {}, mirror {})",
                 m_error, destination->m_drmFormat, destinationMirror ? destinationMirror->m_drmFormat : 0);
         }
         return nullptr;
@@ -175,7 +178,7 @@ SP<Render::IFramebuffer> StageEdgeEffect::bufferFor(const PHLMONITOR& monitor, c
 
 bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport& viewport, const CBox& clip,
                            const std::function<void(const CBox&)>& drawWindow) {
-    auto& state = g_pHyprRenderer->m_renderData;
+    auto& state = renderContext().m_data;
     const auto& v = viewport.box;
     const CBox view = CBox{v.x - monitor->m_position.x, v.y - monitor->m_position.y, v.width, v.height}.scale(monitor->m_scale);
     auto hardClip = clip.intersection(view).intersection(CBox{{}, monitor->m_transformedSize});
@@ -225,7 +228,7 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
     {
         GLState restoreGL;
         fb->bind();
-        g_pHyprOpenGL->scissor(sample, true);
+        g_pHyprOpenGL->scissor(renderContext(), sample, true);
         const GLfloat transparent[4] = {0, 0, 0, 0};
         glClearBufferfv(GL_COLOR, 0, transparent);
         if (fb->getMirrorTexture())
@@ -236,10 +239,10 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
         // the transparent scratch layer. Native UV/feedback/blur stay intact.
         const auto previousBackdrop = m_backdrop;
         m_backdrop = destination;
-        g_pHyprRenderer->bindFB(fb);
+        g_pHyprRenderer->bindFB(renderContext(), fb);
         Hyprutils::Utils::CScopeGuard restoreFB{[&] {
             m_backdrop = previousBackdrop;
-            g_pHyprRenderer->bindFB(destination);
+            g_pHyprRenderer->bindFB(renderContext(), destination);
         }};
         state.damage = CRegion{sample};
         state.clipBox = sample;
@@ -285,13 +288,13 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
     glUniform1f(uniform("uMaxRadius"), maxRadius);
     // First pass fills the padded sample rectangle without opacity. The
     // second samples only that fresh rectangle and composites over the output.
-    g_pHyprRenderer->bindFB(horizontal);
+    g_pHyprRenderer->bindFB(renderContext(), horizontal);
     g_pHyprOpenGL->blend(false);
     g_pHyprOpenGL->setCapStatus(GL_STENCIL_TEST, false);
     glUniform1i(uniform("uPass"), 0);
-    g_pHyprOpenGL->scissor(sample, true);
+    g_pHyprOpenGL->scissor(renderContext(), sample, true);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    g_pHyprRenderer->bindFB(destination);
+    g_pHyprRenderer->bindFB(renderContext(), destination);
     glActiveTexture(GL_TEXTURE0);
     horizontal->getTexture()->bind();
     if (mirror) {
@@ -301,7 +304,7 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
     glUniform1i(uniform("uPass"), 1);
     g_pHyprOpenGL->blend(true);
     outputDamage.forEachRect([&](const auto& rect) {
-        g_pHyprOpenGL->scissor(&rect, true);
+        g_pHyprOpenGL->scissor(renderContext(), &rect, true);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     });
     return true;

@@ -33,7 +33,7 @@ class StageController {
     std::string stateJson() const;
     // Overview owns the native swipe entry points; Stage consumes only its own
     // gestures. Surface hook ownership is handed over before overview attaches.
-    static bool beginWorkspaceSwipe(void* gesture, void (*original)(void*));
+    static std::optional<bool> beginWorkspaceSwipe(void* gesture, PHLMONITOR monitor, bool (*original)(void*, PHLMONITOR));
     static bool updateWorkspaceSwipe(void* gesture, double delta);
     static bool endWorkspaceSwipe(void* gesture);
     // The registered trackpad gesture routes directly, without native hooks.

@@ -78,9 +78,21 @@ if(BUILD_TESTING)
   set_tests_properties(hymission-private-debug-log-test PROPERTIES TIMEOUT 10)
   find_program(HYPRLAND_TEST_EXECUTABLE Hyprland)
   if(HYPRLAND_TEST_EXECUTABLE)
+    add_library(hymission-workspace-key-test MODULE tools/workspace_key_test.cpp)
+    get_target_property(WORKSPACE_KEY_INCLUDES hymission INCLUDE_DIRECTORIES)
+    target_include_directories(hymission-workspace-key-test PRIVATE src ${WORKSPACE_KEY_INCLUDES})
+    target_link_directories(hymission-workspace-key-test PRIVATE ${HYPR_DEPS_LIBRARY_DIRS} ${LUA_LIBRARY_DIRS} ${GLIB_LIBRARY_DIRS})
+    target_link_libraries(hymission-workspace-key-test PRIVATE ${HYPR_DEPS_LIBRARIES} ${LUA_LIBRARIES} ${GLIB_LIBRARIES})
+    add_test(NAME hymission-workspace-key-test
+      COMMAND ${CMAKE_COMMAND} -E env
+        "LD_PRELOAD=$<TARGET_FILE:hymission-workspace-key-test>"
+        HYMISSION_WORKSPACE_KEY_TEST=1 ${HYPRLAND_TEST_EXECUTABLE} --version)
+    set_tests_properties(hymission-workspace-key-test PROPERTIES TIMEOUT 10
+      PASS_REGULAR_EXPRESSION "PASS: workspace identity, ordering, renames, sentinels and numbered slot bounds")
     add_library(hymission-stage-edge-native-probe MODULE tools/stage_edge_native_contract_probe.cpp)
     get_target_property(EDGE_NATIVE_INCLUDES hymission INCLUDE_DIRECTORIES)
     target_include_directories(hymission-stage-edge-native-probe PRIVATE src ${EDGE_NATIVE_INCLUDES})
+    target_link_directories(hymission-stage-edge-native-probe PRIVATE ${HYPR_DEPS_LIBRARY_DIRS} ${LUA_LIBRARY_DIRS} ${GLIB_LIBRARY_DIRS})
     target_link_libraries(hymission-stage-edge-native-probe PRIVATE ${HYPR_DEPS_LIBRARIES} ${LUA_LIBRARIES} ${GLIB_LIBRARIES})
     add_test(NAME hymission-stage-edge-native-contract-test
       COMMAND ${CMAKE_COMMAND} -E env
@@ -88,6 +100,10 @@ if(BUILD_TESTING)
         HYMISSION_NATIVE_FRAMEBUFFER_PROBE=1 ${HYPRLAND_TEST_EXECUTABLE} --version)
     set_tests_properties(hymission-stage-edge-native-contract-test PROPERTIES TIMEOUT 10
       PASS_REGULAR_EXPRESSION "PASS: Stage native GL cast, getFBID, invalidate and release")
+    foreach(libdir ${HYPR_DEPS_LIBRARY_DIRS})
+      set_property(TEST hymission-workspace-key-test hymission-stage-edge-native-contract-test APPEND PROPERTY
+        ENVIRONMENT_MODIFICATION "LD_LIBRARY_PATH=path_list_prepend:${libdir}")
+    endforeach()
   endif()
   pkg_check_modules(EDGE_TEST_GL QUIET IMPORTED_TARGET egl glesv2 hyprutils hyprgraphics libdrm)
   if(EDGE_TEST_GL_FOUND)
