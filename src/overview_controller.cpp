@@ -1,4 +1,5 @@
 #include "overview_controller.hpp"
+#include "snapshot_framebuffer.hpp"
 #include "stage_controller.hpp"
 
 #include <algorithm>
@@ -1295,10 +1296,9 @@ SP<Render::IFramebuffer> normalizeMonitorFramebuffer(const PHLMONITOR& monitor, 
     const int width = std::max(1, static_cast<int>(std::lround(monitor->m_transformedSize.x)));
     const int height = std::max(1, static_cast<int>(std::lround(monitor->m_transformedSize.y)));
     auto normalized = createFramebuffer(name);
-    if (!normalized || !normalized->alloc(width, height))
+    if (!normalized || !allocateSnapshotFramebufferLike(*normalized, *sourceFramebuffer, width, height))
         return nullptr;
 
-    normalized->setImageDescription(monitor->workBufferImageDescription());
     setFramebufferLinearFiltering(*normalized);
     // Hyprland snapshots use the output's physical buffer dimensions. Convert
     // them back to transformed monitor space before logical crops or scaling.
@@ -1550,7 +1550,9 @@ bool buildBlurredProxyFramebuffers(const SP<Render::IFramebuffer>& sourceFramebu
     const int framebufferHeight = static_cast<int>(std::lround(sourceFramebuffer->m_size.y));
     auto      horizontalFramebuffer = createFramebuffer("hymission hidden strip horizontal blur");
     auto      verticalFramebuffer = createFramebuffer("hymission hidden strip vertical blur");
-    if (!horizontalFramebuffer || !verticalFramebuffer || !horizontalFramebuffer->alloc(framebufferWidth, framebufferHeight) || !verticalFramebuffer->alloc(framebufferWidth, framebufferHeight))
+    if (!horizontalFramebuffer || !verticalFramebuffer ||
+        !allocateSnapshotFramebufferLike(*horizontalFramebuffer, *sourceFramebuffer, framebufferWidth, framebufferHeight) ||
+        !allocateSnapshotFramebufferLike(*verticalFramebuffer, *sourceFramebuffer, framebufferWidth, framebufferHeight))
         return false;
     setFramebufferLinearFiltering(*horizontalFramebuffer);
     setFramebufferLinearFiltering(*verticalFramebuffer);
@@ -9095,9 +9097,9 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
             blurredFramebuffer = createFramebuffer("hymission hidden strip layer blur");
     }
 
-    if (!existing->framebuffer->isAllocated() || std::abs(existing->framebuffer->m_size.x - fbWidth) > 0.5 || std::abs(existing->framebuffer->m_size.y - fbHeight) > 0.5) {
+    if (!existing->framebuffer->isAllocated() || existing->framebuffer->m_drmFormat != sourceFramebuffer->m_drmFormat || std::abs(existing->framebuffer->m_size.x - fbWidth) > 0.5 || std::abs(existing->framebuffer->m_size.y - fbHeight) > 0.5) {
         existing->framebuffer->release();
-        if (!existing->framebuffer->alloc(fbWidth, fbHeight)) {
+        if (!allocateSnapshotFramebufferLike(*existing->framebuffer, *sourceFramebuffer, fbWidth, fbHeight)) {
             if (debugLogsEnabled()) {
                 std::ostringstream out;
                 out << "[hymission] strip-bar capture framebuffer alloc failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name
@@ -9109,10 +9111,12 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
         setFramebufferLinearFiltering(*existing->framebuffer);
     }
 
+    existing->framebuffer->setImageDescription(sourceFramebuffer->imageDescription());
+
     for (auto& blurredFramebuffer : existing->blurredFramebuffers) {
-        if (!blurredFramebuffer->isAllocated() || std::abs(blurredFramebuffer->m_size.x - fbWidth) > 0.5 || std::abs(blurredFramebuffer->m_size.y - fbHeight) > 0.5) {
+        if (!blurredFramebuffer->isAllocated() || blurredFramebuffer->m_drmFormat != sourceFramebuffer->m_drmFormat || std::abs(blurredFramebuffer->m_size.x - fbWidth) > 0.5 || std::abs(blurredFramebuffer->m_size.y - fbHeight) > 0.5) {
             blurredFramebuffer->release();
-            if (!blurredFramebuffer->alloc(fbWidth, fbHeight)) {
+            if (!allocateSnapshotFramebufferLike(*blurredFramebuffer, *sourceFramebuffer, fbWidth, fbHeight)) {
                 if (debugLogsEnabled()) {
                     std::ostringstream out;
                     out << "[hymission] strip-bar capture blur framebuffer alloc failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name
@@ -9123,6 +9127,7 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
             }
             setFramebufferLinearFiltering(*blurredFramebuffer);
         }
+        blurredFramebuffer->setImageDescription(sourceFramebuffer->imageDescription());
     }
 
     const double monitorRenderWidth = std::max(1.0, static_cast<double>(monitor->m_size.x) * renderScaleForMonitor(monitor));
@@ -9158,7 +9163,7 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
         const int croppedWidth = std::max(1, static_cast<int>(std::lround(capturedRectRenderLocal.width)));
         const int croppedHeight = std::max(1, static_cast<int>(std::lround(capturedRectRenderLocal.height)));
         croppedFramebuffer = createFramebuffer("hymission hidden strip layer crop");
-        if (!croppedFramebuffer || !croppedFramebuffer->alloc(croppedWidth, croppedHeight)) {
+        if (!croppedFramebuffer || !allocateSnapshotFramebufferLike(*croppedFramebuffer, *sourceFramebuffer, croppedWidth, croppedHeight)) {
             if (debugLogsEnabled()) {
                 std::ostringstream out;
                 out << "[hymission] strip-bar capture cropped framebuffer alloc failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name
