@@ -381,15 +381,19 @@ struct TilesController::Impl {
         if (!v && overview && w && w->m_workspace) if (const auto id=instance->preferredTile(w->m_workspace,mon)) {
             for (const auto& candidate:instance->views(mon)) if (candidate.id==id) { v=candidate; v->workspace=w->m_workspace; break; }
         }
-        if ((!self->active(mon) && !overview) || !v || v->monitor != mon || pinned(w) || ignore || standalone || ctx.m_renderingSnapshot) {
+        if ((!self->active(mon) && !overview) || !v || v->monitor != mon || pinned(w) || ignore || standalone || ctx.m_renderingSnapshot || StageController::renderingPreview()) {
             original(r, ctx, std::move(w), std::move(mon), p, now, decorate, mode, ignore, standalone); return;
         }
         RenderContextScope scope{ctx};
         auto clipBox=v->allocation;
         const auto presentation=overview?StageController::overviewPresentation(w,mon):std::nullopt;
         if (presentation) clipBox=clipBox.intersection(CBox{presentation->clip.x,presentation->clip.y,presentation->clip.width,presentation->clip.height});
-        else if (!overview && !w->isFloating() && !Fullscreen::controller()->isFullscreen(w)) if (const auto desktop=StageController::nativeDesktop(w->m_workspace))
-            clipBox=clipBox.intersection(CBox{desktop->x,desktop->y,desktop->width,desktop->height});
+        else if (!overview && !w->isFloating() && !Fullscreen::controller()->isFullscreen(w)) if (const auto desktop=StageController::nativeDesktop(w->m_workspace)) {
+            // Reapply 21fdcdd's native vertical-shadow rule at the outer tile
+            // pass too: layout reserved/gap bounds must not trim CSD/decorations.
+            const auto clip=stage::nativeTileClip({clipBox.x,clipBox.y,clipBox.w,clipBox.h},*desktop);
+            clipBox=CBox{clip.x,clip.y,clip.width,clip.height};
+        }
         if (clipBox.empty()) return;
         const Rect clip{clipBox.x,clipBox.y,clipBox.w,clipBox.h};
         auto edge=stage::edgeViewport(clip,0,0);
@@ -401,7 +405,7 @@ struct TilesController::Impl {
             if (width>0 && StageController::ensureEdgeService()) {
                 const auto pos=w->positionAnimation()->value()+w->m_workspace->m_renderOffset->value()+w->presentation().floatingOffset();
                 const auto size=w->sizeAnimation()->value();
-                edge=stage::edgeViewportForWindow(stage::edgeViewport(clip,width,width,width,width),{pos.x,pos.y,size.x,size.y});
+                edge=stage::edgeViewportForWindow(stage::edgeViewport(clip,width,width,0,0),{pos.x,pos.y,size.x,size.y});
             } else if (width>0) self->edgeFailure="native blur backdrop hook unavailable; hard clip retained";
         }
         StageController::renderInViewport(mon, edge, clip, [&] { original(r, ctx, w, mon, p, now, decorate, mode, ignore, standalone); });

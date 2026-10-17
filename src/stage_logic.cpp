@@ -206,6 +206,11 @@ Rect sidebarArea(const Rect& base, const Geometry& geometry, bool right) {
 Rect desktopArea(const Rect& base, const Geometry& geometry, bool right) {
     return {right ? base.x : base.x + geometry.reservation, base.y, geometry.desktopWidth, base.height};
 }
+Rect nativeTileClip(const Rect& tile,const Rect& desktop) {
+    const double left=std::max(tile.x,desktop.x);
+    const double right=std::min(tile.x+tile.width,desktop.x+desktop.width);
+    return {left,tile.y,std::max(0.0,right-left),tile.height};
+}
 EdgeViewport edgeViewport(const Rect& box, double left, double right, double top, double bottom) {
     const double width = std::max(0.0, sane(box.width, 0));
     left = std::clamp(sane(left, 0), 0.0, width);

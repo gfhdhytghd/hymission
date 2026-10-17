@@ -26,6 +26,7 @@ def main():
     ap.add_argument("--fixture")
     ap.add_argument("--integration", action="store_true")
     ap.add_argument("--default-off-regression", action="store_true")
+    ap.add_argument("--top-clip-regression", action="store_true")
     ap.add_argument("--plugin", required=True)
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
@@ -129,6 +130,11 @@ def main():
         else:
             raise RuntimeError("nested output did not appear")
         expected_width = monitors[0]["width"] / monitors[0].get("scale", 1)
+        if args.top_clip_regression:
+            from tiles_top_clip_regression import run
+            run(request,root,env,runtime,processes,handles)
+            (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
         if args.default_off_regression:
             from tiles_disabled_regression import run
             run(request,root,env,runtime,processes,handles)

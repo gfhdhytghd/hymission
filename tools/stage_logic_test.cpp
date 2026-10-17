@@ -558,6 +558,14 @@ int main() {
     ok &= expect(near(drop.first, -1250) && near(drop.second, 640), "drop focal point maps both axes across monitor offsets and reserved areas");
     const auto shiftedDrop = mapDropPoint({-1900, 150, 200, 100}, dropDesktop, -1850, 225);
     ok &= expect(near(drop.first, shiftedDrop.first) && near(drop.second, shiftedDrop.second), "animated or scrolled card position does not change the relative drop location");
+    // 21fdcdd regression: the layout's top bar/gaps are not a render crop.
+    for (const double top : {0.0,80.0,160.0}) {
+        const hymission::Rect tile{-1280,40,640,1080};
+        const hymission::Rect work{-1100,40+top,460,1080-top-24};
+        const auto clip=nativeTileClip(tile,work);
+        ok &= expect(near(clip.x,work.x) && near(clip.width,work.width) && near(clip.y,tile.y) && near(clip.height,tile.height),
+            "tile crop preserves native vertical decorations across reserved top/bottom and monitor offsets");
+    }
     const hymission::Rect outputBase{-1920, 40, 1920, 1040};
     const auto leftBand = sidebarArea(outputBase, small, false);
     const auto rightBand = sidebarArea(outputBase, small, true);

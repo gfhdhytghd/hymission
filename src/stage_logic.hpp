@@ -116,6 +116,8 @@ std::pair<double, double> mapDropPoint(const Rect& card, const Rect& desktop, do
 std::pair<double, double> mapPreviewCenter(const Rect& card, const Rect& desktop, double x, double y);
 Rect sidebarArea(const Rect& base, const Geometry& geometry, bool right);
 Rect desktopArea(const Rect& base, const Geometry& geometry, bool right);
+// Native tile desktops retain output-height decorations above/below work areas.
+Rect nativeTileClip(const Rect& tile, const Rect& desktop);
 
 // The viewport is always a hard clip, including when all effect widths are 0.
 // Widths are measured at the displayed size, independently of window geometry.
