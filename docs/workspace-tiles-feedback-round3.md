@@ -17,3 +17,8 @@ ws-only 路径不使用 all overview 的 workspace render-state 备份，切换�
 `--feedback3-regression workspace` 验证左右两侧、Stage 开/关、close/Esc 共 8 种组合，
 退出后采样 offset/alpha 并截取真实客户端像素，均通过。测试关闭自动搜索输入，
 避免 fixture 的键盘信号发往已获得焦点的独立 GTK 搜索客户端。
+
+## 3. 移除 strip focused tile 的蓝框
+
+删除多 tile strip 的整列蓝色描边；继续使用同一个连续玻璃背景。
+workspace 本身的 active/selection 标记及 tile 的 IPC focused 状态保留。

@@ -14741,13 +14741,6 @@ void OverviewController::renderWorkspaceStrip() const {
         const auto band=rectToMonitorRenderLocal(animatedWorkspaceStripRect(bandGlobal,renderMonitor),renderMonitor);
         g_pHyprOpenGL->renderRect(renderContext(),toBox(band),colorWithAlphaMultiplier(workspaceStripBackgroundColor(),progress),{.blur=true,.blurA=1.0F});
     }
-    if (clustered && Desktop::focusState()->monitor()==renderMonitor) {
-        for (const auto& view:tiles->views(renderMonitor)) if (view.focused) {
-            auto column=tileStripBand(renderMonitor,view.id,m_state);
-            column=deflateRectFromCenter(column,3,3);
-            renderOutline(animatedWorkspaceStripRect(column,renderMonitor),CHyprColor(0.35,0.65,1.0,0.8*progress),1);
-        }
-    }
 
     for (std::size_t index = 0; index < m_state.stripEntries.size(); ++index) {
         const auto& entry = m_state.stripEntries[index];
