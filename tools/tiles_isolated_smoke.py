@@ -24,6 +24,7 @@ def main():
     ap.add_argument("--gbm-backend", default="nvidia-drm", help="GBM backend for the isolated parent/child only")
     ap.add_argument("--fixture")
     ap.add_argument("--integration", action="store_true")
+    ap.add_argument("--default-off-regression", action="store_true")
     ap.add_argument("--plugin", required=True)
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
@@ -109,7 +110,7 @@ def main():
 
         for _ in range(100):
             try:
-                state = json.loads(request("j/hymission-tiles-state"))
+                state = json.loads(request("j/hymission-stage-state" if args.default_off_regression else "j/hymission-tiles-state"))
                 break
             except (ValueError, OSError):
                 time.sleep(0.1)
@@ -123,6 +124,10 @@ def main():
         else:
             raise RuntimeError("nested output did not appear")
         expected_width = monitors[0]["width"] / monitors[0].get("scale", 1)
+        if args.default_off_regression:
+            from tiles_disabled_regression import run
+            run(request,root,env,runtime,processes,handles)
+            return
         assert not state["enabled"], state
         result = request("/eval hl.config({plugin={hymission={tiles_enabled=1,tile_min_width=120}}})")
         assert result.strip() == "ok", result

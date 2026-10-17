@@ -546,7 +546,10 @@ struct StageController::Impl {
     bool ownsTransition(const PHLWORKSPACE& workspace, bool allowCovered = false) const;
     Screen* screenFor(const PHLMONITOR& monitor, tiles::Id tile = UINT64_MAX);
     Screen* screenForWorkspace(const PHLWORKSPACE& workspace);
-    PHLWORKSPACE screenWorkspace(const Screen& screen) const { return screen.workspace.lock() ? screen.workspace.lock() : screen.monitor ? screen.monitor->m_activeWorkspace : nullptr; }
+    PHLWORKSPACE screenWorkspace(const Screen& screen) const {
+        if (!screen.tile) return screen.monitor?screen.monitor->m_activeWorkspace:nullptr;
+        return screen.workspace.lock()?screen.workspace.lock():screen.monitor?screen.monitor->m_activeWorkspace:nullptr;
+    }
     CBox screenBase(const PHLMONITOR& monitor, tiles::Id tile) const {
         auto base=baseArea(monitor);
         if (auto* tiles=TilesController::get()) for (const auto& view:tiles->views(monitor)) if (view.id==tile) return base.intersection(view.allocation);
@@ -1784,7 +1787,7 @@ void StageController::Impl::sync() {
         if (!dragged)
             screen->frozenWidth.reset();
         auto screenSettings = settingsForSide(screen->right);
-        screen->geometry = stage::layout(base.w, base.h, targets.size(), screenSettings, screen->frozenWidth, base.w);
+        screen->geometry = stage::layout(base.w, base.h, targets.size(), screenSettings, screen->frozenWidth, screen->tile?base.w:monitor->m_size.x);
         ensureBackground(*screen, monitor);
         const bool changedGeometry = changedSide || changedOutput || oldGeometry.reservation != screen->geometry.reservation || oldGeometry.cardHeight != screen->geometry.cardHeight ||
             oldGeometry.padding != screen->geometry.padding || oldGeometry.paddingTop != screen->geometry.paddingTop ||
@@ -2035,8 +2038,8 @@ std::pair<StageController::Impl::Screen*, std::optional<std::size_t>> StageContr
             continue;
         }
         const auto monitor = screen.monitor.lock();
-        const double left = !screen.right && monitor ? screen.base.x : band.x;
-        const double right = screen.right && monitor ? screen.base.x + screen.base.w : band.x + band.w;
+        const double left = !screen.right && monitor ? (screen.tile?screen.base.x:monitor->m_position.x) : band.x;
+        const double right = screen.right && monitor ? (screen.tile?screen.base.x+screen.base.w:monitor->m_position.x+monitor->m_size.x) : band.x + band.w;
         if (point.x >= left && point.x < right && point.y >= band.y && point.y < band.y + band.h)
             return {&screen, cardHit(screen, point, activation)};
     }
@@ -3995,7 +3998,7 @@ void StageController::prepareOverviewExit(const std::vector<PHLMONITOR>& monitor
         destination.active = workspaceKey(target);
         destination.cards = self->cardsForWorkspace(monitor, target);
         destination.geometry = stage::layout(destination.base.w, destination.base.h, destination.cards.size(),
-            self->settingsForSide(destination.right), std::nullopt, destination.base.w);
+            self->settingsForSide(destination.right), std::nullopt, destination.tile?destination.base.w:monitor->m_size.x);
         destination.scroll = destination.geometry.clampScroll(source->scroll);
         destination.flights.clear();
         destination.departingCards.clear();
@@ -4023,7 +4026,8 @@ std::optional<stage::OverviewEndpoint> StageController::overviewDestination(cons
     const auto* destination = self->preparedOverviewScreen(monitor,TilesController::get() && TilesController::get()->available()?TilesController::get()->preferredTile(window->m_workspace,monitor):0);
     if (!monitor || !destination || destination->shown <= 0 || !destination->geometry.enabled())
         return std::nullopt;
-    const auto target = self->screenWorkspace(*destination);
+    const auto target = destination->tile?self->screenWorkspace(*destination):
+        activeWorkspace && activeWorkspace->m_monitor==monitor?activeWorkspace:monitor->m_activeWorkspace;
     if (!target || destination->active != workspaceKey(target))
         return std::nullopt;
     if (window->m_workspace == target) {
