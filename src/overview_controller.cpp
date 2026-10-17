@@ -4,6 +4,7 @@
 #include "snapshot_framebuffer.hpp"
 #include "stage_controller.hpp"
 #include "tiles_controller.hpp"
+#include <linux/input-event-codes.h>
 
 #include <algorithm>
 #include <any>
@@ -2382,6 +2383,7 @@ OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
 }
 
 OverviewController::~OverviewController() {
+    clearStripWindowDragState();
     m_tilesRebuild.reset();
     cancelAndClearTimer(m_hiddenStripProxyRefreshTimer);
     cancelAndClearTimer(m_stripRefreshTimer);
@@ -2513,6 +2515,8 @@ bool OverviewController::initialize() {
         handleWindowSetChange(window, WindowSetChangeKind::General, true);
     });
     m_windowCloseListener = events.window.close.listen([this](PHLWINDOW window) {
+        if (m_draggedWindowIndex && *m_draggedWindowIndex<m_state.windows.size() && m_state.windows[*m_draggedWindowIndex].window==window)
+            clearStripWindowDragState();
         if (isVisible())
             markWindowClosePending(window);
         pruneWindowActivationHistory(window);
@@ -2754,6 +2758,7 @@ bool OverviewController::blocksWorkspaceSwitchInOverviewForGestures() const {
 }
 
 SDispatchResult OverviewController::close() {
+    clearStripWindowDragState();
     if (sessionLocked())
         return {};
 
@@ -3526,6 +3531,14 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
     if (sessionLocked())
         return;
 
+    if (m_draggedWindowIndex && event.keycode==KEY_ESC && event.state==WL_KEYBOARD_KEY_STATE_PRESSED) {
+        clearStripWindowDragState();
+        m_primaryButtonPressed=false;
+        damageOwnedMonitors();
+        info.cancelled=true;
+        return;
+    }
+
     const auto keyboard = inputKeyboardWithState();
     if (!keyboard || !keyboard->m_xkbState)
         return;
@@ -4103,6 +4116,7 @@ void OverviewController::handleWorkspaceChange(PHLWORKSPACE workspace) {
 }
 
 void OverviewController::handleMonitorChange(PHLMONITOR monitor) {
+    clearStripWindowDragState();
     if (!isVisible() || !monitor || !m_state.ownerMonitor)
         return;
 
@@ -11851,6 +11865,9 @@ bool OverviewController::retargetGestureScope(ScopeOverride requestedScope) {
 }
 
 void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVisualOverride, bool deferFullscreenMutations) {
+    // All closing paths (selection, Escape, gesture, abort) relinquish input
+    // before their early exits; no ghost/settlement may retain the drag owner.
+    clearStripWindowDragState();
     if (sessionLocked())
         return;
 
@@ -12108,6 +12125,7 @@ void OverviewController::handleSessionLock() {
 }
 
 void OverviewController::deactivate() {
+    clearStripWindowDragState();
     cancelAndClearTimer(m_stripRefreshTimer);
     stopSearchInput();
     setDamageTrackingOverride(false);

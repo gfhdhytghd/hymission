@@ -367,6 +367,19 @@ def main():
             evaluate('hl.plugin.hymission_tiles_test.special(false)')
             assert [t["activeWorkspace"] for t in tiles_state()]==before_special
             # Overview exposes aligned groups and keeps each window inside its tile.
+            for finish in ("close","escape"):
+                evaluate('hl.plugin.hymission.open("forceall")')
+                drag_state=wait_json("j/hymission-overview-state",lambda s:s["active"] and s["phase"]=="active" and not s.get("relayout_active",False) and s["windows"],"overview-drag-ready")
+                b=drag_state["windows"][0]["contentGeometry"]
+                x=b["x"]+b["width"]/2; y=b["y"]+b["height"]/2
+                pointer("press",x,y); pointer("move",x+35,y+35)
+                assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]==3
+                if finish=="close": evaluate('hl.plugin.hymission.close()')
+                else: pointer("escape")
+                wait_json("j/hymission-tiles-state",lambda s:s["interaction_owner"]==0,"overview-drag-released")
+                pointer("release",x+35,y+35)
+                if finish=="escape": evaluate('hl.plugin.hymission.close()')
+                wait_json("j/hymission-overview-state",lambda s:not s["active"],"overview-drag-closed")
             for anchor in ("left","top"):
                 evaluate(f'hl.config({{plugin={{hymission={{workspace_strip_anchor="{anchor}"}}}}}})')
                 evaluate('hl.plugin.hymission.open("forceall")')
