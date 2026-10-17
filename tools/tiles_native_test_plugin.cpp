@@ -26,6 +26,17 @@ extern "C" {
 #include <lauxlib.h>
 }
 namespace {
+int workspaceAnimation(lua_State* L) {
+    const auto target=State::Workspace::resolver()->getWorkspaceTargetFromString(luaL_checkstring(L,1),Desktop::focusState()->monitor());
+    const auto ws=State::workspaceState()->find(target);
+    if (!ws) return luaL_error(L,"test workspace not found");
+    lua_createtable(L,0,5);
+    lua_pushnumber(L,ws->m_renderOffset->value().x); lua_setfield(L,-2,"x");
+    lua_pushnumber(L,ws->m_renderOffset->goal().x); lua_setfield(L,-2,"goal_x");
+    lua_pushnumber(L,ws->m_alpha->value()); lua_setfield(L,-2,"alpha");
+    lua_pushboolean(L,ws->m_renderOffset->isBeingAnimated() || ws->m_alpha->isBeingAnimated()); lua_setfield(L,-2,"animated");
+    return 1;
+}
 int refresh(lua_State*) { Event::bus()->m_events.config.reloaded.emit(); return 0; }
 PHLWORKSPACE specialOrigin;
 PHLWINDOW specialWindow;
@@ -99,6 +110,7 @@ int pointer(lua_State* L) {
 }
 APICALL EXPORT std::string PLUGIN_API_VERSION() { return HYPRLAND_API_VERSION; }
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+    HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","workspace_animation",workspaceAnimation);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","refresh",refresh);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","window",window);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","special",special);

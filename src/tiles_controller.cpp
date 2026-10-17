@@ -29,6 +29,7 @@
 #include <hyprland/src/layout/supplementary/WorkspaceAlgoMatcher.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/managers/input/PointerConstraintController.hpp>
 #include <hyprland/src/managers/SessionLockManager.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 
@@ -72,9 +73,11 @@ struct TilesController::Impl {
         PHLMONITORREF monitor;
         tiles::Model model;
         std::vector<PHLWORKSPACE> held;
+        std::vector<View> outgoing;
+        std::map<tiles::Id,PHLWORKSPACE> bindings;
         uint64_t notifiedGeneration=0;
         bool removing=false;
-        Output(PHLMONITOR m, double minimum) : monitor(m), model(geometry(m), workspaceKey(m->m_activeWorkspace), minimum) {}
+        Output(PHLMONITOR m, double minimum) : monitor(m), model(geometry(m), workspaceKey(m->m_activeWorkspace), minimum),bindings{{model.state().focused,m->m_activeWorkspace}} {}
     };
     HANDLE handle;
     std::function<bool()> overview;
@@ -94,6 +97,8 @@ struct TilesController::Impl {
         uint64_t generation = 0;
         PHLWORKSPACE source, target;
         Vector2D sourceOffset, targetOffset, sourcePreview, targetPreview;
+        Vector2D sourceGoal;
+        bool sourceAnimated=false;
         bool targetForced = false, vertical = false;
         double delta = 0, speed = 0;
         int direction = 0, initialDirection=0;
@@ -139,6 +144,11 @@ struct TilesController::Impl {
     bool install();
     void resetHooks() { for (auto* l : leases) hooks::remove(handle, l); leases.clear(); ready = false; }
     void reconcile();
+    std::optional<View> outgoingView(const PHLWORKSPACE& ws) const {
+        if (!ws || !(ws->m_renderOffset->isBeingAnimated() || ws->m_alpha->isBeingAnimated())) return {};
+        if (auto* o=output(ws->m_monitor.lock())) for (const auto& v:o->outgoing) if (v.workspace==ws) return v;
+        return {};
+    }
     void request() {
         if (stopping || deferred || !g_pEventLoopManager) return;
         deferred = g_pEventLoopManager->doLaterLock([this] { deferred.reset(); reconcile(); });
@@ -364,6 +374,7 @@ struct TilesController::Impl {
         if (!ignore && !standalone && !ctx.m_renderingSnapshot && instance->transferMember(w) && instance->transferDragging()) return;
         const bool overview=self->overview && self->overview();
         auto v = self->view(w ? w->m_workspace : nullptr);
+        if (!v && !overview) v=self->outgoingView(w?w->m_workspace:nullptr);
         if (!v && overview && w && w->m_workspace) if (const auto id=instance->preferredTile(w->m_workspace,mon)) {
             for (const auto& candidate:instance->views(mon)) if (candidate.id==id) { v=candidate; v->workspace=w->m_workspace; break; }
         }
@@ -404,6 +415,12 @@ struct TilesController::Impl {
             const auto fn = reinterpret_cast<SceneFn>((Fullscreen::controller()->hasFullscreen(w) ? fullHook : normalHook)->m_original);
             fn(r, ctx, mon, w, now, Render::eSceneMode::WORKSPACE_WINDOWS);
         }
+        auto* o=self->output(mon);
+        std::erase_if(o->outgoing,[&](const auto& v) { return !self->outgoingView(v.workspace) || o->model.presented(workspaceKey(v.workspace)); });
+        for (const auto& v:o->outgoing) {
+            const auto fn=reinterpret_cast<SceneFn>((Fullscreen::controller()->hasFullscreen(v.workspace)?fullHook:normalHook)->m_original);
+            fn(r,ctx,mon,v.workspace,now,Render::eSceneMode::WORKSPACE_WINDOWS);
+        }
         if (self->swipe && self->swipe->monitor == mon && self->swipe->target) {
             auto w = self->swipe->target;
             const auto fn = reinterpret_cast<SceneFn>((Fullscreen::controller()->hasFullscreen(w) ? fullHook : normalHook)->m_original);
@@ -418,6 +435,7 @@ struct TilesController::Impl {
         self->frameFanout = true;
         Hyprutils::Utils::CScopeGuard reset{[] { self->frameFanout = false; }};
         for (const auto& t : self->output(mon)->model.state().tiles) if (auto w = workspaceForKey(t.workspace)) fn(r, mon, w, now);
+        for (const auto& v:self->output(mon)->outgoing) if (self->outgoingView(v.workspace)) fn(r,mon,v.workspace,now);
         if (self->swipe && self->swipe->monitor==mon && self->swipe->target) fn(r,mon,self->swipe->target,now);
     }
     static void clampFullscreen(Fullscreen::IFullscreenHandler* handler, const SP<Layout::ITarget>& target) {
@@ -518,7 +536,13 @@ struct TilesController::Impl {
     Action route(PHLWORKSPACE ws, bool current) {
         auto mon = Desktop::focusState()->monitor();
         auto* o = output(mon);
-        if (!ready || !o || !ws || ws->type() == Workspace::eWorkspaceType::SPECIAL || applying || locked()) {
+        if (!active(mon) || !ws || ws->type() == Workspace::eWorkspaceType::SPECIAL || applying || locked()) {
+            // Native on-current-monitor recognizes visible workspaces through
+            // the physical output's compatibility active pointer.
+            if (!applying && current && ws && ws->m_monitor!=mon && active(ws->m_monitor.lock())) if (const auto v=view(ws);v && !v->focused) {
+                auto* target=output(v->monitor);
+                if (target->model.activate(workspaceKey(ws))) apply(*target);
+            }
             const auto fn = reinterpret_cast<Action (*)(PHLWORKSPACE)>((current ? typedCurrentHook : typedHook)->m_original);
             return fn(std::move(ws));
         }
@@ -550,10 +574,9 @@ struct TilesController::Impl {
             if (!*hide) return Config::Actions::actionError("special workspace blocks tile activation");
             mon->setSpecialWorkspace(nullptr);
         }
-        if (!o->model.activate(workspaceKey(ws))) return Config::Actions::actionError("tile activation failed");
-        static auto warp = CConfigValue<Config::INTEGER>("cursor:warp_on_change_workspace");
-        apply(*o, true, *warp > 0);
-        return {};
+        // Keep native pointer constraints, workspace_center_on and cursor policy;
+        // the monitor boundary below only substitutes tile publication/geometry.
+        return reinterpret_cast<Action (*)(PHLWORKSPACE)>((current?typedCurrentHook:typedHook)->m_original)(ws);
     }
     static Action typed(PHLWORKSPACE ws) { return self->route(std::move(ws), false); }
     static Action typedCurrent(PHLWORKSPACE ws) { return self->route(std::move(ws), true); }
@@ -584,6 +607,7 @@ struct TilesController::Impl {
     }
     using History = Desktop::History::CWorkspaceHistoryTracker;
     static std::optional<History::SHistoryEntry> history(PHLWORKSPACE ws) {
+        if (!ws || !self->active(ws->m_monitor.lock())) return {};
         if (const auto v = self->view(ws)) {
             const auto* o = self->output(v->monitor);
             const auto i = o->model.index(v->id);
@@ -706,6 +730,7 @@ struct TilesController::Impl {
         auto& s=*self->swipe;
         s.monitor=mon; s.tile=o->model.state().focused; s.generation=o->model.state().generation;
         s.source=mon->m_activeWorkspace; s.sourceOffset=s.source->m_renderOffset->value(); s.native=gesture;
+        s.sourceGoal=s.source->m_renderOffset->goal(); s.sourceAnimated=s.source->m_renderOffset->isBeingAnimated();
         const auto style=s.source->m_renderOffset->getStyle();
         s.vertical=style=="slidevert" || style.starts_with("slidefadevert");
         return true;
@@ -792,6 +817,10 @@ void TilesController::Impl::cancelSwipe() {
     }
     interaction=Owner::None;
     if (session.native) reinterpret_cast<decltype(&swipeCancel)>(hooks::nativeOriginal(swipeCancelHook->group->native))(session.native);
+    if (session.source && session.sourceAnimated) {
+        session.source->m_renderOffset->setValue(session.sourceOffset);
+        *session.source->m_renderOffset=session.sourceGoal;
+    }
     if (auto mon=session.monitor.lock()) g_pHyprRenderer->damageMonitor(mon);
 }
 bool TilesController::Impl::ensure() {
@@ -826,9 +855,32 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp) {
     Hyprutils::Utils::CScopeGuard reset{[this] { applying = false; }};
     const auto old = mon->m_activeWorkspace;
     auto held = std::move(o.held);
+    auto previous=std::move(o.bindings);
+    auto constraintGuard=g_pInputManager->pointerConstraints().suspend();
     for (const auto& t : o.model.state().tiles) if (auto ws = workspaceForKey(t.workspace)) {
         homes[t.workspace]={mon,t.id};
-        o.held.push_back(ws); ws->setVisible(true); ws->m_alpha->setValueAndWarp(1.F); ws->m_renderOffset->setValueAndWarp(Vector2D{});
+        o.bindings[t.id]=ws;
+        o.held.push_back(ws); ws->setVisible(true);
+        const auto prior=previous.find(t.id);
+        if (active(mon) && prior!=previous.end() && prior->second!=ws && !o.model.presented(workspaceKey(prior->second)) && !(overview && overview())) {
+            const auto exiting=prior->second;
+            const bool left=ws->numberedID() && exiting->numberedID() && *ws->numberedID()>*exiting->numberedID();
+            const auto allocation=box(o.model.box(*o.model.index(t.id)));
+            std::erase_if(o.outgoing,[&](const auto& v) { return v.workspace==exiting; });
+            o.outgoing.push_back({mon,exiting,t.id,allocation,false});
+            g_pInputManager->releaseAllMouseButtons();
+            for (const auto& [w,type]:{std::pair{exiting,Animation::Workspace::ANIMATION_TYPE_OUT},std::pair{ws,Animation::Workspace::ANIMATION_TYPE_IN}}) {
+                const bool instant=!integer("animations:enabled",1);
+                Animation::Workspace::startAnimation(w,type,left,instant,ws->m_animationStyle);
+                // Preserve native style/config/callbacks and scale only the
+                // horizontal displacement into this workspace's viewport.
+                const auto value=w->m_renderOffset->value(),goal=w->m_renderOffset->goal();
+                const double scale=allocation.w/std::max(1.0,mon->m_size.x);
+                w->m_renderOffset->setValue({value.x*scale,value.y});
+                *w->m_renderOffset=Vector2D{goal.x*scale,goal.y};
+                if (instant) w->m_renderOffset->warp();
+            }
+        }
         if (t.id == o.model.state().focused) mon->m_activeWorkspace = ws;
     }
     for (const auto& ws : held) if (!o.model.presented(workspaceKey(ws)) && ws->m_monitor == mon) { ws->setVisible(false); ws->m_forceRendering = false; }

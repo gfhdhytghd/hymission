@@ -126,6 +126,19 @@ def main():
         assert not state["enabled"], state
         result = request("/eval hl.config({plugin={hymission={tiles_enabled=1,tile_min_width=120}}})")
         assert result.strip() == "ok", result
+        if args.fixture:
+            # With capability enabled but a single tile, native actions and
+            # reconcile must leave the real workspace animation running.
+            assert request('/eval hl.plugin.hymission_tiles_test.refresh()').strip()=="ok"
+            for _ in range(100):
+                if json.loads(request("j/hymission-tiles-state"))["enabled"]: break
+                time.sleep(0.03)
+            else: raise AssertionError("single-tile capability did not enable")
+            code='hl.config({animations={enabled=true}}); hl.dispatch(hl.dsp.focus({workspace=99})); local a=hl.plugin.hymission_tiles_test.workspace_animation("99"); assert(a.animated and math.abs(a.x)>1)'
+            assert request('/eval '+code).strip()=="ok"
+            time.sleep(0.03)
+            assert request('/eval assert(hl.plugin.hymission_tiles_test.workspace_animation("99").animated)').strip()=="ok"
+            assert request('/eval hl.dispatch(hl.dsp.focus({workspace=1})); hl.config({animations={enabled=false}})').strip()=="ok"
         for _ in range(2):
             result = request("/eval hl.plugin.hymission.tile_add()")
             assert result.strip() == "ok", (result, request("j/hymission-tiles-state"), request("j/monitors"))
@@ -142,8 +155,13 @@ def main():
         assert tiles_state()[0]["focused"]
         evaluate('hl.dispatch(hl.dsp.focus({workspace=2,on_current_monitor=true}))')
         assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[2,1,3],tiles_state()
+        if args.fixture: evaluate('hl.config({animations={enabled=true}})')
         evaluate('hl.dispatch(hl.dsp.focus({workspace=4}))')
         assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[4,1,3]
+        if args.fixture:
+            evaluate('local a=hl.plugin.hymission_tiles_test.workspace_animation("4"); assert(a.animated and math.abs(a.x)>1)')
+            assert all(t["renderOffset"]==[0,0] for t in tiles_state()[1:])
+            evaluate('hl.config({animations={enabled=false}})')
         evaluate('hl.dispatch(hl.dsp.focus({workspace="previous"}))')
         assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[2,1,3],tiles_state()
         evaluate('hl.plugin.hymission.tile_focus("right")')
@@ -258,16 +276,16 @@ def main():
             evaluate('hl.plugin.hymission.open("forceall")')
             wait_json("j/hymission-tiles-state",lambda s:s["interaction_owner"]==0,"overview-cancels-stage-drag")
             pointer("release",expected_width*0.8,300)
-            assert tiles_state()==before
+            assert tiles_state()==before,(before,tiles_state())
             evaluate('hl.plugin.hymission.close()')
             wait_json("j/hymission-overview-state",lambda s:not s["active"],"close-after-stage-drag")
             stage=stage_ready(1); sc,c,w=source_preview(stage)
             drag_from(sc,c,w,expected_width*0.8,300,True)
-            assert tiles_state()==before
+            assert tiles_state()==before,(before,tiles_state())
             stage=stage_ready(1); sc,c,w=source_preview(stage)
             sx=w["x"]+w["width"]/2; sy=w["y"]+w["height"]/2
             pointer("press",sx,sy); pointer("move",expected_width*0.8,300); pointer("move",sx,sy); pointer("release",sx,sy)
-            assert tiles_state()==before
+            assert tiles_state()==before,(before,tiles_state())
             drag_from(sc,c,w,expected_width*0.8,300)
             wait_json("j/hymission-tiles-state",lambda s:len(s["tiles"])==2,"split-two")
             stage=stage_ready(2)
@@ -286,7 +304,7 @@ def main():
             pointer("press",seam,500); pointer("move",seam+30,500)
             assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]!=0
             pointer("escape"); pointer("release",seam+30,500)
-            assert tiles_state()==before
+            assert tiles_state()==before,(before,tiles_state())
             # A native directional focus request crosses a one-window tile edge.
             clients=json.loads(request("j/clients"))
             sole=next((i,t,[w for w in clients if w["workspace"]["id"]==t["activeWorkspace"]["id"]][0])
