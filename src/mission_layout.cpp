@@ -450,13 +450,13 @@ void clampRectToArea(Rect& rect, const Rect& area) {
     if (rect.width >= area.width) {
         rect.x = area.x + (area.width - rect.width) / 2.0;
     } else {
-        rect.x = std::clamp(rect.x, area.x, area.x + area.width - rect.width);
+        rect.x = std::clamp(rect.x, area.x, area.x + (area.width - rect.width));
     }
 
     if (rect.height >= area.height) {
         rect.y = area.y + (area.height - rect.height) / 2.0;
     } else {
-        rect.y = std::clamp(rect.y, area.y, area.y + area.height - rect.height);
+        rect.y = std::clamp(rect.y, area.y, area.y + (area.height - rect.height));
     }
 }
 

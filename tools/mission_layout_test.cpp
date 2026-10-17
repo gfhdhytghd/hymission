@@ -72,6 +72,21 @@ int main() {
     MissionControlLayout engine;
     bool                 ok = true;
 
+    {
+        // A moving Stage ghost can almost fill its translated viewport. Adding
+        // the origin before subtracting its height inverted clamp's bounds by
+        // one ULP and aborted the compositor (deterministic seed 201617, #389).
+        LayoutConfig config;
+        config.minWindowLength=24;
+        config.outerPaddingTop=config.outerPaddingBottom=config.outerPaddingLeft=config.outerPaddingRight=4;
+        const Rect area{411.88280266653652,868.43682263198446,220,160};
+        const auto slots=engine.compute({
+            {.index=0,.natural={557.71705576944532,894.87708891008037,612.48928419155095,241.24218032492627}},
+            {.index=1,.natural={443.219496780074,2.0962340675506965,1467.5476798410521,579.16306941458242}}},area,config);
+        ok &= expect(slots.size()==2,"translated Stage ghost must retain all members");
+        for (const auto& slot:slots) ok &= expect(rectInside(slot.target,area),"translated Stage ghost must have ordered clamp bounds and stay inside its viewport");
+    }
+
     for (const auto layoutEngine : {LayoutEngine::Grid, LayoutEngine::Natural, LayoutEngine::Thumbnail}) {
         for (double invalid : {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(),
                                -std::numeric_limits<double>::infinity(), static_cast<double>(std::numeric_limits<long>::max())}) {

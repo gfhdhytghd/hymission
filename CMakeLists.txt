@@ -173,6 +173,7 @@ if(BUILD_TESTING)
   )
 
   target_include_directories(hymission-mission-layout-test PRIVATE src)
+  target_compile_definitions(hymission-mission-layout-test PRIVATE _GLIBCXX_ASSERTIONS)
   add_test(NAME hymission-mission-layout-test COMMAND hymission-mission-layout-test)
 
   add_executable(hymission-overview-logic-test

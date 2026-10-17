@@ -72,6 +72,7 @@ executable('hymission-layout-demo',
 
 mission_layout_test = executable('hymission-mission-layout-test',
   ['tools/mission_layout_test.cpp', 'src/mission_layout.cpp'],
+  cpp_args: ['-D_GLIBCXX_ASSERTIONS'],
   include_directories: include_directories('src'),
   install: false,
 )
