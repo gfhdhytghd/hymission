@@ -19,7 +19,11 @@
             src = self;
             nativeBuildInputs = with pkgs; [ cmake pkg-config ];
             buildInputs = with pkgs; [ lua glib gtk4 libadwaita gtk4-layer-shell wayland ];
-            cmakeFlags = [ "-DBUILD_TESTING=ON" ];
+            # LD_PRELOAD probes need compositor symbols, absent in Nix's ELF wrapper.
+            cmakeFlags = [
+              "-DBUILD_TESTING=ON"
+              "-DHYPRLAND_TEST_EXECUTABLE=${pkgs.hyprland}/bin/.Hyprland-wrapped"
+            ];
             meta = { description = "Mission Control overview for Hyprland development HEAD"; license = pkgs.lib.licenses.gpl3Only; };
             doCheck = true;
             checkPhase = ''

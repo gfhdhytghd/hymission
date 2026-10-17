@@ -91,6 +91,7 @@ if(BUILD_TESTING)
   set_tests_properties(hymission-private-debug-log-test PROPERTIES TIMEOUT 10)
   find_program(HYPRLAND_TEST_EXECUTABLE Hyprland)
   if(HYPRLAND_TEST_EXECUTABLE)
+    # Separate env assignments from executable paths (Nix may include "date=").
     add_library(hymission-workspace-key-test MODULE tools/workspace_key_test.cpp)
     get_target_property(WORKSPACE_KEY_INCLUDES hymission INCLUDE_DIRECTORIES)
     target_include_directories(hymission-workspace-key-test PRIVATE src ${WORKSPACE_KEY_INCLUDES})
@@ -99,7 +100,7 @@ if(BUILD_TESTING)
     add_test(NAME hymission-workspace-key-test
       COMMAND ${CMAKE_COMMAND} -E env
         "LD_PRELOAD=$<TARGET_FILE:hymission-workspace-key-test>"
-        HYMISSION_WORKSPACE_KEY_TEST=1 ${HYPRLAND_TEST_EXECUTABLE} --version)
+        HYMISSION_WORKSPACE_KEY_TEST=1 -- ${HYPRLAND_TEST_EXECUTABLE} --version)
     set_tests_properties(hymission-workspace-key-test PROPERTIES TIMEOUT 10
       PASS_REGULAR_EXPRESSION "PASS: workspace identity, ordering, renames, sentinels and numbered slot bounds")
     add_library(hymission-stage-edge-native-probe MODULE tools/stage_edge_native_contract_probe.cpp)
@@ -110,7 +111,7 @@ if(BUILD_TESTING)
     add_test(NAME hymission-stage-edge-native-contract-test
       COMMAND ${CMAKE_COMMAND} -E env
         "LD_PRELOAD=$<TARGET_FILE:hymission-stage-edge-native-probe>"
-        HYMISSION_NATIVE_FRAMEBUFFER_PROBE=1 ${HYPRLAND_TEST_EXECUTABLE} --version)
+        HYMISSION_NATIVE_FRAMEBUFFER_PROBE=1 -- ${HYPRLAND_TEST_EXECUTABLE} --version)
     set_tests_properties(hymission-stage-edge-native-contract-test PROPERTIES TIMEOUT 10
       PASS_REGULAR_EXPRESSION "PASS: Stage native GL cast, getFBID, invalidate and release")
     foreach(libdir ${HYPR_DEPS_LIBRARY_DIRS})
@@ -125,6 +126,23 @@ if(BUILD_TESTING)
     target_link_libraries(hymission-stage-edge-render-test PRIVATE PkgConfig::EDGE_TEST_GL)
     add_test(NAME hymission-stage-edge-render-test COMMAND hymission-stage-edge-render-test)
     set_tests_properties(hymission-stage-edge-render-test PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+    if(HYPRLAND_TEST_EXECUTABLE)
+      add_library(hymission-snapshot-color-test MODULE tools/snapshot_color_test.cpp)
+      target_include_directories(hymission-snapshot-color-test PRIVATE src ${EDGE_NATIVE_INCLUDES})
+      target_link_directories(hymission-snapshot-color-test PRIVATE ${HYPR_DEPS_LIBRARY_DIRS})
+      target_link_libraries(hymission-snapshot-color-test PRIVATE PkgConfig::EDGE_TEST_GL)
+      add_test(NAME hymission-snapshot-color-test
+        COMMAND ${CMAKE_COMMAND} -E env
+          "LD_PRELOAD=$<TARGET_FILE:hymission-snapshot-color-test>"
+          HYMISSION_SNAPSHOT_COLOR_TEST=1 -- ${HYPRLAND_TEST_EXECUTABLE} --version)
+      set_tests_properties(hymission-snapshot-color-test PROPERTIES TIMEOUT 15 SKIP_RETURN_CODE 77
+        ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1"
+        PASS_REGULAR_EXPRESSION "PASS: snapshot HDR range, CM identity, SDR pixels, resize and failure propagation")
+      foreach(libdir ${HYPR_DEPS_LIBRARY_DIRS})
+        set_property(TEST hymission-snapshot-color-test APPEND PROPERTY
+          ENVIRONMENT_MODIFICATION "LD_LIBRARY_PATH=path_list_prepend:${libdir}")
+      endforeach()
+    endif()
   endif()
   add_executable(hymission-stage-logic-test tools/stage_logic_test.cpp src/stage_logic.cpp src/mission_layout.cpp)
   target_include_directories(hymission-stage-logic-test PRIVATE src)
