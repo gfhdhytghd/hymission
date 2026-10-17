@@ -966,7 +966,8 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp, bool i
         o.bindings[t.id]=ws;
         o.held.push_back(ws); ws->setVisible(true);
         const auto prior=previous.find(t.id);
-        if (active(mon) && prior==previous.end()) {
+        if (active(mon) && (prior==previous.end() ||
+            (prior->second!=ws && overview && overview()))) {
             ws->m_renderOffset->setValueAndWarp(Vector2D{});
             ws->m_alpha->setValueAndWarp(1.F);
         }
