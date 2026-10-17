@@ -28,6 +28,7 @@ def main():
     ap.add_argument("--default-off-regression", action="store_true")
     ap.add_argument("--top-clip-regression", action="store_true")
     ap.add_argument("--animation-regression", action="store_true")
+    ap.add_argument("--feedback2-regression",choices=("panel","gesture","overview","stage"))
     ap.add_argument("--plugin", required=True)
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
@@ -131,6 +132,11 @@ def main():
         else:
             raise RuntimeError("nested output did not appear")
         expected_width = monitors[0]["width"] / monitors[0].get("scale", 1)
+        if args.feedback2_regression:
+            from tiles_feedback2_regression import run
+            run(args.feedback2_regression,request,root,env,runtime,processes,handles)
+            (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
         if args.animation_regression:
             from tiles_animation_regression import run
             run(request,root,env,runtime,processes,handles)

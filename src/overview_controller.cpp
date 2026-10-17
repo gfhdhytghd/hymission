@@ -14720,14 +14720,25 @@ void OverviewController::renderWorkspaceStrip() const {
         }
     }
 
-    std::vector<std::pair<Rect,bool>> bands;
-    if (auto* tiles=TilesController::get();tiles && tiles->enabled(renderMonitor)) {
-        for (const auto& view:tiles->views(renderMonitor)) bands.emplace_back(tileStripBand(renderMonitor,view.id,m_state),view.focused && Desktop::focusState()->monitor()==renderMonitor);
-    } else bands.emplace_back(workspaceStripBandRectForMonitor(renderMonitor,m_state),false);
-    for (const auto& [bandGlobal,focused]:bands) if (bandGlobal.width>0 && bandGlobal.height>0) {
+    auto bandGlobal=workspaceStripBandRectForMonitor(renderMonitor,m_state);
+    auto* tiles=TilesController::get();
+    const bool clustered=tiles && tiles->enabled(renderMonitor);
+    if (clustered) {
+        // A single glass pass also covers the reserved header. Per-column blur
+        // passes sample different backdrops and leave seams at their edges.
+        bandGlobal.y=renderMonitor->m_position.y;
+        bandGlobal.height=renderMonitor->m_size.y;
+    }
+    if (bandGlobal.width>0 && bandGlobal.height>0) {
         const auto band=rectToMonitorRenderLocal(animatedWorkspaceStripRect(bandGlobal,renderMonitor),renderMonitor);
         g_pHyprOpenGL->renderRect(renderContext(),toBox(band),colorWithAlphaMultiplier(workspaceStripBackgroundColor(),progress),{.blur=true,.blurA=1.0F});
-        if (focused) renderOutline(bandGlobal,CHyprColor(0.35,0.65,1.0,0.8*progress),1);
+    }
+    if (clustered && Desktop::focusState()->monitor()==renderMonitor) {
+        for (const auto& view:tiles->views(renderMonitor)) if (view.focused) {
+            auto column=tileStripBand(renderMonitor,view.id,m_state);
+            column=deflateRectFromCenter(column,3,3);
+            renderOutline(animatedWorkspaceStripRect(column,renderMonitor),CHyprColor(0.35,0.65,1.0,0.8*progress),1);
+        }
     }
 
     for (std::size_t index = 0; index < m_state.stripEntries.size(); ++index) {
