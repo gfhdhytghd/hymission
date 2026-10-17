@@ -77,6 +77,10 @@ def run(case,request,root,env,runtime,processes,handles):
         wait('j/hymission-stage-state',lambda s:s['enabled'] and len(s['screens'])==3 and s['visibility_progress']==1)
         evaluate('hl.config({animations={enabled=true}})')
         snapshots=[]
+        stage=json.loads(request('j/hymission-stage-state'))
+        focused=next(t for t in state()['tiles'] if t['focused'])
+        screen=next(sc for sc in stage['screens'] if sc['tile_id']==focused['id'])
+        desk=screen.get('desktop_geometry',{'y':0,'height':1080})
         evaluate('hl.plugin.hymission_tiles_test.trackpad("begin")')
         for i in range(1,6):
             evaluate('hl.plugin.hymission_tiles_test.trackpad("update",40)')
@@ -84,16 +88,18 @@ def run(case,request,root,env,runtime,processes,handles):
             evaluate('hl.plugin.hymission_tiles_test.animation_report('+json.dumps(str(path))+')')
             frame=json.loads(path.read_text());snapshots.append(frame)
             assert state()['interaction_owner']==2,state()
-            assert abs(frame['601']['value'][0])<.01 and abs(frame['601']['value'][1]+i*40/300*1080)<.1,('vertical input not following fingers',i,frame)
+            assert abs(frame['601']['value'][0])<.01 and abs(frame['601']['value'][1]+i*40/300*desk['height'])<.1,('vertical input not following fingers',i,frame)
             assert abs(frame['602']['alpha']-1)<.01
             for ws in ('603','604'):assert frame[ws]['value']==[0,0] and abs(frame[ws]['alpha']-1)<.01,frame
             image=capture(f'trackpad-{i}')
             focused=next(t for t in state()['tiles'] if t['focused'])
-            x=int(focused['x']+focused['width']*.8)
-            red=[y for y in range(80,image.height) if (lambda p:p[0]>120 and p[1]<70 and p[2]<70)(image.getpixel((x,y)))]
+            x=int(desk.get('x',focused['x'])+desk.get('width',focused['width'])*.8)
+            expected=desk['y']+(1-i*40/300)*desk['height']
+            red=[y for y in range(max(80,int(expected-70)),image.height) if (lambda p:p[0]>120 and p[1]<70 and p[2]<70)(image.getpixel((x,y)))]
             assert red,('offset state changed but no incoming header in the rendered middle frame',i,x)
-            expected=(1-i*40/300)*1080
             assert abs(min(red)-expected)<80,('rendered header did not follow input',i,min(red),expected)
+            outside=list(range(80,max(80,int(desk['y'])-4)))+list(range(min(image.height,int(desk['y']+desk['height'])+4),image.height))
+            assert not any((lambda p:p[0]>120 or p[1]>120)(image.getpixel((x,y))) for y in outside),('swipe painted outside the common Stage scene',i)
             time.sleep(.02)
         evaluate('hl.plugin.hymission_tiles_test.trackpad("end")')
         wait('j/hymission-tiles-state',lambda s:s['interaction_owner']==0)
@@ -146,5 +152,55 @@ def run(case,request,root,env,runtime,processes,handles):
             after={c['address']:{'x':c['at'][0],'y':c['at'][1],'width':c['size'][0],'height':c['size'][1]} for c in json.loads(request('j/clients'))}
             assert before==after,(before,after)
         print('PASS: all overview visible tile origins/endpoints, continuous middle frames, alpha and desktop restoration, Stage off/on')
+        return
+    if case=='stage':
+        evaluate('hl.config({general={gaps_in=0,gaps_out=0},plugin={hymission={stage_enabled=0,stage_show_active=1,stage_transition_ms=400}}})')
+        for ws in (801,802,803):
+            evaluate(f'hl.workspace_rule({{workspace="{ws}",persistent=true}}); hl.dispatch(hl.dsp.focus({{workspace={ws}}}))')
+            log=open(root/f'stage-client-{ws}.log','w');handles.append(log)
+            processes.append(subprocess.Popen([str(binary)],env=child,stdout=log,stderr=subprocess.STDOUT))
+            wait('j/clients',lambda cs:len(cs)==ws-800)
+        evaluate('hl.dispatch(hl.dsp.focus({workspace=801})); hl.plugin.hymission.tile_add({workspace="802",width=600}); hl.plugin.hymission.tile_add({workspace="803",width=300}); hl.plugin.hymission.tile_focus("left"); hl.plugin.hymission.tile_focus("left")')
+        time.sleep(.2);before=json.loads(request('j/clients'));capture('stage-global-before')
+        evaluate('hl.config({animations={enabled=true},plugin={hymission={stage_enabled=1}}}); hl.plugin.hymission.stage_open()')
+        frames=[]
+        for i in range(65):
+            s=json.loads(request('j/hymission-stage-state'));frames.append(s)
+            screens=s['screens']
+            if len(screens)==3 and all(sc['card_width'] for sc in screens):
+                ratios=[sc['card_width']/sc['card_height'] for sc in screens]
+                assert all(abs(r-1920/1080)<.001 for r in ratios),('card ratio uses tile aspect',ratios)
+                assert max(sc['card_height'] for sc in screens)-min(sc['card_height'] for sc in screens)<.01,('unequal card heights',screens)
+                if all('desktop_geometry' in sc for sc in screens):
+                    scales=[sc['desktop_geometry']['width']/sc['base']['width'] for sc in screens]
+                    assert max(scales)-min(scales)<.001,('only one tile compressed',scales)
+                    assert all(abs(sc['desktop_geometry']['height']/sc['base']['height']-scales[0])<.001 for sc in screens),screens
+            time.sleep(.01)
+        s=wait('j/hymission-stage-state',lambda s:s['visibility_progress']==1 and len(s['screens'])==3)
+        assert sum(0<f['visibility_progress']<1 for f in frames)>3,frames
+        time.sleep(.4);after=json.loads(request('j/clients'));image=capture('stage-global-open')
+        for sc in s['screens']:
+            desk=sc['desktop_geometry'];original=next(c for c in before if c['workspace']['id']==sc['active_workspace']);current=next(c for c in after if c['address']==original['address'])
+            ratio=desk['width']/sc['base']['width']
+            assert ratio<.8 and abs(current['size'][0]/original['size'][0]-ratio)<.03 and abs(current['size'][1]/original['size'][1]-ratio)<.04,('real desktop not compressed on both axes',original,current,sc)
+            x=desk['x']+desk['width']/2;y=desk['y']+desk['height']/2
+            evaluate(f'hl.plugin.hymission_tiles_test.pointer("native",{x},{y})')
+            assert json.loads(request('j/activewindow'))['address']==current['address'],('mapped input hit wrong tile',sc)
+        (root/'stage-global-frames.json').write_text(json.dumps(frames,indent=2))
+        (root/'stage-global-state.json').write_text(json.dumps(s,indent=2))
+        # An empty focused tile with empty cards hidden must still use the
+        # same scene transform as the columns which contain real windows.
+        last=next(c for c in after if c['workspace']['id']==803)
+        next(p for p in processes if p.pid==last['pid']).terminate()
+        wait('j/clients',lambda cs:len(cs)==2)
+        evaluate('hl.config({plugin={hymission={stage_show_empty=0}}}); hl.plugin.hymission_tiles_test.refresh()')
+        empty=wait('j/hymission-stage-state',lambda s:len(s['screens'])==3 and any(sc['active_workspace']==803 and not sc['cards'] for sc in s['screens']))
+        scales=[sc['desktop_geometry']['width']/sc['base']['width'] for sc in empty['screens']]
+        assert max(scales)-min(scales)<.001,('empty focused tile lost the common scene',empty)
+        capture('stage-global-empty-focused')
+        evaluate('hl.plugin.hymission.stage_close()')
+        wait('j/hymission-stage-state',lambda s:s['visibility_progress']==0)
+        time.sleep(.5);capture('stage-global-closed')
+        print('PASS: monitor-aspect equal-height Stage cards; uniform whole-output tile scaling in middle frames, real windows and mapped input')
         return
     raise AssertionError('case not implemented: '+case)

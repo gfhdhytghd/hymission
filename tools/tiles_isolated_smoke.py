@@ -311,6 +311,12 @@ def main():
             evaluate('hl.plugin.hymission.stage_open()')
             def stage_ready(count):
                 return wait_json("j/hymission-stage-state",lambda s:s["enabled"] and s["hooks_ready"] and s["visibility_progress"]==1 and len(s["screens"])==count and any(c.get("windows") for sc in s["screens"] for c in sc["cards"]),"stage-ready")
+            def desktop_tile(tile):
+                state=json.loads(request("j/hymission-stage-state"))
+                if state['enabled'] and state['visibility_progress']>0:
+                    sc=next((sc for sc in state['screens'] if sc['tile_id']==tile['id'] and sc['monitor']==tile['monitor']),None)
+                    if sc and 'desktop_geometry' in sc:return sc['desktop_geometry']
+                return tile
             def pointer(action,x=0,y=0):
                 evaluate(f'hl.plugin.hymission_tiles_test.pointer("{action}",{x},{y})')
             def source_preview(state,address=None):
@@ -404,7 +410,7 @@ def main():
             # Drag one of the remaining source windows into a new half of its own tile.
             source_tile=next(t for t in tiles_state() if t["id"]==sc["tile_id"])
             remaining=next((a,b,v) for a in stage["screens"] if a["tile_id"]==sc["tile_id"] for b in a["cards"] for v in b.get("windows",[]))
-            drag_from(*remaining,source_tile["x"]+source_tile["width"]*0.8,340)
+            drag_from(*remaining,desktop_tile(source_tile)["x"]+desktop_tile(source_tile)["width"]*0.8,540)
             wait_json("j/hymission-tiles-state",lambda s:len(s["tiles"])==3,"split-three")
             stage=stage_ready(3)
             columns=sorted(stage["screens"],key=lambda sc:next(t["x"] for t in tiles_state() if t["id"]==sc["tile_id"]))
@@ -412,12 +418,12 @@ def main():
             assert abs(columns[0]["sidebar"]["x"]-monitors[0]["x"])<1
             for a,b in zip(columns,columns[1:]):
                 assert abs(a["sidebar"]["x"]+a["sidebar"]["width"]-b["sidebar"]["x"])<1
-            assert columns[-1]["sidebar"]["x"]+columns[-1]["sidebar"]["width"]<expected_width*.4
+            assert columns[-1]["sidebar"]["x"]+columns[-1]["sidebar"]["width"]<sum(t["width"] for t in tiles_state())*.51,columns
             (root / "stage-three.json").write_text(json.dumps(stage,indent=2))
             capture("stage-three")
             # Stage's adjacent column must yield divider input to the shared owner.
             before=tiles_state()
-            seam=before[0]["x"]+before[0]["width"]
+            seam=desktop_tile(before[0])["x"]+desktop_tile(before[0])["width"]
             pointer("press",seam,500); pointer("move",seam+30,500)
             assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]!=0
             pointer("escape"); pointer("release",seam+30,500)
@@ -453,9 +459,9 @@ def main():
             group_members=[v["address"] for v in group_card["windows"]]
             dest=next(t for t in tiles_state() if t["id"]!=group_screen["tile_id"])
             pointer("press",group_card["x"]+0.5,group_card["y"]+0.5)
-            pointer("move",dest["x"]+dest["width"]*0.7,400)
+            pointer("move",desktop_tile(dest)["x"]+desktop_tile(dest)["width"]*0.7,400)
             assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]!=0
-            pointer("release",dest["x"]+dest["width"]*0.7,400)
+            pointer("release",desktop_tile(dest)["x"]+desktop_tile(dest)["width"]*0.7,400)
             wait_json("j/clients",lambda cs:all(any(v["address"]==address and v["workspace"]["id"]==dest["activeWorkspace"]["id"] for v in cs) for address in group_members),"stage-group-move")
             assert len(tiles_state())==3
             # A new native client belongs to the tile focused by the committed drop.
@@ -467,7 +473,7 @@ def main():
             close_stage=wait_json("j/hymission-stage-state",lambda s:any(w["address"]==close_address for sc in s["screens"] for c in sc["cards"] for w in c.get("windows",[])),"close-drag-preview")
             a,b,v=source_preview(close_stage,close_address)
             target=next(t for t in tiles_state() if t["id"]!=a["tile_id"])
-            dx=target["x"]+target["width"]*.7
+            dx=desktop_tile(target)["x"]+desktop_tile(target)["width"]*.7
             pointer("press",v["x"]+v["width"]/2,v["y"]+v["height"]/2); pointer("move",dx,400)
             assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]==4
             closing_client.terminate()
@@ -496,7 +502,8 @@ def main():
                 operation(mode)
                 def inside(cs):
                     w=next(v for v in cs if v["address"]==address)
-                    return w["fullscreen"]>0 and w["at"][0]>=target_tile["x"]-1 and w["at"][0]+w["size"][0]<=target_tile["x"]+target_tile["width"]+1 and w["size"][0]>0
+                    bounds=desktop_tile(target_tile)
+                    return w["fullscreen"]>0 and w["at"][0]>=bounds["x"]-1 and w["at"][0]+w["size"][0]<=bounds["x"]+bounds["width"]+1 and w["size"][0]>0
                 fullscreen_clients=wait_json("j/clients",inside,mode+"-geometry")
                 assert [t["activeWorkspace"] for t in tiles_state()]==native_bindings
                 (root/(mode+"-clients.json")).write_text(json.dumps(fullscreen_clients,indent=2))
@@ -638,7 +645,7 @@ def main():
             a,b,v=source_preview(remove_stage,remove_address)
             assert a["monitor"]=="TILES-SECOND"
             target=next(t for t in tiles_state() if t["monitor"]==monitors[0]["name"])
-            dx=target["x"]+target["width"]*.7
+            dx=desktop_tile(target)["x"]+desktop_tile(target)["width"]*.7
             pointer("press",v["x"]+v["width"]/2,v["y"]+v["height"]/2); pointer("move",dx,400)
             assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]==4
             result=request("/output remove TILES-SECOND")

@@ -17,6 +17,16 @@ bool near(double a, double b) { return std::abs(a - b) < 1e-7; }
 int main() {
     using namespace hymission::stage;
     bool ok = true;
+    for (const auto base:std::vector<hymission::Rect>{{0,0,1920,1080},{-1920,80,1920,976}}) {
+        for (double progress:{0.,.25,.6,1.}) {
+            const auto a=scaleDesktopRect({base.x,base.y,960,base.height},base,600,progress);
+            const auto b=scaleDesktopRect({base.x+960,base.y,640,base.height},base,600,progress);
+            const auto c=scaleDesktopRect({base.x+1600,base.y,320,base.height},base,600,progress);
+            ok &= expect(near(a.x+a.width,b.x) && near(b.x+b.width,c.x),"global Stage transform keeps unequal tile borders contiguous");
+            ok &= expect(near(a.width/960,b.width/640) && near(a.width/960,c.width/320) && near(a.height/base.height,a.width/960),"all Stage tile axes share one scale");
+            ok &= expect(near(c.x+c.width,base.x+base.width) && near(a.y,a.height==base.height?base.y:base.y+(base.height-a.height)/2),"global Stage scene remains output anchored and vertically centered");
+        }
+    }
     const std::vector<hymission::Rect> clickCards{{20, 20, 160, 100}, {20, 140, 160, 100}};
     const hymission::Rect clickStrip{0, 0, 200, 260};
     ok &= expect(activationCardAt(clickCards, clickStrip, 0, 60) == 0 && activationCardAt(clickCards, clickStrip, 199, 180) == 1,

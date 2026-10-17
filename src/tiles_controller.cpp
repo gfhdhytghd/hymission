@@ -143,6 +143,18 @@ struct TilesController::Impl {
         const auto& t = o->model.state().tiles[*i];
         return View{o->monitor.lock(), w, t.id, box(o->model.box(*i)), t.id == o->model.state().focused};
     }
+    Vector2D inputPosition(PHLMONITOR mon,const Vector2D& point) const {
+        const CBox output{mon->m_position,mon->m_size};
+        if (const auto mapped=StageController::tilePresentation(mon,output)) {
+            const double scale=mapped->w/output.w;
+            return output.pos()+(point-mapped->pos())/scale;
+        }
+        return point;
+    }
+    std::optional<size_t> at(Output& output,const Vector2D& point) const {
+        const auto pos=inputPosition(output.monitor.lock(),point);
+        return output.model.at(pos.x,pos.y);
+    }
     bool ensure();
     bool install();
     void resetHooks() { for (auto* l : leases) hooks::remove(handle, l); leases.clear(); ready = false; }
@@ -196,7 +208,7 @@ struct TilesController::Impl {
     void pointer(const Vector2D& pos, Event::SCallbackInfo& info) {
         if (!resize) return;
         info.cancelled=true;
-        resize->pointerX=pos.x;
+        resize->pointerX=inputPosition(resize->monitor.lock(),pos).x;
         if (!resizeDeferred) resizeDeferred=g_pEventLoopManager->doLaterLock([this] { flushResize(); });
     }
     bool dividerButton(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
@@ -210,13 +222,14 @@ struct TilesController::Impl {
         auto mon=State::monitorState()->query().vec(pos).run();
         if (!active(mon) || mon->m_activeSpecialWorkspace || !mon->logicalBoxMinusReserved().containsPoint(pos)) return false;
         auto* o=output(mon);
+        const auto input=inputPosition(mon,pos);
         const auto slop=std::clamp(static_cast<double>(integer("tile_divider_hit_width",8)),1.0,o->model.state().minimum/2)/2;
         for (size_t i=0;i+1<o->model.state().tiles.size();++i) {
             const auto b=o->model.box(i);
-            if (std::abs(pos.x-b.x-b.width)>slop) continue;
-            auto d=tiles::DividerDrag::begin(o->model,i,pos.x);
+            if (std::abs(input.x-b.x-b.width)>slop) continue;
+            auto d=tiles::DividerDrag::begin(o->model,i,input.x);
             if (!d) return false;
-            resize=Resize{mon,*d,pos.x}; resizeReleasePending=true; interaction=Owner::Resize;
+            resize=Resize{mon,*d,input.x}; resizeReleasePending=true; interaction=Owner::Resize;
             g_pSeatManager->setPointerFocus(nullptr,{});
             info.cancelled=true; return true;
         }
@@ -349,7 +362,7 @@ struct TilesController::Impl {
         if (!self->active(mon) || mon->m_activeSpecialWorkspace) return original(tester, pos, flags, ignore);
         const auto candidate = original(tester, pos, flags, ignore);
         if (pinned(candidate)) return candidate;
-        const auto i = o->model.at(pos.x, pos.y);
+        const auto i = self->at(*o,pos);
         return i ? tester->windowAtWorkspace(pos, workspaceForKey(o->model.state().tiles[*i].workspace), flags, ignore) : nullptr;
     }
     static void rawFocus(Desktop::CFocusState* state, PHLWINDOW window, Desktop::eFocusReason reason, SP<CWLSurfaceResource> surface) {
@@ -393,6 +406,14 @@ struct TilesController::Impl {
         }
         RenderContextScope scope{ctx};
         auto clipBox=v->allocation;
+        if (!overview) if (const auto mapped=StageController::tilePresentation(mon,clipBox)) {
+            clipBox=*mapped;
+            // Keep the native vertical-shadow protection: the common scene
+            // moves content, but reserved layout bounds must not trim CSD.
+            if (!w->m_workspace->m_renderOffset->isBeingAnimated() && w->m_workspace->m_renderOffset->value()==Vector2D{}) {
+                clipBox.y=v->allocation.y; clipBox.h=v->allocation.h;
+            }
+        }
         const auto presentation=overview?StageController::overviewPresentation(w,mon):std::nullopt;
         if (presentation) clipBox=clipBox.intersection(CBox{presentation->clip.x,presentation->clip.y,presentation->clip.width,presentation->clip.height});
         else if (!overview && !w->isFloating() && !Fullscreen::controller()->isFullscreen(w)) if (const auto desktop=StageController::nativeDesktop(w->m_workspace)) {
@@ -463,7 +484,8 @@ struct TilesController::Impl {
         const auto mode = handler->getFullscreenModes(target).internal;
         if (!v || mode == Fullscreen::FSMODE_NONE) return;
         const auto layoutTarget=target->window()?target->window()->layoutTarget():target;
-        const auto desired=mode==Fullscreen::FSMODE_FULLSCREEN?v->allocation:target->space()->workArea(target->floating());
+        const auto allocation=StageController::tilePresentation(v->monitor,v->allocation).value_or(v->allocation);
+        const auto desired=mode==Fullscreen::FSMODE_FULLSCREEN?allocation:target->space()->workArea(target->floating());
         if (const auto window=target->window()) {
             auto expected=desired.copy().round();
             if (mode==Fullscreen::FSMODE_MAXIMIZED) {
@@ -518,7 +540,7 @@ struct TilesController::Impl {
         const auto mon=State::monitorState()->query().vec(pos).run();
         if (!self->applying && !locked() && self->active(mon) && !mon->m_activeSpecialWorkspace && !(self->overview && self->overview())) {
             auto* o=self->output(mon);
-            if (const auto i=o->model.at(pos.x,pos.y)) self->pointerWorkspace=workspaceForKey(o->model.state().tiles[*i].workspace);
+            if (const auto i=self->at(*o,pos)) self->pointerWorkspace=workspaceForKey(o->model.state().tiles[*i].workspace);
         }
         reinterpret_cast<decltype(&pointerInput)>(pointerHook->m_original)(input,time,refocus,mouse,position,pointerOnly);
     }
@@ -551,7 +573,7 @@ struct TilesController::Impl {
         const auto original=reinterpret_cast<decltype(&layerHit)>(layerHitHook->m_original);
         const auto mon=State::monitorState()->query().vec(pos).run();
         if (!layers || !self->active(mon) || locked() || aboveLock || mon->m_activeSpecialWorkspace || (self->overview && self->overview())) return original(tester,pos,layers,coords,found,aboveLock);
-        auto* o=self->output(mon); const auto i=o->model.at(pos.x,pos.y);
+        auto* o=self->output(mon); const auto i=self->at(*o,pos);
         if (!i || !covered(workspaceForKey(o->model.state().tiles[*i].workspace))) return original(tester,pos,layers,coords,found,aboveLock);
         auto filtered=*layers;
         std::erase_if(filtered,[](const auto& ls) { return ls && ls->m_layer==ZWLR_LAYER_SHELL_V1_LAYER_TOP && !(ls->m_flags & Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN); });
@@ -795,7 +817,9 @@ struct TilesController::Impl {
         const double progress=s.target?std::clamp(std::abs(delta)/std::max(1.0,static_cast<double>(*distance)),0.0,1.0):0;
         const auto b=o->model.box(*o->model.index(s.tile));
         static auto gap=CConfigValue<Config::INTEGER>("general:gaps_workspaces");
-        const double travel=(s.vertical?b.height:b.width)+*gap;
+        const auto allocation=StageController::tilePresentation(mon,box(b)).value_or(box(b));
+        const double scale=allocation.w/b.width;
+        const double travel=(s.vertical?allocation.h:allocation.w)+*gap*scale;
         s.source->m_alpha->setValueAndWarp(1.F);
         if (s.target) s.target->m_alpha->setValueAndWarp(1.F);
         s.sourcePreview=s.vertical?Vector2D{0.0,-direction*progress*travel}:Vector2D{-direction*progress*travel,0.0};
@@ -827,9 +851,10 @@ struct TilesController::Impl {
             auto draft=o->model;
             if (!draft.activate(workspaceKey(target)) || !self->publish(*o,std::move(draft))) return;
         }
-        const auto allocation=box(o->model.box(*o->model.index(session.tile)));
+        const auto logicalAllocation=box(o->model.box(*o->model.index(session.tile)));
+        const auto allocation=StageController::tilePresentation(mon,logicalAllocation).value_or(logicalAllocation);
         static auto gap=CConfigValue<Config::INTEGER>("general:gaps_workspaces");
-        const double travel=(session.vertical?allocation.h:allocation.w)+*gap;
+        const double travel=(session.vertical?allocation.h:allocation.w)+*gap*allocation.w/logicalAllocation.w;
         const auto end=session.vertical?Vector2D{0.0,session.direction*travel}:Vector2D{session.direction*travel,0.0};
         session.source->m_renderOffset->setValue(session.sourcePreview);
         target->m_renderOffset->setValue(session.targetPreview);
@@ -838,7 +863,7 @@ struct TilesController::Impl {
         session.source->m_alpha->setValueAndWarp(1.F); target->m_alpha->setValueAndWarp(1.F);
         if (!commit) {
             std::erase_if(o->outgoing,[&](const auto& v) { return v.workspace==target; });
-            o->outgoing.push_back({mon,target,session.tile,allocation,false});
+            o->outgoing.push_back({mon,target,session.tile,logicalAllocation,false});
         } else g_pInputManager->unconstrainMouse();
         g_pHyprRenderer->damageMonitor(mon);
     }
@@ -945,9 +970,10 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp, bool i
                 const bool wraps=*wrap && std::min(workspaceKey(ws),workspaceKey(exiting))==low && std::max(workspaceKey(ws),workspaceKey(exiting))==high;
                 left=wraps ^ (*ws->numberedID()>*exiting->numberedID());
             }
-            const auto allocation=box(o.model.box(*o.model.index(t.id)));
+            const auto logicalAllocation=box(o.model.box(*o.model.index(t.id)));
+            const auto allocation=StageController::tilePresentation(mon,logicalAllocation).value_or(logicalAllocation);
             std::erase_if(o.outgoing,[&](const auto& v) { return v.workspace==exiting; });
-            o.outgoing.push_back({mon,exiting,t.id,allocation,false});
+            o.outgoing.push_back({mon,exiting,t.id,logicalAllocation,false});
             if (!internal) g_pInputManager->releaseAllMouseButtons();
             for (const auto& [w,type]:{std::pair{exiting,Animation::Workspace::ANIMATION_TYPE_OUT},std::pair{ws,Animation::Workspace::ANIMATION_TYPE_IN}}) {
                 static auto animations=CConfigValue<Config::INTEGER>("animations:enabled");
@@ -959,8 +985,9 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp, bool i
                 static auto workspaceGap=CConfigValue<Config::INTEGER>("general:gaps_workspaces");
                 const auto style=ws->m_animationStyle.value_or(w->m_renderOffset->getStyle());
                 const double gap=style.starts_with("slidefade")?0.0:static_cast<double>(*workspaceGap);
-                const double sx=(allocation.w+gap)/std::max(1.0,mon->m_size.x+gap);
-                const double sy=(allocation.h+gap)/std::max(1.0,mon->m_size.y+gap);
+                const double tileGap=gap*allocation.w/logicalAllocation.w;
+                const double sx=(allocation.w+tileGap)/std::max(1.0,mon->m_size.x+gap);
+                const double sy=(allocation.h+tileGap)/std::max(1.0,mon->m_size.y+gap);
                 w->m_renderOffset->setValue({value.x*sx,value.y*sy});
                 *w->m_renderOffset=Vector2D{goal.x*sx,goal.y*sy};
                 if (instant) w->m_renderOffset->warp();
@@ -977,7 +1004,8 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp, bool i
         Desktop::focusState()->fullWindowFocus(mon->m_activeWorkspace->getFocusCandidate(), Desktop::FOCUS_REASON_WORKSPACE_CHANGE);
     }
     if (warp) {
-        const auto b = box(o.model.box(*o.model.index(o.model.state().focused)));
+        const auto allocation=box(o.model.box(*o.model.index(o.model.state().focused)));
+        const auto b=StageController::tilePresentation(mon,allocation).value_or(allocation);
         Pointer::pointerController()->warpTo(b.pos() + b.size() / 2);
     }
     g_pHyprRenderer->damageMonitor(mon);
@@ -1079,7 +1107,7 @@ void TilesController::initialize() {
         if (locked() || event.state != WL_POINTER_BUTTON_STATE_PRESSED || m->interaction != Owner::None || (m->overview && m->overview())) return;
         const auto pos = g_pInputManager->getMouseCoordsInternal();
         auto mon = State::monitorState()->query().vec(pos).run();
-        if (m->active(mon) && !mon->m_activeSpecialWorkspace) { const auto i = m->output(mon)->model.at(pos.x, pos.y); if (i) focus(mon, m->output(mon)->model.state().tiles[*i].id); }
+        if (m->active(mon) && !mon->m_activeSpecialWorkspace) { const auto i = m->at(*m->output(mon),pos); if (i) focus(mon, m->output(mon)->model.state().tiles[*i].id); }
     }));
     if (g_pSessionLockManager) m->listeners.emplace_back(g_pSessionLockManager->m_events.lock.listen([this] { m->endResize(true); m->cancelSwipe(); finishTransfer(false); }));
     if (g_pSessionLockManager) m->listeners.emplace_back(g_pSessionLockManager->m_events.unlock.listen([this] { m->request(); }));
@@ -1181,7 +1209,8 @@ bool TilesController::transferDestination(const PHLMONITOR& source,tiles::Id til
     const auto* o=m->output(mon);
     if (!m->ready || !o || !mon || mon->m_activeSpecialWorkspace || locked()) return false;
     if (column) return mon!=source || column!=tile;
-    const auto target=tiles::dropTarget(o->model,mon==source?tile:0,point.x,point.y,false);
+    const auto input=m->inputPosition(mon,point);
+    const auto target=tiles::dropTarget(o->model,mon==source?tile:0,input.x,input.y,false);
     return target.kind==tiles::DropKind::SplitLeft || target.kind==tiles::DropKind::SplitRight ||
         (target.kind==tiles::DropKind::Move && (mon!=source || target.target!=tile));
 }
@@ -1200,11 +1229,16 @@ bool TilesController::updateTransfer(const Vector2D& point,const PHLMONITOR& col
     if (o && !mon->m_activeSpecialWorkspace) {
         t.targetGeneration=o->model.state().generation;
         if (!t.origin.containsPoint(point)) {
-            t.drop=tiles::dropTarget(o->model,mon==t.sourceMonitor?t.source:0,point.x,point.y,column!=0);
+            const auto input=m->inputPosition(mon,point);
+            t.drop=tiles::dropTarget(o->model,mon==t.sourceMonitor?t.source:0,input.x,input.y,column!=0);
             if (column && o->model.index(column)) {
                 t.drop.target=column;
                 t.drop.preview=o->model.box(*o->model.index(column));
                 t.drop.kind=tiles::DropKind::Move;
+            }
+            if (const auto mapped=StageController::tilePresentation(mon,box(t.drop.preview))) {
+                if (t.drop.divider) t.drop.divider=StageController::tilePresentation(mon,CBox{t.drop.divider,t.drop.preview.y,1.0,1.0})->x;
+                t.drop.preview={mapped->x,mapped->y,mapped->w,mapped->h};
             }
         }
     }

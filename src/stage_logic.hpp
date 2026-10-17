@@ -28,6 +28,15 @@ inline Rect reservedWorkArea(Rect area, double reservation, double progress, boo
     return area;
 }
 
+// One affine scene for every tile: reserve the common sidebar once, shrink
+// both axes uniformly and keep the desktop vertically centered on its output.
+inline Rect scaleDesktopRect(const Rect& area,const Rect& base,double reservation,double progress) {
+    const double amount=std::clamp(reservation,0.0,std::max(0.0,base.width-1))*std::clamp(progress,0.0,1.0);
+    const double scale=1-amount/std::max(1.0,base.width);
+    return {base.x+amount+(area.x-base.x)*scale,base.y+base.height*(1-scale)*.5+(area.y-base.y)*scale,
+            area.width*scale,area.height*scale};
+}
+
 // Extend the actual Stage reservation through output/bar gaps to the physical
 // edge. Inputs and result are already global logical rectangles.
 inline Rect holdStrip(const Rect& output, const Rect& base, double reservation, bool right) {

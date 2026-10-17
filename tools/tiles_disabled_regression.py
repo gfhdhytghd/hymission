@@ -99,7 +99,7 @@ def run(request,root,env,runtime,processes,handles):
     observations.append({'suppressed_release_retained':True,'overview_drag_escape_closes':True,'escape_keeps_workspaces':True})
     # Real trackpad event entry, including the replaced native gesture wrapper.
     evaluate('hl.gesture({fingers=4,direction="vertical",action="workspace"}); hl.config({gestures={workspace_swipe_invert=false,workspace_swipe_distance=300}}); hl.plugin.hymission_tiles_test.refresh(); hl.dispatch(hl.dsp.focus({workspace=1}))')
-    wait('j/hymission-stage-state',lambda s:s['screens'] and s['screens'][0]['active_workspace']==1,'gesture-origin')
+    wait('j/activeworkspace',lambda s:s['id']==1,'gesture-origin'); time.sleep(.1)
     evaluate('hl.plugin.hymission_tiles_test.trackpad("begin"); hl.plugin.hymission_tiles_test.trackpad("update",40)')
     gesture=json.loads(request('j/hymission-stage-state'))['screens'][0]
     assert gesture['swipe_active'] and gesture['swipe_progress']>0,gesture

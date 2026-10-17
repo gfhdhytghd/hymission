@@ -61,6 +61,7 @@ class StageController {
     static void renderInViewport(const PHLMONITOR&, const stage::EdgeViewport&, const Rect&, const std::function<void()>&);
     static bool ensureEdgeService();
     static std::optional<Rect> nativeDesktop(const PHLWORKSPACE&);
+    static std::optional<CBox> tilePresentation(const PHLMONITOR&,const CBox&);
     static std::optional<stage::EdgeFrame> overviewPresentation(const PHLWINDOW&, const PHLMONITOR&);
 
   private:

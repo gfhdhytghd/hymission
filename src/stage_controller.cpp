@@ -583,6 +583,7 @@ struct StageController::Impl {
     bool clustered(const Screen& screen) const { return screen.monitor && TilesController::get() && TilesController::get()->enabled(screen.monitor.lock()); }
     CBox sidebarFor(const Screen&, const stage::Geometry&, bool right) const;
     double desktopReservation(const Screen&) const;
+    CBox desktopCanvas(const Screen&) const;
     CBox sidebar(const Screen& screen) const;
     CBox desktop(const Screen& screen) const;
     std::string stateJson() const;
@@ -1562,7 +1563,7 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
         return;
     const auto monitor = workspace->m_monitor.lock();
     auto* screen = screenForWorkspace(workspace);
-    if (!screen || !screen->geometry.enabled())
+    if (!screen || (!screen->geometry.enabled() && !clustered(*screen)))
         return;
     if (maximizeCover && Fullscreen::controller()->getFullscreenModes(workspace).internal == Fullscreen::FSMODE_MAXIMIZED)
         return;
@@ -1572,8 +1573,9 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
     // A single column follows the visible desktop width; a multi-column tape
     // keeps its sizing viewport and is only translated and clipped.
     for (auto* box : {&space->m_workArea, &space->m_floatingWorkArea}) {
-        const auto area = stage::reservedWorkArea(rect(*box), desktopReservation(*screen), visibility, screen->right,
-                                                  box == &space->m_workArea && preservesScrollingWidth(workspace));
+        const auto area = clustered(*screen) ? stage::scaleDesktopRect(rect(*box),rect(baseArea(monitor)),desktopReservation(*screen),visibility) :
+            stage::reservedWorkArea(rect(*box), desktopReservation(*screen), visibility, screen->right,
+                                   box == &space->m_workArea && preservesScrollingWidth(workspace));
         *box = hymission::box(area);
     }
     if (!syncing && !sameBox(screen->base, screenBase(monitor,screen->tile)))
@@ -1804,19 +1806,18 @@ void StageController::Impl::sync() {
         auto screenSettings = settingsForSide(screen->right);
         if (views.size()>1) {
             screenSettings=stage::normalize(screenSettings);
-            double narrowest=monitor->m_size.x;
-            for (const auto& v:views) narrowest=std::min(narrowest,v.allocation.w);
-            const double column=narrowest*.5/views.size();
+            const double requested=screenSettings.maxWidth>0?screenSettings.maxWidth:monitor->m_size.x/5;
+            const double column=std::min(requested+screenSettings.padding+screenSettings.paddingRight,baseArea(monitor).w*.5/views.size());
             screenSettings.padding=std::min(screenSettings.padding,column*.2);
             screenSettings.paddingRight=std::min(screenSettings.paddingRight,column*.2);
             screenSettings.minWidth=screenSettings.maxWidth=std::max(8.0,column-screenSettings.padding-screenSettings.paddingRight);
         }
-        screen->geometry = stage::layout(base.w, base.h, targets.size(), screenSettings, screen->frozenWidth, screen->tile?base.w:monitor->m_size.x);
+        screen->geometry = stage::layout(views.size()>1?baseArea(monitor).w:base.w, base.h, targets.size(), screenSettings, screen->frozenWidth, screen->tile?base.w:monitor->m_size.x);
         if (views.size()>1 && screen->geometry.enabled()) {
-            const double end=baseArea(monitor).x+views.size()*screen->geometry.bandWidth+screenSettings.desktopGap;
-            const double reservation=std::clamp(end-base.x,0.0,std::max(0.0,base.w-64));
-            screen->geometry.desktopWidth=base.w-reservation;
-            screen->geometry.cardHeight=screen->geometry.cardWidth*base.h/screen->geometry.desktopWidth;
+            const auto canvas=stage::scaleDesktopRect(rect(CBox{monitor->m_position,monitor->m_size}),rect(baseArea(monitor)),
+                views.size()*screen->geometry.bandWidth+screenSettings.desktopGap,1);
+            screen->geometry.desktopWidth=canvas.width;
+            screen->geometry.cardHeight=screen->geometry.cardWidth*monitor->m_size.y/monitor->m_size.x;
             auto& g=screen->geometry;
             g.maxScroll=std::max(0.0,g.count*g.cardHeight+(g.count-1)*g.cardGap+g.paddingTop+g.paddingBottom-base.h);
         }
@@ -2263,7 +2264,7 @@ void StageController::Impl::updateDragHover() {
         CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
     // Preview placement follows the pointer inside the card, without moving the
     // real window or changing its workspace while the native drag is held.
-    const double scale = onDesktop ? 1 : screen->geometry.cardWidth / screen->geometry.desktopWidth;
+    const double scale = onDesktop ? 1 : screen->geometry.cardWidth / desktopCanvas(*screen).w;
     const CBox card = onDesktop ? desktop(*screen) : inGap ? sidebar(*screen) : CBox{sidebar(*screen).x + screen->geometry.padding, screen->base.y + cardTop(*screen, *index),
         screen->geometry.cardWidth, screen->geometry.cardHeight};
     const CBox target = box(stage::dragTargetBox(rect(native), rect(card), pointer.x, pointer.y, scale, onDesktop));
@@ -2935,7 +2936,7 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
         // the same desk content the desktop itself does. The clip trims the
         // off-desktop part of the framebuffer.
         if (screen->background && screen->background->getTexture()) {
-            const auto deskRect = desktop(*screen);
+            const auto deskRect = desktopCanvas(*screen);
             if (deskRect.w > 0 && deskRect.h > 0) {
                 const double sx = box.w / deskRect.w;
                 const double sy = box.h / deskRect.h;
@@ -3084,13 +3085,20 @@ CBox StageController::Impl::sidebar(const Screen& screen) const { return sidebar
 double StageController::Impl::desktopReservation(const Screen& screen) const {
     if (!clustered(screen)) return screen.geometry.reservation;
     const auto monitor=screen.monitor.lock();
-    double end=baseArea(monitor).x;
-    for (const auto& candidate:screens) if (candidate.monitor==monitor) end+=candidate.geometry.bandWidth;
-    end+=std::max(0.0,screen.geometry.reservation-screen.geometry.bandWidth);
-    return std::clamp(end-screen.base.x,0.0,std::max(0.0,screen.base.w-64));
+    const auto shared=std::ranges::find_if(screens,[&](const auto& candidate) { return candidate.monitor==monitor && candidate.geometry.enabled(); });
+    if (shared==screens.end()) return 0;
+    const auto& geometry=screen.geometry.enabled()?screen.geometry:shared->geometry;
+    return TilesController::get()->views(monitor).size()*geometry.bandWidth+
+        std::max(0.0,geometry.reservation-geometry.bandWidth);
 }
 
+CBox StageController::Impl::desktopCanvas(const Screen& screen) const {
+    if (!clustered(screen)) return desktop(screen);
+    const auto monitor=screen.monitor.lock();
+    return box(stage::scaleDesktopRect(rect(CBox{monitor->m_position,monitor->m_size}),rect(baseArea(monitor)),desktopReservation(screen),visibility));
+}
 CBox StageController::Impl::desktop(const Screen& screen) const {
+    if (clustered(screen)) return box(stage::scaleDesktopRect(rect(screen.base),rect(baseArea(screen.monitor.lock())),desktopReservation(screen),visibility));
     auto geometry=screen.geometry;
     geometry.reservation=desktopReservation(screen);
     const auto box = stage::desktopArea(rect(screen.base), geometry, screen.right);
@@ -3566,7 +3574,7 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
         return;
     const auto previousClip = renderContext().m_data.clipBox;
     const double p = flightProgress(screen);
-    const auto bounds = screen.tile ? rect(screen.base) : flightBounds(monitor);
+    const auto bounds = flightBounds(monitor);
     const CBox clip{(bounds.x - monitor->m_position.x) * monitor->m_scale,
                     (bounds.y - monitor->m_position.y) * monitor->m_scale,
                     bounds.width * monitor->m_scale, bounds.height * monitor->m_scale};
@@ -3746,7 +3754,7 @@ bool StageController::Impl::updatePreviews(Screen& screen, Card& card, const Vec
         inputs.push_back(WindowInput{.index = i, .natural = Rect{box.x + offset.x, box.y + offset.y, box.w, box.h}});
         boxes[i] = box;
     }
-    const auto area = desktop(screen);
+    const auto area = desktopCanvas(screen);
     const auto slots = stage::arrangeWindows(inputs, screen.geometry, Rect{area.x, area.y, area.w, area.h});
     std::vector<Preview> previews;
     for (const auto& slot : slots)
@@ -3848,7 +3856,7 @@ std::string StageController::Impl::stateJson() const {
                                      {"swipe_active", swipe && swipe->monitor == monitor},
                                      {"swipe_progress", swipe && swipe->monitor == monitor ? swipe->progress : 0},
                                      {"transition_windows", rendered.flights.size()}, {"transition_progress", rendered.flights.empty() ? 1.0 : flightProgress(rendered)},
-                                     {"sidebar",{{"x",sidebar(screen).x},{"y",sidebar(screen).y},{"width",sidebar(screen).w},{"height",sidebar(screen).h}}},{"desktop_width", desktop(screen).w}, {"desktop_height", screen.base.h}, {"reservation", screen.geometry.reservation},
+                                     {"sidebar",{{"x",sidebar(screen).x},{"y",sidebar(screen).y},{"width",sidebar(screen).w},{"height",sidebar(screen).h}}},{"desktop_geometry",{{"x",desktop(screen).x},{"y",desktop(screen).y},{"width",desktop(screen).w},{"height",desktop(screen).h}}},{"desktop_width", desktop(screen).w}, {"desktop_height", desktop(screen).h}, {"reservation", screen.geometry.reservation},
                                      {"scroll", screen.scroll}, {"max_scroll", screen.geometry.maxScroll}, {"covered", screen.covered}, {"suspended", screen.suspended},
                                      {"cards", cards}});
     }
@@ -4002,6 +4010,13 @@ std::optional<Rect> StageController::nativeDesktop(const PHLWORKSPACE& workspace
     if (!screen || screen->covered || screen->suspended || !screen->geometry.enabled()) return {};
     return rect(self->desktop(*screen));
 }
+std::optional<CBox> StageController::tilePresentation(const PHLMONITOR& monitor,const CBox& area) {
+    auto* self=Impl::instance;
+    if (!self || !monitor || !self->enabled || self->visibility<=0 || self->blocked()) return {};
+    const auto screen=std::ranges::find_if(self->screens,[&](const auto& candidate) { return candidate.monitor==monitor && candidate.geometry.enabled(); });
+    if (screen==self->screens.end() || !self->clustered(*screen)) return {};
+    return box(stage::scaleDesktopRect(rect(area),rect(baseArea(monitor)),self->desktopReservation(*screen),self->visibility));
+}
 std::optional<stage::EdgeFrame> StageController::overviewPresentation(const PHLWINDOW& window,const PHLMONITOR& monitor) {
     auto* self=Impl::instance;
     return self && self->overviewFrame ? self->overviewFrame(window,monitor):std::nullopt;
@@ -4058,7 +4073,7 @@ std::optional<stage::OverviewEndpoint> StageController::overviewOrigin(const PHL
     auto* screen = TilesController::get() && TilesController::get()->available()?self->screenForWorkspace(window->m_workspace):self->visualScreenFor(monitor);
     if (!monitor || !screen || !screen->geometry.enabled() || screen->covered || screen->suspended)
         return std::nullopt;
-    const Rect output = rect(screen->tile?screen->base:CBox{monitor->m_position,monitor->m_size});
+    const Rect output = rect(CBox{monitor->m_position,monitor->m_size});
     if (self->dragHover && self->dragHover->window == window) {
         const auto frame = self->dragHoverFrame();
         return stage::OverviewEndpoint{frame.window, frame.viewport, rect(box(frame.viewport.box).intersection(box(output)))};
@@ -4111,12 +4126,12 @@ void StageController::prepareOverviewExit(const std::vector<PHLMONITOR>& monitor
             settings.paddingRight=source->geometry.bandWidth-source->geometry.padding-source->geometry.cardWidth;
             settings.minWidth=settings.maxWidth=source->geometry.cardWidth;
         }
-        destination.geometry = stage::layout(destination.base.w, destination.base.h, destination.cards.size(),
+        destination.geometry = stage::layout(self->clustered(destination)?baseArea(monitor).w:destination.base.w, destination.base.h, destination.cards.size(),
             settings, std::nullopt, destination.tile?destination.base.w:monitor->m_size.x);
         if (self->clustered(destination)) {
             auto& g=destination.geometry;
-            g.desktopWidth=self->desktop(*source).w;
-            g.cardHeight=g.cardWidth*destination.base.h/g.desktopWidth;
+            g.desktopWidth=self->desktopCanvas(*source).w;
+            g.cardHeight=g.cardWidth*monitor->m_size.y/monitor->m_size.x;
             g.maxScroll=std::max(0.0,g.count*g.cardHeight+(g.count-1)*g.cardGap+g.paddingTop+g.paddingBottom-destination.base.h);
         }
         destination.scroll = destination.geometry.clampScroll(source->scroll);
@@ -4153,7 +4168,7 @@ std::optional<stage::OverviewEndpoint> StageController::overviewDestination(cons
     if (window->m_workspace == target) {
         if (!scrollingTiled(window))
             return std::nullopt;
-        const Rect output = rect(destination->tile?destination->base:CBox{monitor->m_position,monitor->m_size});
+        const Rect output = rect(CBox{monitor->m_position,monitor->m_size});
         const auto edge = stage::edgeViewportForWindow(stage::desktopShadowViewport(self->desktopViewport(*destination), output), desktopWindow);
         return stage::OverviewEndpoint{desktopWindow, edge, rect(box(edge.box).intersection(box(output)))};
     }

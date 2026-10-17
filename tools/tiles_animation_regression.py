@@ -55,7 +55,10 @@ def run(request,root,env,runtime,processes,handles):
     evaluate('hl.plugin.hymission.tile_add({workspace="503"}); hl.plugin.hymission.tile_add({workspace="504"}); hl.plugin.hymission.tile_focus("left"); hl.plugin.hymission.tile_focus("left"); hl.config({plugin={hymission={stage_enabled=1,stage_transition_ms=220,stage_show_active=1}}}); hl.plugin.hymission.stage_open()')
     wait('j/hymission-stage-state',lambda s:s['enabled'] and s['visibility_progress']==1 and len(s['screens'])==3)
     tiles=json.loads(request('j/hymission-tiles-state'))['tiles']; focused=next(t for t in tiles if t['focused'])
-    width=focused['width'];height=focused['height']
+    stage=json.loads(request('j/hymission-stage-state'))
+    screen=next(sc for sc in stage['screens'] if sc['tile_id']==focused['id'])
+    scene_scale=screen['desktop_width']/screen['base']['width']
+    width=focused['width']*scene_scale;height=focused['height']*scene_scale
     for style in styles:
         configure(style)
         neighbors=sample(root/'neighbors.json')
@@ -67,7 +70,7 @@ def run(request,root,env,runtime,processes,handles):
             gap=0 if style.startswith('slidefade') else 17
             for axis,extent in ((0,width),(1,height)):
                 native_extent=monitor['width' if axis==0 else 'height']/monitor.get('scale',1)
-                ratio=(extent+gap)/(native_extent+gap)
+                ratio=(extent+gap*scene_scale)/(native_extent+gap)
                 for field in ('begun','goal'):
                     assert abs(actual[field][axis]-reference[field][axis]*ratio)<.1,(style,ws,field,actual,reference)
         for ws in ('503','504'):
