@@ -221,11 +221,25 @@ monitor 的 scale/transform/尺寸/CM/目标格式变化后完整替换附件并
 
 - `onlycurrentworkspace`：对 participating monitor 的**每个可见 tile**收集其当前 workspace，在原 tile 区域内排预览；focused tile 是键盘/切换上下文，`only` 不应使其他可见 tile 消失。
 - all/forceall：保持可浏览隐藏 workspace 的能力；显示当前 tile 边界/归属标记，预览 workspace 的呈现租约与真实 binding 分开。选中已呈现 workspace 的窗口时聚焦它所属 tile；选中隐藏 workspace 时只替换发起/选定 tile。若原 all-scope 模式禁止 workspace 切换，继续禁止，不暗中放开。
-- ws-only 的目标语义：展示可见分块及各自 workspace 缩略图/标签，标明 focused tile；strip 切换作用于所选 tile，其他 tile 的已占用目标可见但禁用。当前 strip-only 空窗口路径同样必须维持 tile chrome，空 workspace 仍有可点击区域。这里定义行为，不声称已有 `ws-only` 字符串入口；后续若需新增显式入口另在评审中确认。
+- ws-only 的目标语义：展示可见分块及各自 workspace 缩略图/标签，标明 focused tile；strip 切换作用于所选 tile，其他 tile 的已占用目标可见并能聚焦对应 tile。当前 strip-only 空窗口路径同样必须维持 tile chrome，空 workspace 仍有可点击区域。这里定义行为，不声称已有 `ws-only` 字符串入口；后续若需新增显式入口另在评审中确认。
 - `WorkspaceOverride`、`WorkspaceStripEntry`、window slot/drag target、`WorkspaceTransition` 增加 `(monitor, tileId)`，不能再按 monitor 唯一 ownerWorkspace 推导端点。native/overview hit box 使用同一 tile clip；预览跨 tile drop 有明确目标 workspace。
 - overview 退出按**当前 topology + generation**恢复可见集合/alpha；不能把“非 `m_activeWorkspace`”全部隐藏，也不能用打开时快照覆盖期间的 resize、断屏或真实切换。flight 的目的地取当前 workspace 对应 viewport，取消时不把全部工作区退回打开前状态。
 - Stage 的 sidebar/desktop、scroll camera、smartisan 左右切换、flights、fullscreen covered 状态以 tile 为 scope。可见 sidebar 从本 tile allocation 内部占空间，不再次从整个 monitor reserved area 扣除。overview 暂挂 Stage 时保留每 tile Stage 状态，由单一 owner 绘制/接管动画。
 - 每 tile 的 Stage desktop viewport 再与 tile clip 合并后交给共享 edge service；小 tile 放不下 sidebar 时按 Stage 几何规则收缩/隐藏该 sidebar，并报告状态，不能挤占相邻 tile。Stage 内部选择也走共同 activation 事务。
+
+### 7.1 已采纳的分组与拖拽协同（需求更新 2）
+
+workspace overview / strip 与窗口 overview 都按 tile 聚类。每 tile 一组，组位置与物理 tile 对齐，focused tile 有独立描边；点击 workspace 时捕获该组 tile ID，不能按当前全局 focus 猜测。横向 strip 每 tile 一行、竖向 strip 每 tile 一列；允许组内按可用空间换行/换列，组间不混排。主窗口区域在每个 tile 的 allocation/layout 区域内分别调用布局引擎；空 tile 仍保留可点击的组边界和标题。
+
+Stage 采用 **每个 tile 在自己的区域内有一列 sidebar**，不把所有列集中堆在整个 monitor 的左侧。这样 sidebar 与所属桌面相邻，不需横跨别区占用 reserved area；窄 tile 的布局也能独立裁剪。每列标明所属 tile/focused 状态，缩略图不包含其他 tile 已呈现 workspace 的重复桌面。
+
+Stage 缩略图可以跨列左右拖入另一 tile 的 active workspace，也可以落在其桌面区域；单窗口缩略图移动窗口，workspace/stage 组缩略图移动组内全部成员，保持组关系。目标为空白/已呈现 workspace 的区别在预览阶段确定。source workspace 不被销毁，未移动的窗口保持原位。
+
+单 tile 时从 Stage sidebar 拖出缩略图到桌面左/右半区，可预览原地 Split View：在落点侧新建 tile，源桌面保留另一侧；两个 tile 时同样在目标 tile 的左/右半拆出第三个，三个时不再提供 split 落点。新增宽度受 tile_min_width 限制；预览不满足条件时显示无效落点，不能松手后偷偷改变其他 tile。若目的仅为向已有 tile 移动，预览明确为该 tile 的桌面 drop，不创建额外 tile。
+
+拖动时绘制半透明目标区域与分割线，反馈最终新/旧 tile 的几何。松手前 Esc、拖回原 sidebar 缩略图、锁屏、源窗口消失、断屏或拓扑 generation 变化均取消。取消不创建 workspace，不改变 binding/窗口/历史。drop 先验证完整计划和源成员，再调用与 tile_add / 窗口移动相同的事务；失败回滚新 workspace、几何和焦点。
+
+Tiles/Stage/overview 共用一个交互 owner（类型区分 resize、workspace swipe、overview drag、Stage transfer/split）。一个 drag 从按下到 release/cancel 固定 source ID、generation 和窗口引用，只有 owner 能消费按钮/驱动 flight；不同时触发原生 drag 和 overview ghost。预览、commit、settle 之间移交 owner，确保每个窗口每帧只被一个 controller 绘制一次。
 
 ## 8. DSP、配置与 Lua API 提案
 
