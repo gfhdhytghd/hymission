@@ -31,7 +31,7 @@ def main():
     for key in ("HYPRLAND_INSTANCE_SIGNATURE", "WAYLAND_DISPLAY", "DISPLAY", "SWAYSOCK", "DBUS_SESSION_BUS_ADDRESS", "LD_PRELOAD"):
         env.pop(key, None)
     env.update(XDG_RUNTIME_DIR=str(runtime), XDG_CONFIG_HOME=str(root / "config"), XDG_CACHE_HOME=str(root / "cache"),
-               HYPRLAND_NO_SD_VARS="1", HYPRLAND_NO_SD_TARGET="1", HYPRLAND_NO_SD_NOTIFY="1", HYPRLAND_NO_RT="1",
+               GSETTINGS_BACKEND="memory", HYPRLAND_NO_SD_VARS="1", HYPRLAND_NO_SD_TARGET="1", HYPRLAND_NO_SD_NOTIFY="1", HYPRLAND_NO_RT="1",
                AQ_DRM_DEVICES=str(root / "no-drm-device"), LIBSEAT_BACKEND="seatd", SEATD_SOCK=str(root / "no-seatd.sock"),
                LIBGL_ALWAYS_SOFTWARE="0")
     config = root / "hyprland.lua"
@@ -122,6 +122,24 @@ def main():
             assert result.strip() == "ok", (result, request("j/hymission-tiles-state"), request("j/monitors"))
         state = json.loads(request("j/hymission-tiles-state"))
         assert state["enabled"] and not state["initError"] and len(state["tiles"]) == 3, state
+        def evaluate(code):
+            result=request("/eval " + code)
+            assert result.strip()=="ok", (code,result)
+        def tiles_state():
+            return json.loads(request("j/hymission-tiles-state"))["tiles"]
+        original_bindings=[t["activeWorkspace"]["id"] for t in state["tiles"]]
+        evaluate('hl.dispatch(hl.dsp.focus({workspace=1}))')
+        assert [t["activeWorkspace"]["id"] for t in tiles_state()]==original_bindings
+        assert tiles_state()[0]["focused"]
+        evaluate('hl.dispatch(hl.dsp.focus({workspace=2,on_current_monitor=true}))')
+        assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[2,1,3]
+        evaluate('hl.dispatch(hl.dsp.focus({workspace=4}))')
+        assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[4,1,3]
+        evaluate('hl.dispatch(hl.dsp.focus({workspace="previous"}))')
+        assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[2,1,3]
+        evaluate('hl.plugin.hymission.tile_focus("right")')
+        evaluate('hl.plugin.hymission.tile_focus("right")')
+        state=json.loads(request("j/hymission-tiles-state"))
         before = state["tiles"]
         result = request("/eval hl.plugin.hymission.tile_add()")
         assert "three" in result, result

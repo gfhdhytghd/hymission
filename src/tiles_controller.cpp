@@ -8,9 +8,12 @@
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
+#include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/GlobalWindowController.hpp>
 #include <hyprland/src/desktop/state/ViewHitTester.hpp>
+#include <hyprland/src/desktop/state/WindowState.hpp>
+#include <hyprland/src/desktop/view/window/WindowGroupMembership.hpp>
 #include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/desktop/view/window/WindowPresentation.hpp>
 #include <hyprland/src/event/EventBus.hpp>
@@ -27,6 +30,7 @@
 #include <hyprland/src/pointer/PointerController.hpp>
 #include <hyprland/src/render/scene/SceneSelection.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
+#include <hyprland/src/state/workspace/PlacementController.hpp>
 #include <hyprutils/utils/ScopeGuard.hpp>
 #include <algorithm>
 #include <cmath>
@@ -66,6 +70,18 @@ struct TilesController::Impl {
     bool ready = false, applying = false, frameFanout = false, stopping = false;
     std::string initError, edgeFailure;
     Owner interaction = Owner::None;
+    struct Swipe {
+        PHLMONITORREF monitor;
+        tiles::Id tile = 0;
+        uint64_t generation = 0;
+        PHLWORKSPACE source, target;
+        Vector2D sourceOffset, targetOffset, sourcePreview, targetPreview;
+        bool targetForced = false, vertical = false;
+        double delta = 0, speed = 0;
+        int direction = 0;
+        CUnifiedWorkspaceSwipeGesture* native = nullptr;
+    };
+    std::optional<Swipe> swipe;
     Impl(HANDLE h, std::function<bool()> o) : handle(h), overview(std::move(o)) {}
     Output* output(PHLMONITOR mon) const {
         for (auto& o : outputs) if (o->monitor == mon) return o.get();
@@ -76,7 +92,8 @@ struct TilesController::Impl {
         if (!w) return {};
         auto* o = output(w->m_monitor.lock());
         if (!ready || !o || o->model.state().tiles.size() <= 1) return {};
-        const auto i = o->model.presented(workspaceKey(w));
+        auto i = o->model.presented(workspaceKey(w));
+        if (!i && swipe && swipe->target == w && swipe->monitor == w->m_monitor) i = o->model.index(swipe->tile);
         if (!i) return {};
         const auto& t = o->model.state().tiles[*i];
         return View{o->monitor.lock(), w, t.id, box(o->model.box(*i)), t.id == o->model.state().focused};
@@ -91,6 +108,7 @@ struct TilesController::Impl {
     }
     void apply(Output& o, bool focusWindow = false, bool warp = false);
     void collapse();
+    void cancelSwipe();
     void notify(Output& o, PHLWORKSPACE old);
     PHLWORKSPACE fresh(PHLMONITOR mon) {
         WorkspaceKey key = 1;
@@ -110,6 +128,8 @@ struct TilesController::Impl {
     }
     inline static Impl* self = nullptr;
     inline static hooks::Lease *areaHook, *hitHook, *focusHook, *changeHook, *visibleHook, *windowHook, *normalHook, *fullHook, *framesHook, *fsSetHook, *fsSyncHook;
+    inline static hooks::Lease *typedHook, *typedCurrentHook, *stringHook, *stringCurrentHook, *resolverHook, *previousHook, *previousMonitorHook,
+        *directionHook, *moveHook, *placementHook, *swapHook, *swipeBeginHook, *swipeUpdateHook, *swipeEndHook, *swipeCancelHook;
 
     static void area(Layout::CSpace* space) {
         reinterpret_cast<decltype(&area)>(areaHook->m_original)(space);
@@ -179,6 +199,11 @@ struct TilesController::Impl {
             const auto fn = reinterpret_cast<SceneFn>((Fullscreen::controller()->hasFullscreen(w) ? fullHook : normalHook)->m_original);
             fn(r, ctx, mon, w, now, Render::eSceneMode::WORKSPACE_WINDOWS);
         }
+        if (self->swipe && self->swipe->monitor == mon && self->swipe->target) {
+            auto w = self->swipe->target;
+            const auto fn = reinterpret_cast<SceneFn>((Fullscreen::controller()->hasFullscreen(w) ? fullHook : normalHook)->m_original);
+            fn(r, ctx, mon, w, now, Render::eSceneMode::WORKSPACE_WINDOWS);
+        }
     }
     static void normal(Render::IHyprRenderer* r, Render::CRenderContext& c, PHLMONITOR m, PHLWORKSPACE w, const Time::steady_tp& t, Render::eSceneMode mode) { scenes(false, r, c, m, w, t, mode); }
     static void full(Render::IHyprRenderer* r, Render::CRenderContext& c, PHLMONITOR m, PHLWORKSPACE w, const Time::steady_tp& t, Render::eSceneMode mode) { scenes(true, r, c, m, w, t, mode); }
@@ -202,6 +227,209 @@ struct TilesController::Impl {
     static void fsSync(Fullscreen::IFullscreenHandler* handler) {
         reinterpret_cast<decltype(&fsSync)>(fsSyncHook->m_original)(handler); clampFullscreen(handler, handler->getFullscreen());
     }
+
+    using Action = Config::Actions::ActionResult;
+    Action route(PHLWORKSPACE ws, bool current) {
+        auto mon = Desktop::focusState()->monitor();
+        auto* o = output(mon);
+        if (!active(mon) || !ws || ws->type() == Workspace::eWorkspaceType::SPECIAL || applying || locked()) {
+            const auto fn = reinterpret_cast<Action (*)(PHLWORKSPACE)>((current ? typedCurrentHook : typedHook)->m_original);
+            return fn(std::move(ws));
+        }
+        if (interaction != Owner::None) cancelSwipe();
+        for (auto& other : outputs) if (const auto i = other->model.presented(workspaceKey(ws))) {
+            if (other->monitor != mon && current) {
+                (void)other->model.activate(workspaceKey(ws));
+                apply(*other);
+                State::Workspace::placementController()->swapActiveWorkspaces(mon,other->monitor.lock());
+                apply(*o,true);
+            } else if (other->monitor == mon && current) {
+                if (!o->model.activate(workspaceKey(ws), tiles::Activation::Swap)) return Config::Actions::actionError("tile swap failed");
+                apply(*o, true);
+            } else {
+                Desktop::focusState()->rawMonitorFocus(other->monitor.lock());
+                if (!other->model.activate(workspaceKey(ws))) return Config::Actions::actionError("tile focus failed");
+                static auto warp = CConfigValue<Config::INTEGER>("cursor:warp_on_monitor_change");
+                apply(*other, true, *warp > 0);
+            }
+            return {};
+        }
+        if (ws->m_monitor != mon) {
+            const auto fn = reinterpret_cast<Action (*)(PHLWORKSPACE)>((current ? typedCurrentHook : typedHook)->m_original);
+            return fn(std::move(ws));
+        }
+        if (mon->m_activeSpecialWorkspace) {
+            static auto hide = CConfigValue<Config::INTEGER>("binds:hide_special_on_workspace_change");
+            if (!*hide) return Config::Actions::actionError("special workspace blocks tile activation");
+            mon->setSpecialWorkspace(nullptr);
+        }
+        if (!o->model.activate(workspaceKey(ws))) return Config::Actions::actionError("tile activation failed");
+        static auto warp = CConfigValue<Config::INTEGER>("cursor:warp_on_change_workspace");
+        apply(*o, true, *warp > 0);
+        return {};
+    }
+    static Action typed(PHLWORKSPACE ws) { return self->route(std::move(ws), false); }
+    static Action typedCurrent(PHLWORKSPACE ws) { return self->route(std::move(ws), true); }
+    static Action actionString(const std::string& selector, bool current) {
+        auto mon = Desktop::focusState()->monitor();
+        if (!self->active(mon) || locked() || self->applying || (self->overview && self->overview()))
+            return reinterpret_cast<Action (*)(const std::string&)>((current ? stringCurrentHook : stringHook)->m_original)(selector);
+        auto target = State::Workspace::resolver()->getWorkspaceTargetFromString(selector, mon);
+        if (!target.valid()) return Config::Actions::actionError("invalid tile workspace selector");
+        auto ws = State::workspaceState()->find(target);
+        static auto back = CConfigValue<Config::INTEGER>("binds:workspace_back_and_forth");
+        if (ws == mon->m_activeWorkspace && *back) {
+            if (const auto previous = self->output(mon)->model.previous()) target = workspaceTarget(*previous);
+            ws = State::workspaceState()->find(target);
+        }
+        if (!ws) ws = State::workspaceState()->create(target, mon);
+        return self->route(std::move(ws), current);
+    }
+    static Action stringAction(const std::string& s) { return actionString(s, false); }
+    static Action stringCurrent(const std::string& s) { return actionString(s, true); }
+    static State::Workspace::STarget resolve(State::Workspace::CWorkspaceResolver* resolver, const std::string& selector, std::optional<PHLMONITOR> base) {
+        const auto mon = base.value_or(Desktop::focusState()->monitor());
+        if (self->active(mon) && (selector == "prev" || selector == "previous" || selector == "previous_per_monitor")) {
+            if (const auto prev = self->output(mon)->model.previous()) return workspaceTarget(*prev);
+            return {};
+        }
+        return reinterpret_cast<decltype(&resolve)>(resolverHook->m_original)(resolver, selector, base);
+    }
+    using History = Desktop::History::CWorkspaceHistoryTracker;
+    static std::optional<History::SHistoryEntry> history(PHLWORKSPACE ws) {
+        if (const auto v = self->view(ws)) {
+            const auto* o = self->output(v->monitor);
+            const auto i = o->model.index(v->id);
+            if (i) for (const auto key : o->model.state().tiles[*i].history) if (key != workspaceKey(ws)) return History::SHistoryEntry{workspaceForKey(key), v->monitor, workspaceTarget(key)};
+            return History::SHistoryEntry{};
+        }
+        return {};
+    }
+    static const History::SHistoryEntry previous(History* tracker, PHLWORKSPACE ws) {
+        if (const auto h = history(ws)) return *h;
+        return reinterpret_cast<decltype(&previous)>(previousHook->m_original)(tracker, ws);
+    }
+    static const History::SHistoryEntry previousMonitor(History* tracker, PHLWORKSPACE ws, PHLMONITOR mon) {
+        if (ws && ws->m_monitor == mon) if (const auto h = history(ws)) return *h;
+        return reinterpret_cast<decltype(&previousMonitor)>(previousMonitorHook->m_original)(tracker, ws, mon);
+    }
+    static Action direction(Math::eDirection dir) {
+        const auto mon = Desktop::focusState()->monitor();
+        const auto w = Desktop::focusState()->window();
+        if (self->active(mon) && !mon->m_activeSpecialWorkspace && (dir == Math::DIRECTION_LEFT || dir == Math::DIRECTION_RIGHT) &&
+            (!w || !Desktop::windowState()->query().inDirection(w, dir))) {
+            static auto fallback = CConfigValue<Config::INTEGER>("binds:window_direction_monitor_fallback");
+            auto* o = self->output(mon);
+            const auto before = o->model.state().focused;
+            if (*fallback && o->model.focus(dir == Math::DIRECTION_LEFT ? -1 : 1) && o->model.state().focused != before) { self->apply(*o, true, true); return {}; }
+        }
+        return reinterpret_cast<decltype(&direction)>(directionHook->m_original)(dir);
+    }
+    static Action moveDirection(Math::eDirection dir, std::optional<PHLWINDOW> window) {
+        const auto w = window.value_or(Desktop::focusState()->window());
+        const auto mon = w ? w->m_monitor.lock() : nullptr;
+        if (w && self->active(mon) && !mon->m_activeSpecialWorkspace && !Fullscreen::controller()->isFullscreen(w) &&
+            (dir == Math::DIRECTION_LEFT || dir == Math::DIRECTION_RIGHT) && !Desktop::windowState()->query().inDirection(w, dir)) {
+            auto* o = self->output(mon);
+            const int i = static_cast<int>(*o->model.index(o->model.state().focused)) + (dir == Math::DIRECTION_LEFT ? -1 : 1);
+            if (i >= 0 && i < static_cast<int>(o->model.state().tiles.size()) && instance->moveWindow(w, mon, o->model.state().tiles[i].id)) return {};
+        }
+        return reinterpret_cast<decltype(&moveDirection)>(moveHook->m_original)(dir, window);
+    }
+    static void placement(const State::Workspace::CPlacementController* p, PHLWORKSPACE ws, PHLMONITOR mon, bool noWarp, bool carryFocus) {
+        if (!ws || !mon || self->applying || locked() || ws->type() == Workspace::eWorkspaceType::SPECIAL) {
+            reinterpret_cast<decltype(&placement)>(placementHook->m_original)(p, ws, mon, noWarp, carryFocus); return;
+        }
+        if (const auto v = self->view(ws); v && v->monitor != mon) {
+            auto* o = self->output(v->monitor);
+            const auto originalFocus=o->model.state().focused;
+            if (auto replacement = self->fresh(v->monitor)) {
+                auto state = o->model.state(); state.focused = v->id;
+                (void)o->model.restore(state, o->model.state().generation);
+                (void)o->model.activate(workspaceKey(replacement));
+                o->held.push_back(replacement);
+                state=o->model.state(); state.focused=originalFocus;
+                (void)o->model.restore(state,o->model.state().generation);
+                self->apply(*o);
+            }
+        }
+        reinterpret_cast<decltype(&placement)>(placementHook->m_original)(p, ws, mon, noWarp, carryFocus);
+        if (carryFocus && self->active(mon)) { auto* o=self->output(mon); (void)o->model.activate(workspaceKey(ws)); self->apply(*o, true, !noWarp); }
+        self->request();
+    }
+    static void swapPhysical(const State::Workspace::CPlacementController* p, PHLMONITOR a, PHLMONITOR b) {
+        reinterpret_cast<decltype(&swapPhysical)>(swapHook->m_original)(p,a,b);
+        for (const auto& mon : {a,b}) if (self->active(mon) && mon->m_activeWorkspace) { auto* o=self->output(mon); (void)o->model.activate(workspaceKey(mon->m_activeWorkspace)); self->apply(*o); }
+    }
+    PHLWORKSPACE swipeTarget(Output& o, int step) {
+        const auto mon = o.monitor.lock();
+        std::vector<PHLWORKSPACE> candidates;
+        rememberWorkspaceKeys();
+        for (const auto& w : State::workspaceState()->workspacesCopy()) if (w->m_monitor == mon && w->type() != Workspace::eWorkspaceType::SPECIAL && (!o.model.presented(workspaceKey(w)) || w == swipe->source)) candidates.push_back(w);
+        std::ranges::sort(candidates, {}, [](const auto& w) { return workspaceKey(w); });
+        const auto it=std::ranges::find(candidates,swipe->source);
+        const int i=it==candidates.end()?0:static_cast<int>(it-candidates.begin());
+        const int j=i+step;
+        if (j>=0 && j<static_cast<int>(candidates.size())) return candidates[j];
+        static auto create=CConfigValue<Config::INTEGER>("gestures:workspace_swipe_create_new");
+        if (*create && step>0) {
+            WorkspaceKey id=1;
+            for (const auto& w:State::workspaceState()->workspacesCopy()) if (w->numberedID()) id=std::max(id,workspaceKey(w)+1);
+            return id<=UINT32_MAX?createWorkspaceForKey(id,mon->m_id):nullptr;
+        }
+        if (candidates.size()>1) return step>0?candidates.front():candidates.back();
+        return nullptr;
+    }
+    static bool swipeBegin(CUnifiedWorkspaceSwipeGesture* gesture, PHLMONITOR mon) {
+        if (!self->active(mon) || locked() || (self->overview && self->overview())) return reinterpret_cast<decltype(&swipeBegin)>(swipeBeginHook->m_original)(gesture,mon);
+        if (self->interaction != Owner::None || mon->m_activeSpecialWorkspace) return false;
+        const auto native=reinterpret_cast<decltype(&swipeBegin)>(hooks::nativeOriginal(swipeBeginHook->group->native));
+        if (!native(gesture,mon)) return false;
+        auto* o=self->output(mon);
+        self->interaction=Owner::Swipe;
+        self->swipe.emplace();
+        auto& s=*self->swipe;
+        s.monitor=mon; s.tile=o->model.state().focused; s.generation=o->model.state().generation;
+        s.source=mon->m_activeWorkspace; s.sourceOffset=s.source->m_renderOffset->value(); s.native=gesture;
+        const auto style=s.source->m_renderOffset->getStyle();
+        s.vertical=style=="slidevert" || style.starts_with("slidefadevert");
+        return true;
+    }
+    static void swipeUpdate(CUnifiedWorkspaceSwipeGesture* gesture, double delta) {
+        if (!self->swipe || self->swipe->native!=gesture) { reinterpret_cast<decltype(&swipeUpdate)>(swipeUpdateHook->m_original)(gesture,delta); return; }
+        auto& s=*self->swipe;
+        auto mon=s.monitor.lock(); auto* o=self->output(mon);
+        if (!o || o->model.state().generation!=s.generation || locked()) { self->cancelSwipe(); return; }
+        const int direction=delta>=0?1:-1;
+        if (s.direction!=direction) {
+            if (s.target) { s.target->m_renderOffset->setValueAndWarp(s.targetOffset); s.target->m_forceRendering=s.targetForced; }
+            s.direction=direction; s.target=self->swipeTarget(*o,direction);
+            if (s.target) { s.targetOffset=s.target->m_renderOffset->value(); s.targetForced=s.target->m_forceRendering; s.target->m_forceRendering=true; s.target->space()->recalculate(); }
+        }
+        static auto distance=CConfigValue<Config::INTEGER>("gestures:workspace_swipe_distance");
+        s.speed=std::abs(delta-s.delta); s.delta=delta; gesture->m_delta=delta;
+        const double progress=s.target?std::clamp(std::abs(delta)/std::max(1.0,static_cast<double>(*distance)),0.0,1.0):0;
+        const auto b=o->model.box(*o->model.index(s.tile));
+        const double travel=s.vertical?b.height:b.width;
+        s.sourcePreview=s.vertical?Vector2D{0.0,-direction*progress*travel}:Vector2D{-direction*progress*travel,0.0};
+        s.source->m_renderOffset->setValueAndWarp(s.sourcePreview);
+        if (s.target) { s.targetPreview=s.vertical?Vector2D{0.0,direction*(1-progress)*travel}:Vector2D{direction*(1-progress)*travel,0.0}; s.target->m_renderOffset->setValueAndWarp(s.targetPreview); }
+        g_pHyprRenderer->damageMonitor(mon);
+    }
+    static void swipeEnd(CUnifiedWorkspaceSwipeGesture* gesture) {
+        if (!self->swipe || self->swipe->native!=gesture) { reinterpret_cast<decltype(&swipeEnd)>(swipeEndHook->m_original)(gesture); return; }
+        static auto distance=CConfigValue<Config::INTEGER>("gestures:workspace_swipe_distance");
+        static auto ratio=CConfigValue<Config::FLOAT>("gestures:workspace_swipe_cancel_ratio");
+        auto target=self->swipe->target; auto mon=self->swipe->monitor.lock();
+        static auto force=CConfigValue<Config::INTEGER>("gestures:workspace_swipe_min_speed_to_force");
+        const bool commit=target && std::abs(self->swipe->delta)>=2 && (std::abs(self->swipe->delta)>=std::max(1.0,static_cast<double>(*distance))*std::clamp(static_cast<double>(*ratio),0.0,1.0) || (*force>0 && self->swipe->speed>=*force));
+        self->cancelSwipe();
+        if (commit) if (auto* o=self->output(mon); o && o->model.activate(workspaceKey(target))) self->apply(*o,true);
+    }
+    static void swipeCancel(CUnifiedWorkspaceSwipeGesture* gesture) {
+        if (self->swipe && self->swipe->native==gesture) self->cancelSwipe();
+        else reinterpret_cast<decltype(&swipeCancel)>(swipeCancelHook->m_original)(gesture);
+    }
 };
 
 bool TilesController::Impl::install() {
@@ -209,7 +437,24 @@ bool TilesController::Impl::install() {
         attach("rawWindowFocus", &rawFocus, focusHook) && attach("changeWorkspaceMonitor", &change, changeHook) &&
         attach("isVisibleNotCovered", &visible, visibleHook) && attach("renderWindow", &window, windowHook) &&
         attach("renderWorkspaceWindows", &normal, normalHook) && attach("renderWorkspaceWindowsFullscreen", &full, fullHook) &&
-        attach("sendFrameEventsToWorkspace", &frames, framesHook) && attach("setTargetSizeAndPosition", &fsSet, fsSetHook) && attach("syncTargetSizeAndPosition", &fsSync, fsSyncHook);
+        attach("sendFrameEventsToWorkspace", &frames, framesHook) && attach("setTargetSizeAndPosition", &fsSet, fsSetHook) && attach("syncTargetSizeAndPosition", &fsSync, fsSyncHook) &&
+        attach("changeWorkspaceTyped", &typed, typedHook) && attach("changeWorkspaceCurrentTyped", &typedCurrent, typedCurrentHook) &&
+        attach("changeWorkspaceString", &stringAction, stringHook) && attach("changeWorkspaceCurrentString", &stringCurrent, stringCurrentHook) &&
+        attach("getWorkspaceTargetFromString", &resolve, resolverHook) && attach("previousWorkspace", &previous, previousHook) && attach("previousWorkspaceMonitor", &previousMonitor, previousMonitorHook) &&
+        attach("moveFocus", &direction, directionHook) && attach("moveInDirection", &moveDirection, moveHook) && attach("moveWorkspaceToMonitor", &placement, placementHook) && attach("swapActiveWorkspaces", &swapPhysical, swapHook) &&
+        attach("begin", &swipeBegin, swipeBeginHook) && attach("update", &swipeUpdate, swipeUpdateHook) && attach("end", &swipeEnd, swipeEndHook) && attach("cancel", &swipeCancel, swipeCancelHook);
+}
+void TilesController::Impl::cancelSwipe() {
+    if (!swipe) return;
+    auto session=std::move(*swipe); swipe.reset();
+    if (session.source && session.source->m_renderOffset->value()==session.sourcePreview) session.source->m_renderOffset->setValueAndWarp(session.sourceOffset);
+    if (session.target) {
+        if (session.target->m_renderOffset->value()==session.targetPreview) session.target->m_renderOffset->setValueAndWarp(session.targetOffset);
+        session.target->m_forceRendering=session.targetForced;
+    }
+    interaction=Owner::None;
+    if (session.native) reinterpret_cast<decltype(&swipeCancel)>(hooks::nativeOriginal(swipeCancelHook->group->native))(session.native);
+    if (auto mon=session.monitor.lock()) g_pHyprRenderer->damageMonitor(mon);
 }
 bool TilesController::Impl::ensure() {
     if (!integer("tiles_enabled", 0)) return false;
@@ -259,6 +504,7 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp) {
     notify(o, old);
 }
 void TilesController::Impl::collapse() {
+    cancelSwipe();
     for (auto& o : outputs) if (auto mon = o->monitor.lock()) {
         auto keep = mon->m_activeWorkspace;
         for (const auto& w : o->held) if (w->m_monitor == mon) w->setVisible(w == keep);
@@ -279,6 +525,9 @@ void TilesController::Impl::reconcile() {
         const auto generation = o->model.state().generation;
         if (!o->model.geometry(geometry(mon), std::max(1L, integer("tile_min_width", 240)))) continue;
         bool changed = generation != o->model.state().generation;
+        if (o->model.state().tiles.size()==1 && mon->m_activeWorkspace && workspaceKey(mon->m_activeWorkspace)!=o->model.state().tiles[0].workspace) {
+            (void)o->model.activate(workspaceKey(mon->m_activeWorkspace)); changed=true;
+        }
         for (const auto& t : o->model.state().tiles) {
             auto w = workspaceForKey(t.workspace);
             if (!w || w->m_monitor != mon) {
@@ -311,6 +560,7 @@ void TilesController::initialize() {
     auto& e = Event::bus()->m_events;
     m->listeners.emplace_back(e.config.reloaded.listen([this] { m->request(); }));
     m->listeners.emplace_back(e.monitor.layoutChanged.listen([this] { m->request(); }));
+    m->listeners.emplace_back(e.workspace.active.listen([this](PHLWORKSPACE) { m->request(); }));
     m->listeners.emplace_back(e.workspace.removed.listen([this](PHLWORKSPACEREF) { m->request(); }));
     m->listeners.emplace_back(e.workspace.moveToMonitor.listen([this](PHLWORKSPACE, PHLMONITOR) { m->request(); }));
     m->listeners.emplace_back(e.render.preChecks.listen([this](PHLMONITOR mon) { if (m->active(mon)) mon->m_solitaryClient.reset(); }));

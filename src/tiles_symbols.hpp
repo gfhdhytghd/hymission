@@ -14,6 +14,21 @@ inline std::string_view lookup(std::string_view key) {
     if (key == "sendFrameEventsToWorkspace") return "Render::IHyprRenderer::sendFrameEventsToWorkspace(Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>, Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>, std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)";
     if (key == "setTargetSizeAndPosition") return "Fullscreen::IFullscreenHandler::setTargetSizeAndPosition(Hyprutils::Memory::CSharedPointer<Layout::ITarget>)";
     if (key == "syncTargetSizeAndPosition") return "Fullscreen::IFullscreenHandler::syncTargetSizeAndPosition()";
+    if (key == "changeWorkspaceTyped") return "Config::Actions::changeWorkspace(Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>)";
+    if (key == "changeWorkspaceCurrentTyped") return "Config::Actions::changeWorkspaceOnCurrentMonitor(Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>)";
+    if (key == "changeWorkspaceString") return "Config::Actions::changeWorkspace(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)";
+    if (key == "changeWorkspaceCurrentString") return "Config::Actions::changeWorkspaceOnCurrentMonitor(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)";
+    if (key == "getWorkspaceTargetFromString") return "State::Workspace::CWorkspaceResolver::getWorkspaceTargetFromString(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::optional<Hyprutils::Memory::CSharedPointer<Monitor::CMonitor> >)";
+    if (key == "previousWorkspace") return "Desktop::History::CWorkspaceHistoryTracker::previousWorkspace(Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>)";
+    if (key == "previousWorkspaceMonitor") return "Desktop::History::CWorkspaceHistoryTracker::previousWorkspace(Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>)";
+    if (key == "moveFocus") return "Config::Actions::moveFocus(Math::eDirection)";
+    if (key == "moveInDirection") return "Config::Actions::moveInDirection(Math::eDirection, std::optional<Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow> >)";
+    if (key == "moveWorkspaceToMonitor") return "State::Workspace::CPlacementController::moveWorkspaceToMonitor(Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>, bool, bool) const";
+    if (key == "swapActiveWorkspaces") return "State::Workspace::CPlacementController::swapActiveWorkspaces(Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>) const";
+    if (key == "begin") return "CUnifiedWorkspaceSwipeGesture::begin(Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>)";
+    if (key == "update") return "CUnifiedWorkspaceSwipeGesture::update(double)";
+    if (key == "end") return "CUnifiedWorkspaceSwipeGesture::end()";
+    if (key == "cancel") return "CUnifiedWorkspaceSwipeGesture::cancel()";
     return {};
 }
 }
