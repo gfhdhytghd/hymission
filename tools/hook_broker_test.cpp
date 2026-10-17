@@ -1,4 +1,5 @@
 #include "hook_broker.hpp"
+#include "hook_attempt.hpp"
 #include <cassert>
 #include <iostream>
 namespace h = hymission::hooks;
@@ -27,6 +28,15 @@ void* nativeOriginal(void* p) { return static_cast<Native*>(p)->original; }
 void nativeRemove(void*, void* p) { delete static_cast<Native*>(p); --allocations; }
 }
 int main() {
+    h::AttemptCache optionalHook;
+    int probes=0;
+    for (int frame=0;frame<10000;++frame) assert(!optionalHook.run([&] { ++probes; return false; }));
+    optionalHook.release();
+    assert(!optionalHook.run([&] { ++probes; return true; }) && probes==1);
+    optionalHook.reset(); // config reload, the capability can be retried
+    assert(optionalHook.run([&] { ++probes; return true; }) && probes==2);
+    optionalHook.release();
+    assert(optionalHook.run([&] { ++probes; return true; }) && probes==3);
     a = h::create(nullptr, reinterpret_cast<void*>(&original), h::target(&first));
     b = h::create(nullptr, reinterpret_cast<void*>(&original), h::target(&second));
     assert(a && b && a->group == b->group);

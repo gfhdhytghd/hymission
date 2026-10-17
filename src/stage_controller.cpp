@@ -4,6 +4,7 @@
 #include "stage_logic.hpp"
 #include "stage_edge_effect.hpp"
 #include "tiles_controller.hpp"
+#include "hook_attempt.hpp"
 #include "input_guard.hpp"
 
 #include <algorithm>
@@ -396,6 +397,7 @@ struct StageController::Impl {
     hooks::Lease* workspaceAnimationHook = nullptr;
     hooks::Lease* changeWorkspaceHook = nullptr;
     hooks::Lease* blurFramebufferHook = nullptr;
+    hooks::AttemptCache edgeHookAttempt;
     hooks::Lease* fadeoutsHook = nullptr;
     using BlurFramebufferFn = SP<Render::IFramebuffer> (*)(Render::IHyprRenderer*, Render::CRenderContext&, float, const CRegion&, const Render::SBlurContext&);
     using FadeoutsFn = void (*)(Render::IHyprRenderer*, Render::CRenderContext&, PHLMONITOR, Desktop::eFadeoutPlane, PHLWORKSPACE);
@@ -1343,6 +1345,7 @@ bool StageController::Impl::installHooks() {
 
 bool StageController::Impl::ensureEdgeHook() {
     if (blurFramebufferHook) return true;
+    return edgeHookAttempt.run([&] {
     constexpr auto signature="Render::IHyprRenderer::blurMainFramebuffer(Render::CRenderContext&, float, Hyprutils::Math::CRegion const&, Render::SBlurContext const&)";
     void* address=nullptr;
     size_t matches=0;
@@ -1352,11 +1355,13 @@ bool StageController::Impl::ensureEdgeHook() {
     if (blurFramebufferHook && blurFramebufferHook->hook()) return true;
     hooks::remove(handle,blurFramebufferHook); blurFramebufferHook=nullptr;
     return false;
+    });
 }
 
 void StageController::Impl::releaseHooks() {
     renderWindow=nullptr;
     shouldBlur=nullptr;
+    edgeHookAttempt.release();
     for (auto** hook : {&areaHook, &dragHook, &windowFocusHook, &scrollFocusHook, &hitHook, &roundingHook, &renderWindowHook, &surfaceBoxHook, &surfaceVisibleHook, &surfaceUVHook, &addPassHook,
                         &workspaceAnimationHook, &changeWorkspaceHook, &blurFramebufferHook, &fadeoutsHook}) {
         if (!*hook)
@@ -1370,7 +1375,7 @@ void StageController::Impl::releaseHooks() {
 
 void StageController::Impl::initialize() {
     auto& events = Event::bus()->m_events;
-    listeners.emplace_back(events.config.reloaded.listen([this] { reconfigure = true; request(); }));
+    listeners.emplace_back(events.config.reloaded.listen([this] { edgeHookAttempt.reset(); reconfigure = true; request(); }));
     listeners.emplace_back(events.config.props_refreshed.listen([this](bool) { request(); }));
     listeners.emplace_back(events.monitor.layoutChanged.listen([this] { request(); }));
     listeners.emplace_back(events.monitor.added.listen([this](PHLMONITOR) { request(); }));
