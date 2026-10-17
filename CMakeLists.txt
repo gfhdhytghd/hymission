@@ -42,6 +42,8 @@ add_library(hymission SHARED
   src/stage_logic.cpp
   src/stage_controller.cpp
   src/stage_edge_effect.cpp
+  src/tiles_controller.cpp
+  src/hook_broker.cpp
   src/tiles_logic.cpp
 )
 
@@ -70,6 +72,9 @@ add_executable(hymission-layout-demo
 target_include_directories(hymission-layout-demo PRIVATE src)
 
 if(BUILD_TESTING)
+  add_executable(hymission-hook-broker-test tools/hook_broker_test.cpp)
+  target_include_directories(hymission-hook-broker-test PRIVATE src)
+  add_test(NAME hymission-hook-broker-test COMMAND hymission-hook-broker-test)
   add_executable(hymission-tiles-logic-test tools/tiles_logic_test.cpp src/tiles_logic.cpp)
   target_include_directories(hymission-tiles-logic-test PRIVATE src)
   add_test(NAME hymission-tiles-logic-test COMMAND hymission-tiles-logic-test)

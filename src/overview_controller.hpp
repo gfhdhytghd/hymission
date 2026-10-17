@@ -1,5 +1,7 @@
 #pragma once
 
+#include "hook_broker.hpp"
+
 #include "workspace_key.hpp"
 #include <hyprland/src/desktop/view/window/WindowPresentation.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
@@ -628,8 +630,8 @@ class OverviewController {
     [[nodiscard]] bool         installHooks();
     [[nodiscard]] bool         activateHooks();
     void                       deactivateHooks();
-    [[nodiscard]] bool         hookFunction(const std::string& symbolName, const std::string& demangledNeedle, CFunctionHook*& hook, void* destination);
-    [[nodiscard]] bool         hookFunction(const std::string& symbolName, const std::vector<std::string>& demangledNeedles, CFunctionHook*& hook, void* destination);
+    [[nodiscard]] bool         hookFunction(const std::string& symbolName, const std::string& demangledNeedle, hooks::Lease*& hook, void* destination);
+    [[nodiscard]] bool         hookFunction(const std::string& symbolName, const std::vector<std::string>& demangledNeedles, hooks::Lease*& hook, void* destination);
     [[nodiscard]] void*        findFunction(const std::string& symbolName, const std::string& demangledNeedle) const;
     [[nodiscard]] void*        findFunction(const std::string& symbolName, const std::vector<std::string>& demangledNeedles) const;
     [[nodiscard]] bool         wrapDispatcher(const std::string& name, DispatcherHandler& original, DispatcherHandler replacement);
@@ -895,34 +897,34 @@ class OverviewController {
     State  m_state;
     HANDLE m_handle = nullptr;
 
-    CFunctionHook*            m_surfaceTexBoxHook = nullptr;
-    CFunctionHook*            m_surfaceBoundingBoxHook = nullptr;
-    CFunctionHook*            m_surfaceOpaqueRegionHook = nullptr;
-    CFunctionHook*            m_surfaceVisibleRegionHook = nullptr;
-    CFunctionHook*            m_surfaceDrawHook = nullptr;
-    CFunctionHook*            m_surfaceNeedsLiveBlurHook = nullptr;
-    CFunctionHook*            m_surfaceNeedsPrecomputeBlurHook = nullptr;
-    CFunctionHook*            m_shouldRenderWindowHook = nullptr;
-    CFunctionHook*            m_effectiveAlphaHook = nullptr;
-    CFunctionHook*            m_decorationGradientHook = nullptr;
-    CFunctionHook*            m_rendererDrawElementHook = nullptr;
-    CFunctionHook*            m_renderLayerHook = nullptr;
-    CFunctionHook*            m_borderDrawHook = nullptr;
-    CFunctionHook*            m_shadowDrawHook = nullptr;
-    CFunctionHook*            m_customShadowHook = nullptr;
+    hooks::Lease*            m_surfaceTexBoxHook = nullptr;
+    hooks::Lease*            m_surfaceBoundingBoxHook = nullptr;
+    hooks::Lease*            m_surfaceOpaqueRegionHook = nullptr;
+    hooks::Lease*            m_surfaceVisibleRegionHook = nullptr;
+    hooks::Lease*            m_surfaceDrawHook = nullptr;
+    hooks::Lease*            m_surfaceNeedsLiveBlurHook = nullptr;
+    hooks::Lease*            m_surfaceNeedsPrecomputeBlurHook = nullptr;
+    hooks::Lease*            m_shouldRenderWindowHook = nullptr;
+    hooks::Lease*            m_effectiveAlphaHook = nullptr;
+    hooks::Lease*            m_decorationGradientHook = nullptr;
+    hooks::Lease*            m_rendererDrawElementHook = nullptr;
+    hooks::Lease*            m_renderLayerHook = nullptr;
+    hooks::Lease*            m_borderDrawHook = nullptr;
+    hooks::Lease*            m_shadowDrawHook = nullptr;
+    hooks::Lease*            m_customShadowHook = nullptr;
     CustomShadowFn            m_customShadowOriginal = nullptr;
     bool                      m_drawingViewflowShadow = false;
-    CFunctionHook*            m_groupBarDrawHook = nullptr;
-    CFunctionHook*            m_calculateUVForSurfaceHook = nullptr;
-    CFunctionHook*            m_workspaceSwipeBeginFunctionHook = nullptr;
-    CFunctionHook*            m_workspaceSwipeUpdateFunctionHook = nullptr;
-    CFunctionHook*            m_workspaceSwipeEndFunctionHook = nullptr;
-    CFunctionHook*            m_unifiedWorkspaceSwipeBeginFunctionHook = nullptr;
-    CFunctionHook*            m_unifiedWorkspaceSwipeUpdateFunctionHook = nullptr;
-    CFunctionHook*            m_unifiedWorkspaceSwipeEndFunctionHook = nullptr;
-    CFunctionHook*            m_scrollMoveGestureBeginFunctionHook = nullptr;
-    CFunctionHook*            m_scrollMoveGestureUpdateFunctionHook = nullptr;
-    CFunctionHook*            m_scrollMoveGestureEndFunctionHook = nullptr;
+    hooks::Lease*            m_groupBarDrawHook = nullptr;
+    hooks::Lease*            m_calculateUVForSurfaceHook = nullptr;
+    hooks::Lease*            m_workspaceSwipeBeginFunctionHook = nullptr;
+    hooks::Lease*            m_workspaceSwipeUpdateFunctionHook = nullptr;
+    hooks::Lease*            m_workspaceSwipeEndFunctionHook = nullptr;
+    hooks::Lease*            m_unifiedWorkspaceSwipeBeginFunctionHook = nullptr;
+    hooks::Lease*            m_unifiedWorkspaceSwipeUpdateFunctionHook = nullptr;
+    hooks::Lease*            m_unifiedWorkspaceSwipeEndFunctionHook = nullptr;
+    hooks::Lease*            m_scrollMoveGestureBeginFunctionHook = nullptr;
+    hooks::Lease*            m_scrollMoveGestureUpdateFunctionHook = nullptr;
+    hooks::Lease*            m_scrollMoveGestureEndFunctionHook = nullptr;
     SurfaceGetTexBoxFn        m_surfaceTexBoxOriginal = nullptr;
     SurfaceBoundingBoxFn      m_surfaceBoundingBoxOriginal = nullptr;
     SurfaceOpaqueRegionFn     m_surfaceOpaqueRegionOriginal = nullptr;

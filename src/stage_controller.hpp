@@ -55,6 +55,8 @@ class StageController {
     static std::optional<stage::OverviewEndpoint> overviewDestination(const PHLWINDOW& window, const PHLWORKSPACE& activeWorkspace, const Rect& desktopWindow);
     static void prepareOverviewExit(const std::vector<PHLMONITOR>& monitors, const PHLWORKSPACE& activeWorkspace);
     static void finishOverview();
+    // Shared native-pass capture/edge service. It also works with Stage hidden.
+    static void renderInViewport(const PHLMONITOR&, const stage::EdgeViewport&, const Rect&, const std::function<void()>&);
 
   private:
     struct Impl;

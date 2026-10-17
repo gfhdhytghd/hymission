@@ -1,3 +1,4 @@
+#include "hook_broker.hpp"
 #include "overview_controller.hpp"
 #include "numeric_config.hpp"
 #include "snapshot_framebuffer.hpp"
@@ -112,7 +113,7 @@ std::size_t inputGeneration = 0;
 
 std::string searchHelperPath() {
     Dl_info info{};
-    if (dladdr(reinterpret_cast<void*>(&searchHelperAnchor), &info) && info.dli_fname) {
+    if (dladdr(hooks::target(&searchHelperAnchor), &info) && info.dli_fname) {
         std::filesystem::path sibling = std::filesystem::path(info.dli_fname).parent_path() / "hymission-search-input";
         if (access(sibling.c_str(), X_OK) == 0)
             return sibling.string();
@@ -2411,58 +2412,58 @@ OverviewController::~OverviewController() {
         m_scrollMoveGestureEndFunctionHook->unhook();
 
     if (m_surfaceTexBoxHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_surfaceTexBoxHook);
+        hooks::remove(m_handle, m_surfaceTexBoxHook);
     if (m_surfaceBoundingBoxHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_surfaceBoundingBoxHook);
+        hooks::remove(m_handle, m_surfaceBoundingBoxHook);
     if (m_surfaceOpaqueRegionHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_surfaceOpaqueRegionHook);
+        hooks::remove(m_handle, m_surfaceOpaqueRegionHook);
     if (m_surfaceVisibleRegionHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_surfaceVisibleRegionHook);
+        hooks::remove(m_handle, m_surfaceVisibleRegionHook);
     if (m_surfaceDrawHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_surfaceDrawHook);
+        hooks::remove(m_handle, m_surfaceDrawHook);
     if (m_surfaceNeedsLiveBlurHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_surfaceNeedsLiveBlurHook);
+        hooks::remove(m_handle, m_surfaceNeedsLiveBlurHook);
     if (m_surfaceNeedsPrecomputeBlurHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_surfaceNeedsPrecomputeBlurHook);
+        hooks::remove(m_handle, m_surfaceNeedsPrecomputeBlurHook);
     if (m_shouldRenderWindowHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_shouldRenderWindowHook);
+        hooks::remove(m_handle, m_shouldRenderWindowHook);
     if (m_effectiveAlphaHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_effectiveAlphaHook);
+        hooks::remove(m_handle, m_effectiveAlphaHook);
     if (m_rendererDrawElementHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_rendererDrawElementHook);
+        hooks::remove(m_handle, m_rendererDrawElementHook);
     if (m_borderDrawHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_borderDrawHook);
+        hooks::remove(m_handle, m_borderDrawHook);
     if (m_shadowDrawHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_shadowDrawHook);
+        hooks::remove(m_handle, m_shadowDrawHook);
     if (m_customShadowHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_customShadowHook);
+        hooks::remove(m_handle, m_customShadowHook);
     if (m_groupBarDrawHook) {
         m_groupBarDrawHook->unhook();
-        HyprlandAPI::removeFunctionHook(m_handle, m_groupBarDrawHook);
+        hooks::remove(m_handle, m_groupBarDrawHook);
     }
     if (m_calculateUVForSurfaceHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_calculateUVForSurfaceHook);
+        hooks::remove(m_handle, m_calculateUVForSurfaceHook);
     if (m_workspaceSwipeBeginFunctionHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_workspaceSwipeBeginFunctionHook);
+        hooks::remove(m_handle, m_workspaceSwipeBeginFunctionHook);
     if (m_workspaceSwipeUpdateFunctionHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_workspaceSwipeUpdateFunctionHook);
+        hooks::remove(m_handle, m_workspaceSwipeUpdateFunctionHook);
     if (m_workspaceSwipeEndFunctionHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_workspaceSwipeEndFunctionHook);
+        hooks::remove(m_handle, m_workspaceSwipeEndFunctionHook);
     if (m_unifiedWorkspaceSwipeBeginFunctionHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_unifiedWorkspaceSwipeBeginFunctionHook);
+        hooks::remove(m_handle, m_unifiedWorkspaceSwipeBeginFunctionHook);
     if (m_unifiedWorkspaceSwipeUpdateFunctionHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_unifiedWorkspaceSwipeUpdateFunctionHook);
+        hooks::remove(m_handle, m_unifiedWorkspaceSwipeUpdateFunctionHook);
     if (m_unifiedWorkspaceSwipeEndFunctionHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_unifiedWorkspaceSwipeEndFunctionHook);
+        hooks::remove(m_handle, m_unifiedWorkspaceSwipeEndFunctionHook);
     if (m_scrollMoveGestureBeginFunctionHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_scrollMoveGestureBeginFunctionHook);
+        hooks::remove(m_handle, m_scrollMoveGestureBeginFunctionHook);
     if (m_scrollMoveGestureUpdateFunctionHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_scrollMoveGestureUpdateFunctionHook);
+        hooks::remove(m_handle, m_scrollMoveGestureUpdateFunctionHook);
     if (m_scrollMoveGestureEndFunctionHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_scrollMoveGestureEndFunctionHook);
+        hooks::remove(m_handle, m_scrollMoveGestureEndFunctionHook);
 
     if (m_decorationGradientHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_decorationGradientHook);
+        hooks::remove(m_handle, m_decorationGradientHook);
     decorationGradientOriginal = nullptr;
     g_controller = nullptr;
 }
@@ -7714,11 +7715,11 @@ bool OverviewController::installHooks() {
     if (!actionHooks::install(m_handle, this))
         return initFailed("[hymission] failed to hook Config::Actions fullscreen/workspace functions");
     if (!hookFunction("renderState", "CAnimatedDecorationGradient::renderState() const", m_decorationGradientHook,
-                      reinterpret_cast<void*>(&hookDecorationGradient)) || !m_decorationGradientHook->hook())
+                      hooks::target(&hookDecorationGradient)) || !m_decorationGradientHook->hook())
         return initFailed("[hymission] failed to hook CAnimatedDecorationGradient::renderState");
     decorationGradientOriginal = reinterpret_cast<DecorationGradientFn>(m_decorationGradientHook->m_original);
 
-    const auto activateOptionalHook = [&](CFunctionHook*& hook, auto& original, const char* label) {
+    const auto activateOptionalHook = [&](hooks::Lease*& hook, auto& original, const char* label) {
         if (!hook)
             return;
 
@@ -7728,7 +7729,7 @@ bool OverviewController::installHooks() {
                 out << "[hymission] optional hook activation failed: " << label;
                 debugLog(out.str());
             }
-            HyprlandAPI::removeFunctionHook(m_handle, hook);
+            hooks::remove(m_handle, hook);
             hook = nullptr;
             original = nullptr;
             return;
@@ -7743,72 +7744,72 @@ bool OverviewController::installHooks() {
                           "Render::IHyprRenderer::shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>)",
                           "IHyprRenderer::shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<CMonitor>)",
                           "CHyprRenderer::shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<CMonitor>)"},
-                      m_shouldRenderWindowHook, reinterpret_cast<void*>(&hkShouldRenderWindow))) {
+                      m_shouldRenderWindowHook, hooks::target(&hkShouldRenderWindow))) {
         return initFailed("[hymission] failed to hook shouldRenderWindow(window, monitor)");
     }
 
     if (!hookFunction("renderPresentation", "Desktop::View::CWindowPresentation::renderPresentation(Render::eSceneMode) const", m_effectiveAlphaHook,
-                      reinterpret_cast<void*>(&hkEffectiveAlpha))) {
+                      hooks::target(&hkEffectiveAlpha))) {
         return initFailed("[hymission] failed to hook CWindow::effectiveAlpha for expanded groups");
     }
 
     (void)hookFunction("renderLayer", std::vector<std::string>{"IHyprRenderer::renderLayer(", "CHyprRenderer::renderLayer("}, m_renderLayerHook,
-                       reinterpret_cast<void*>(&hkRenderLayer));
+                       hooks::target(&hkRenderLayer));
 
     (void)hookFunction("draw",
                        std::vector<std::string>{
                            "Render::IHyprRenderer::draw(Render::CRenderContext&, Hyprutils::Memory::CWeakPointer<IPassElement>",
                            "IHyprRenderer::draw(Render::CRenderContext&, Hyprutils::Memory::CWeakPointer<IPassElement>"},
-                       m_rendererDrawElementHook, reinterpret_cast<void*>(&hkRendererDrawElement));
+                       m_rendererDrawElementHook, hooks::target(&hkRendererDrawElement));
 
-    if (!hookFunction("getTexBox", "CSurfacePassElement::getTexBox(", m_surfaceTexBoxHook, reinterpret_cast<void*>(&hkSurfaceTexBox))) {
+    if (!hookFunction("getTexBox", "CSurfacePassElement::getTexBox(", m_surfaceTexBoxHook, hooks::target(&hkSurfaceTexBox))) {
         return initFailed("[hymission] failed to hook getTexBox");
     }
 
-    if (!hookFunction("boundingBox", "CSurfacePassElement::boundingBox(", m_surfaceBoundingBoxHook, reinterpret_cast<void*>(&hkSurfaceBoundingBox))) {
+    if (!hookFunction("boundingBox", "CSurfacePassElement::boundingBox(", m_surfaceBoundingBoxHook, hooks::target(&hkSurfaceBoundingBox))) {
         return initFailed("[hymission] failed to hook boundingBox");
     }
 
-    if (!hookFunction("opaqueRegion", "CSurfacePassElement::opaqueRegion(", m_surfaceOpaqueRegionHook, reinterpret_cast<void*>(&hkSurfaceOpaqueRegion))) {
+    if (!hookFunction("opaqueRegion", "CSurfacePassElement::opaqueRegion(", m_surfaceOpaqueRegionHook, hooks::target(&hkSurfaceOpaqueRegion))) {
         return initFailed("[hymission] failed to hook opaqueRegion");
     }
 
-    if (!hookFunction("visibleRegion", "CSurfacePassElement::visibleRegion(", m_surfaceVisibleRegionHook, reinterpret_cast<void*>(&hkSurfaceVisibleRegion))) {
+    if (!hookFunction("visibleRegion", "CSurfacePassElement::visibleRegion(", m_surfaceVisibleRegionHook, hooks::target(&hkSurfaceVisibleRegion))) {
         return initFailed("[hymission] failed to hook visibleRegion");
     }
 
-    if (!hookFunction("draw", "IPassElement::draw(", m_surfaceDrawHook, reinterpret_cast<void*>(&hkSurfaceDraw))) {
+    if (!hookFunction("draw", "IPassElement::draw(", m_surfaceDrawHook, hooks::target(&hkSurfaceDraw))) {
         return initFailed("[hymission] failed to hook surface draw");
     }
 
-    if (!hookFunction("needsLiveBlur", "CSurfacePassElement::needsLiveBlur(", m_surfaceNeedsLiveBlurHook, reinterpret_cast<void*>(&hkSurfaceNeedsLiveBlur))) {
+    if (!hookFunction("needsLiveBlur", "CSurfacePassElement::needsLiveBlur(", m_surfaceNeedsLiveBlurHook, hooks::target(&hkSurfaceNeedsLiveBlur))) {
         return initFailed("[hymission] failed to hook surface needsLiveBlur");
     }
 
     if (!hookFunction("needsPrecomputeBlur", "CSurfacePassElement::needsPrecomputeBlur(", m_surfaceNeedsPrecomputeBlurHook,
-                      reinterpret_cast<void*>(&hkSurfaceNeedsPrecomputeBlur))) {
+                      hooks::target(&hkSurfaceNeedsPrecomputeBlur))) {
         return initFailed("[hymission] failed to hook surface needsPrecomputeBlur");
     }
 
-    if (!hookFunction("draw", "CHyprBorderDecoration::draw(", m_borderDrawHook, reinterpret_cast<void*>(&hkBorderDraw))) {
+    if (!hookFunction("draw", "CHyprBorderDecoration::draw(", m_borderDrawHook, hooks::target(&hkBorderDraw))) {
         return initFailed("[hymission] failed to hook border decoration draw");
     }
 
-    if (!hookFunction("draw", "CHyprDropShadowDecoration::draw(", m_shadowDrawHook, reinterpret_cast<void*>(&hkShadowDraw))) {
+    if (!hookFunction("draw", "CHyprDropShadowDecoration::draw(", m_shadowDrawHook, hooks::target(&hkShadowDraw))) {
         return initFailed("[hymission] failed to hook shadow decoration draw");
     }
 
     if (!hookFunction("drawShadow", "CHyprGLRenderer::drawShadow(Render::CRenderContext&, Hyprutils::Math::CBox const&, int, float, int, Config::CGradientValueData const&, float, Render::SWindowRenderPresentation const&)",
-                      m_customShadowHook, reinterpret_cast<void*>(&hkCustomShadow)))
+                      m_customShadowHook, hooks::target(&hkCustomShadow)))
         debugLog("[hymission] Viewflow shadow hook unavailable");
 
-    if (!hookFunction("draw", "CHyprGroupBarDecoration::draw(", m_groupBarDrawHook, reinterpret_cast<void*>(&hkGroupBarDraw))) {
+    if (!hookFunction("draw", "CHyprGroupBarDecoration::draw(", m_groupBarDrawHook, hooks::target(&hkGroupBarDraw))) {
         notify("[hymission] groupbar draw hook unavailable; grouped previews may retain the native bar", CHyprColor(1.0, 0.65, 0.2, 1.0), 4000);
     }
 
     if (!hookFunction("calculateUVForSurface",
                       std::vector<std::string>{"IElementRenderer::calculateUVForSurface(", "CHyprRenderer::calculateUVForSurface("},
-                      m_calculateUVForSurfaceHook, reinterpret_cast<void*>(&hkCalculateUVForSurface))) {
+                      m_calculateUVForSurfaceHook, hooks::target(&hkCalculateUVForSurface))) {
         return initFailed("[hymission] failed to hook calculateUVForSurface");
     }
 
@@ -7828,18 +7829,18 @@ bool OverviewController::installHooks() {
         "focusworkspaceoncurrentmonitor",
         m_focusWorkspaceOnCurrentMonitorOriginal,
         [this](std::string args) { return focusWorkspaceOnCurrentMonitorDispatcherHook(std::move(args)); });
-    (void)hookFunction("begin", "CWorkspaceSwipeGesture::begin(", m_workspaceSwipeBeginFunctionHook, reinterpret_cast<void*>(&hkWorkspaceSwipeBegin));
-    (void)hookFunction("update", "CWorkspaceSwipeGesture::update(", m_workspaceSwipeUpdateFunctionHook, reinterpret_cast<void*>(&hkWorkspaceSwipeUpdate));
-    (void)hookFunction("end", "CWorkspaceSwipeGesture::end(", m_workspaceSwipeEndFunctionHook, reinterpret_cast<void*>(&hkWorkspaceSwipeEnd));
+    (void)hookFunction("begin", "CWorkspaceSwipeGesture::begin(", m_workspaceSwipeBeginFunctionHook, hooks::target(&hkWorkspaceSwipeBegin));
+    (void)hookFunction("update", "CWorkspaceSwipeGesture::update(", m_workspaceSwipeUpdateFunctionHook, hooks::target(&hkWorkspaceSwipeUpdate));
+    (void)hookFunction("end", "CWorkspaceSwipeGesture::end(", m_workspaceSwipeEndFunctionHook, hooks::target(&hkWorkspaceSwipeEnd));
     (void)hookFunction("begin", "CUnifiedWorkspaceSwipeGesture::begin(Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>)", m_unifiedWorkspaceSwipeBeginFunctionHook,
-                       reinterpret_cast<void*>(&hkUnifiedWorkspaceSwipeBegin));
+                       hooks::target(&hkUnifiedWorkspaceSwipeBegin));
     (void)hookFunction("update", "CUnifiedWorkspaceSwipeGesture::update(", m_unifiedWorkspaceSwipeUpdateFunctionHook,
-                       reinterpret_cast<void*>(&hkUnifiedWorkspaceSwipeUpdate));
+                       hooks::target(&hkUnifiedWorkspaceSwipeUpdate));
     (void)hookFunction("end", "CUnifiedWorkspaceSwipeGesture::end(", m_unifiedWorkspaceSwipeEndFunctionHook,
-                       reinterpret_cast<void*>(&hkUnifiedWorkspaceSwipeEnd));
-    (void)hookFunction("begin", "CScrollMoveTrackpadGesture::begin(", m_scrollMoveGestureBeginFunctionHook, reinterpret_cast<void*>(&hkScrollMoveGestureBegin));
-    (void)hookFunction("update", "CScrollMoveTrackpadGesture::update(", m_scrollMoveGestureUpdateFunctionHook, reinterpret_cast<void*>(&hkScrollMoveGestureUpdate));
-    (void)hookFunction("end", "CScrollMoveTrackpadGesture::end(", m_scrollMoveGestureEndFunctionHook, reinterpret_cast<void*>(&hkScrollMoveGestureEnd));
+                       hooks::target(&hkUnifiedWorkspaceSwipeEnd));
+    (void)hookFunction("begin", "CScrollMoveTrackpadGesture::begin(", m_scrollMoveGestureBeginFunctionHook, hooks::target(&hkScrollMoveGestureBegin));
+    (void)hookFunction("update", "CScrollMoveTrackpadGesture::update(", m_scrollMoveGestureUpdateFunctionHook, hooks::target(&hkScrollMoveGestureUpdate));
+    (void)hookFunction("end", "CScrollMoveTrackpadGesture::end(", m_scrollMoveGestureEndFunctionHook, hooks::target(&hkScrollMoveGestureEnd));
 
     m_shouldRenderWindowOriginal = nullptr;
     m_effectiveAlphaOriginal = nullptr;
@@ -7943,7 +7944,7 @@ bool OverviewController::activateHooks() {
         } else {
             if (debugLogsEnabled())
                 debugLog("[hymission] optional hook activation failed: renderer draw element");
-            HyprlandAPI::removeFunctionHook(m_handle, m_rendererDrawElementHook);
+            hooks::remove(m_handle, m_rendererDrawElementHook);
             m_rendererDrawElementHook = nullptr;
             m_rendererDrawElementOriginal = nullptr;
         }
@@ -7956,7 +7957,7 @@ bool OverviewController::activateHooks() {
         } else {
             if (debugLogsEnabled())
                 debugLog("[hymission] optional hook activation failed: renderLayer");
-            HyprlandAPI::removeFunctionHook(m_handle, m_renderLayerHook);
+            hooks::remove(m_handle, m_renderLayerHook);
             m_renderLayerHook = nullptr;
             m_renderLayerOriginal = nullptr;
         }
@@ -8026,16 +8027,16 @@ void OverviewController::deactivateHooks() {
 
 }
 
-bool OverviewController::hookFunction(const std::string& symbolName, const std::string& demangledNeedle, CFunctionHook*& hook, void* destination) {
+bool OverviewController::hookFunction(const std::string& symbolName, const std::string& demangledNeedle, hooks::Lease*& hook, void* destination) {
     return hookFunction(symbolName, std::vector<std::string>{demangledNeedle}, hook, destination);
 }
 
-bool OverviewController::hookFunction(const std::string& symbolName, const std::vector<std::string>& demangledNeedles, CFunctionHook*& hook, void* destination) {
+bool OverviewController::hookFunction(const std::string& symbolName, const std::vector<std::string>& demangledNeedles, hooks::Lease*& hook, void* destination) {
     void* source = findFunction(symbolName, demangledNeedles);
     if (!source)
         return false;
 
-    hook = HyprlandAPI::createFunctionHook(m_handle, source, destination);
+    hook = hooks::create(m_handle, source, destination);
     return hook != nullptr;
 }
 

@@ -1,3 +1,4 @@
+#include "hook_broker.hpp"
 #pragma once
 
 #include "overview_controller.hpp"
@@ -21,7 +22,7 @@ inline FullscreenFn fullscreenOriginal = nullptr;
 inline FullscreenStateFn fullscreenStateOriginal = nullptr;
 inline WorkspaceFn workspaceOriginal = nullptr, workspaceOnMonitorOriginal = nullptr;
 inline OverviewController* controller = nullptr;
-inline std::vector<CFunctionHook*> hooks;
+inline std::vector<hooks::Lease*> hooks;
 
 inline SDispatchResult toDispatch(const Result& result) {
     return result ? SDispatchResult{} : SDispatchResult{.success = false, .error = result.error().message};
@@ -49,7 +50,7 @@ inline Result workspaceOnMonitor(const std::string& value) {
 
 inline void remove(HANDLE handle) {
     for (auto* hook : hooks)
-        HyprlandAPI::removeFunctionHook(handle, hook);
+        hooks::remove(handle, hook);
     hooks.clear();
     controller = nullptr;
     fullscreenOriginal = nullptr;
@@ -74,7 +75,7 @@ inline bool install(HANDLE handle, OverviewController* owner) {
         }
         if (!address)
             return false;
-        auto* hook = HyprlandAPI::createFunctionHook(handle, address, reinterpret_cast<void*>(thunk));
+        auto* hook = hooks::create(handle, address, reinterpret_cast<void*>(thunk));
         if (!hook)
             return false;
         hooks.push_back(hook);

@@ -18,11 +18,14 @@ extern "C" {
 #include "state_json.hpp"
 #include "overview_controller.hpp"
 #include "stage_controller.hpp"
+#include "tiles_controller.hpp"
 #include "dispatcher_names.hpp"
 
 inline HANDLE g_pluginHandle = nullptr;
 inline std::unique_ptr<hymission::OverviewController> g_overviewController;
 inline std::unique_ptr<hymission::StageController> g_stageController;
+inline std::unique_ptr<hymission::TilesController> g_tilesController;
+inline SP<IPC::Socket1::SCommand> g_tilesStateCommand;
 inline SP<IPC::Socket1::SCommand> g_stageStateCommand;
 inline SP<IPC::Socket1::SCommand> g_stageRegionCommand;
 inline SP<IPC::Socket1::SCommand> g_overviewStateCommand;
@@ -60,6 +63,14 @@ bool addStringConfig(const char* name, Config::STRING fallback) {
     return addConfigValue(makeShared<Config::Values::CStringValue>(name, "", fallback));
 }
 
+SDispatchResult dispatchTile(const std::string& action, const std::string& args) {
+    return g_tilesController ? g_tilesController->dispatch(action, args) : SDispatchResult{.success=false,.error="tiles controller unavailable"};
+}
+SDispatchResult dispatch_tile_add(const std::string& args) { return dispatchTile("tile_add", args); }
+SDispatchResult dispatch_tile_resize(const std::string& args) { return dispatchTile("tile_resize", args); }
+SDispatchResult dispatch_tile_remove(const std::string& args) { return dispatchTile("tile_remove", args); }
+SDispatchResult dispatch_tile_focus(const std::string& args) { return dispatchTile("tile_focus", args); }
+SDispatchResult dispatch_tile_move_window(const std::string& args) { return dispatchTile("tile_move_window", args); }
 SDispatchResult dispatchToggle(const std::string& args) {
     return g_overviewController ? g_overviewController->toggle(args) : SDispatchResult{.success = false, .error = "overview controller unavailable"};
 }
@@ -236,10 +247,50 @@ int luaStageToggle(lua_State* L) {
     return luaDispatchResult(L, dispatchStageToggle(""));
 }
 
+void pushJson(lua_State* L, const nlohmann::json& j) {
+    if (j.is_null()) lua_pushnil(L);
+    else if (j.is_boolean()) lua_pushboolean(L, j.get<bool>());
+    else if (j.is_number()) lua_pushnumber(L, j.get<double>());
+    else if (j.is_string()) { const auto& v=j.get_ref<const std::string&>(); lua_pushlstring(L,v.data(),v.size()); }
+    else {
+        lua_createtable(L,j.is_array()?j.size():0,j.is_object()?j.size():0);
+        if (j.is_array()) { int i=1; for (const auto& v:j) { pushJson(L,v); lua_rawseti(L,-2,i++); } }
+        else for (const auto& [k,v]:j.items()) { pushJson(L,v); lua_setfield(L,-2,k.c_str()); }
+    }
+}
+int luaTilesState(lua_State* L) {
+    pushJson(L, nlohmann::json::parse(g_tilesController ? g_tilesController->stateJson() : "{}"));
+    return 1;
+}
+int luaTile(lua_State* L, const char* action) {
+    std::string args;
+    if (lua_gettop(L) && !lua_isnil(L,1)) {
+        if (lua_isstring(L,1)) args=luaL_checkstring(L,1);
+        else {
+            luaL_checktype(L,1,LUA_TTABLE);
+            lua_pushnil(L);
+            while (lua_next(L,1)) {
+                if (lua_type(L,-2)!=LUA_TSTRING || (!lua_isstring(L,-1) && !lua_isnumber(L,-1))) return luaL_error(L,"tile fields must be strings or numbers");
+                const char* key=lua_tostring(L,-2);
+                const char* val=lua_tostring(L,-1);
+                if (std::string(val).find_first_of(" \t\r\n")!=std::string::npos) return luaL_error(L,"tile field contains whitespace");
+                args+=std::string(key)+"="+val+" "; lua_pop(L,1);
+            }
+        }
+    }
+    return luaDispatchResult(L,dispatchTile(action,args));
+}
+int lua_tile_add(lua_State* L) { return luaTile(L,"tile_add"); }
+int lua_tile_resize(lua_State* L) { return luaTile(L,"tile_resize"); }
+int lua_tile_remove(lua_State* L) { return luaTile(L,"tile_remove"); }
+int lua_tile_focus(lua_State* L) { return luaTile(L,"tile_focus"); }
+int lua_tile_move_window(lua_State* L) { return luaTile(L,"tile_move_window"); }
 int luaDispatch(lua_State* L) {
     const std::string dispatcher = normalizeHymissionDispatcher(luaL_checkstring(L, 1));
     const std::string args       = luaOptionalString(L, 2);
 
+    if (dispatcher.starts_with("hymission:tile_"))
+        return luaDispatchResult(L, dispatchTile(dispatcher.substr(10), args));
     if (dispatcher == "hymission:stage_open")
         return luaDispatchResult(L, dispatchStageOpen(args));
     if (dispatcher == "hymission:stage_close")
@@ -387,6 +438,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("stage_card_max_width", 0);
     FLOAT_CONF("stage_window_rounding", -1.0);
     INT_CONF("stage_window_decorations", 0);
+    INT_CONF("tiles_enabled", 0);
+    INT_CONF("tile_min_width", 240);
+    INT_CONF("tile_divider_hit_width", 8);
     INT_CONF("stage_scrolling_desktop_edge_width", 32);
     INT_CONF("stage_scrolling_preview_edge_width", 16);
     INT_CONF("stage_padding", -1);
@@ -480,6 +534,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         return g_overviewController && g_overviewController->captureInputSuppressed();
     });
     g_stageController->initialize();
+    g_tilesController = std::make_unique<hymission::TilesController>(g_pluginHandle, [] { return g_overviewController && g_overviewController->suspendsStage(); });
+    g_tilesController->initialize();
+    g_tilesStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, IPC::Socket1::SCommand{
+        .name="hymission-tiles-state", .match=IPC::Socket1::COMMAND_MATCH_EXACT,
+        .handler=[](const IPC::Socket1::SRequest&) -> IPC::Socket1::SResponse { return g_tilesController ? g_tilesController->stateJson() : "{}"; },
+    });
     g_stageStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, IPC::Socket1::SCommand{
         .name = "hymission-stage-state",
         .match = IPC::Socket1::COMMAND_MATCH_EXACT,
@@ -509,6 +569,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             }
         };
 
+        registerDispatcher("hymission:tile_add", dispatch_tile_add);
+        registerDispatcher("hymission:tile_resize", dispatch_tile_resize);
+        registerDispatcher("hymission:tile_remove", dispatch_tile_remove);
+        registerDispatcher("hymission:tile_focus", dispatch_tile_focus);
+        registerDispatcher("hymission:tile_move_window", dispatch_tile_move_window);
         registerDispatcher("hymission:stage_toggle", dispatchStageToggle);
         registerDispatcher("hymission:stage_open", dispatchStageOpen);
         registerDispatcher("hymission:stage_close", dispatchStageClose);
@@ -556,6 +621,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             }
         };
 
+        registerLuaFunction("tile_add", lua_tile_add);
+        registerLuaFunction("tile_resize", lua_tile_resize);
+        registerLuaFunction("tile_remove", lua_tile_remove);
+        registerLuaFunction("tile_focus", lua_tile_focus);
+        registerLuaFunction("tile_move_window", lua_tile_move_window);
+        registerLuaFunction("tiles_state", luaTilesState);
         registerLuaFunction("stage_toggle", luaStageToggle);
         registerLuaFunction("stage_open", luaStageOpen);
         registerLuaFunction("stage_close", luaStageClose);
@@ -595,6 +666,8 @@ APICALL EXPORT void PLUGIN_EXIT() {
         HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_stageStateCommand);
         g_stageStateCommand.reset();
     }
+    if (g_tilesStateCommand) { HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle,g_tilesStateCommand); g_tilesStateCommand.reset(); }
+    g_tilesController.reset();
     g_stageController.reset();
     if (g_overviewStateCommand) {
         HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_overviewStateCommand);

@@ -2,3 +2,6 @@ build/
 build-meson/
 build-cmake/
 Testing/
+
+build-tiles/
+.tiles-progress.md

@@ -1,0 +1,19 @@
+#pragma once
+#include <string_view>
+// Exact development signatures, audited against e5a03b6a. No prefix matching.
+namespace hymission::tiles::symbols {
+inline std::string_view lookup(std::string_view key) {
+    if (key == "recheckWorkArea") return "Layout::CSpace::recheckWorkArea()";
+    if (key == "windowAt") return "Desktop::CViewHitTester::windowAt(Hyprutils::Math::Vector2D const&, unsigned short, Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>) const";
+    if (key == "rawWindowFocus") return "Desktop::CFocusState::rawWindowFocus(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Desktop::eFocusReason, Hyprutils::Memory::CSharedPointer<CWLSurfaceResource>)";
+    if (key == "changeWorkspaceMonitor") return "Monitor::CMonitor::changeWorkspace(Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace> const&, bool, bool, bool)";
+    if (key == "isVisibleNotCovered") return "Workspace::CHLWorkspace::isVisibleNotCovered() const";
+    if (key == "renderWindow") return "Render::IHyprRenderer::renderWindow(Render::CRenderContext&, Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>, Render::SWindowRenderPresentation const&, std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&, bool, Render::eRenderPassMode, bool, bool)";
+    if (key == "renderWorkspaceWindows") return "Render::IHyprRenderer::renderWorkspaceWindows(Render::CRenderContext&, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>, Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>, std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&, Render::eSceneMode)";
+    if (key == "renderWorkspaceWindowsFullscreen") return "Render::IHyprRenderer::renderWorkspaceWindowsFullscreen(Render::CRenderContext&, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>, Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>, std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&, Render::eSceneMode)";
+    if (key == "sendFrameEventsToWorkspace") return "Render::IHyprRenderer::sendFrameEventsToWorkspace(Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>, Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>, std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&)";
+    if (key == "setTargetSizeAndPosition") return "Fullscreen::IFullscreenHandler::setTargetSizeAndPosition(Hyprutils::Memory::CSharedPointer<Layout::ITarget>)";
+    if (key == "syncTargetSizeAndPosition") return "Fullscreen::IFullscreenHandler::syncTargetSizeAndPosition()";
+    return {};
+}
+}

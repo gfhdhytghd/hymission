@@ -1,3 +1,4 @@
+#include "hook_broker.hpp"
 #include "stage_controller.hpp"
 #include "numeric_config.hpp"
 #include "stage_logic.hpp"
@@ -372,21 +373,21 @@ struct StageController::Impl {
     uint64_t swipeEnds = 0;
     uint64_t rawSwipeUpdates = 0;
     std::vector<CHyprSignalListener> listeners;
-    CFunctionHook* areaHook = nullptr;
-    CFunctionHook* dragHook = nullptr;
-    CFunctionHook* windowFocusHook = nullptr;
-    CFunctionHook* scrollFocusHook = nullptr;
-    CFunctionHook* hitHook = nullptr;
-    CFunctionHook* roundingHook = nullptr;
-    CFunctionHook* renderWindowHook = nullptr;
-    CFunctionHook* surfaceBoxHook = nullptr;
-    CFunctionHook* surfaceVisibleHook = nullptr;
-    CFunctionHook* surfaceUVHook = nullptr;
-    CFunctionHook* addPassHook = nullptr;
-    CFunctionHook* workspaceAnimationHook = nullptr;
-    CFunctionHook* changeWorkspaceHook = nullptr;
-    CFunctionHook* blurFramebufferHook = nullptr;
-    CFunctionHook* fadeoutsHook = nullptr;
+    hooks::Lease* areaHook = nullptr;
+    hooks::Lease* dragHook = nullptr;
+    hooks::Lease* windowFocusHook = nullptr;
+    hooks::Lease* scrollFocusHook = nullptr;
+    hooks::Lease* hitHook = nullptr;
+    hooks::Lease* roundingHook = nullptr;
+    hooks::Lease* renderWindowHook = nullptr;
+    hooks::Lease* surfaceBoxHook = nullptr;
+    hooks::Lease* surfaceVisibleHook = nullptr;
+    hooks::Lease* surfaceUVHook = nullptr;
+    hooks::Lease* addPassHook = nullptr;
+    hooks::Lease* workspaceAnimationHook = nullptr;
+    hooks::Lease* changeWorkspaceHook = nullptr;
+    hooks::Lease* blurFramebufferHook = nullptr;
+    hooks::Lease* fadeoutsHook = nullptr;
     using BlurFramebufferFn = SP<Render::IFramebuffer> (*)(Render::IHyprRenderer*, Render::CRenderContext&, float, const CRegion&, const Render::SBlurContext&);
     using FadeoutsFn = void (*)(Render::IHyprRenderer*, Render::CRenderContext&, PHLMONITOR, Desktop::eFadeoutPlane, PHLWORKSPACE);
     StageEdgeEffect edgeEffect;
@@ -1234,7 +1235,7 @@ bool StageController::Impl::installHooks() {
             error = std::string("stage disabled: missing symbol ") + qualified;
         return address;
     };
-    const auto attach = [&](CFunctionHook* hook, const char* name) {
+    const auto attach = [&](hooks::Lease* hook, const char* name) {
         if (hook && hook->hook())
             return true;
         error = std::string("stage disabled: failed to attach ") + name;
@@ -1256,20 +1257,20 @@ bool StageController::Impl::installHooks() {
     renderWindow = reinterpret_cast<RenderWindowFn>(find("renderWindow", "IHyprRenderer::renderWindow("));
     shouldBlur = reinterpret_cast<ShouldBlurFn>(find("shouldBlur", "Desktop::View::CWindow::shouldBlur(Render::SWindowRenderPresentation const&) const"));
     if (area && drag && windowFocus && scrollFocus && hit && rounding && surfaceBox && surfaceVisible && surfaceUV && addPass && fadeouts && workspaceAnimation && changeWorkspace && renderWindow && shouldBlur && g_pHyprOpenGL) {
-        areaHook = HyprlandAPI::createFunctionHook(handle, area, reinterpret_cast<void*>(&recheckThunk));
-        dragHook = HyprlandAPI::createFunctionHook(handle, drag, reinterpret_cast<void*>(&dragThunk));
-        windowFocusHook = HyprlandAPI::createFunctionHook(handle, windowFocus, reinterpret_cast<void*>(&windowFocusThunk));
-        scrollFocusHook = HyprlandAPI::createFunctionHook(handle, scrollFocus, reinterpret_cast<void*>(&scrollFocusThunk));
-        hitHook = HyprlandAPI::createFunctionHook(handle, hit, reinterpret_cast<void*>(&windowAtThunk));
-        roundingHook = HyprlandAPI::createFunctionHook(handle, rounding, reinterpret_cast<void*>(&roundingThunk));
-        renderWindowHook = HyprlandAPI::createFunctionHook(handle, reinterpret_cast<void*>(renderWindow), reinterpret_cast<void*>(&renderWindowThunk));
-        surfaceBoxHook = HyprlandAPI::createFunctionHook(handle, surfaceBox, reinterpret_cast<void*>(&surfaceBoxThunk));
-        surfaceVisibleHook = HyprlandAPI::createFunctionHook(handle, surfaceVisible, reinterpret_cast<void*>(&surfaceVisibleThunk));
-        surfaceUVHook = HyprlandAPI::createFunctionHook(handle, surfaceUV, reinterpret_cast<void*>(&surfaceUVThunk));
-        addPassHook = HyprlandAPI::createFunctionHook(handle, addPass, reinterpret_cast<void*>(&addPassThunk));
-        fadeoutsHook = HyprlandAPI::createFunctionHook(handle, fadeouts, reinterpret_cast<void*>(&fadeoutsThunk));
-        workspaceAnimationHook = HyprlandAPI::createFunctionHook(handle, workspaceAnimation, reinterpret_cast<void*>(&workspaceAnimationThunk));
-        changeWorkspaceHook = HyprlandAPI::createFunctionHook(handle, changeWorkspace, reinterpret_cast<void*>(&changeWorkspaceThunk));
+        areaHook = hooks::create(handle, area, hooks::target(&recheckThunk));
+        dragHook = hooks::create(handle, drag, hooks::target(&dragThunk));
+        windowFocusHook = hooks::create(handle, windowFocus, hooks::target(&windowFocusThunk));
+        scrollFocusHook = hooks::create(handle, scrollFocus, hooks::target(&scrollFocusThunk));
+        hitHook = hooks::create(handle, hit, hooks::target(&windowAtThunk));
+        roundingHook = hooks::create(handle, rounding, hooks::target(&roundingThunk));
+        renderWindowHook = hooks::create(handle, reinterpret_cast<void*>(renderWindow), hooks::target(&renderWindowThunk));
+        surfaceBoxHook = hooks::create(handle, surfaceBox, hooks::target(&surfaceBoxThunk));
+        surfaceVisibleHook = hooks::create(handle, surfaceVisible, hooks::target(&surfaceVisibleThunk));
+        surfaceUVHook = hooks::create(handle, surfaceUV, hooks::target(&surfaceUVThunk));
+        addPassHook = hooks::create(handle, addPass, hooks::target(&addPassThunk));
+        fadeoutsHook = hooks::create(handle, fadeouts, hooks::target(&fadeoutsThunk));
+        workspaceAnimationHook = hooks::create(handle, workspaceAnimation, hooks::target(&workspaceAnimationThunk));
+        changeWorkspaceHook = hooks::create(handle, changeWorkspace, hooks::target(&changeWorkspaceThunk));
         hooksReady = attach(areaHook, "work area") && attach(dragHook, "drag end") && attach(windowFocusHook, "drop focus") &&
             attach(scrollFocusHook, "scrolling desktop focus") && attach(hitHook, "window hit test") &&
             attach(roundingHook, "rounding") && attach(renderWindowHook, "window rendering") &&
@@ -1290,9 +1291,9 @@ bool StageController::Impl::installHooks() {
         // Soft effects are optional. Missing blur interception must never
         // disable the independent viewport clip or Stage itself.
         if (const auto address = find("blurMainFramebuffer", "Render::IHyprRenderer::blurMainFramebuffer(Render::CRenderContext&, float, Hyprutils::Math::CRegion const&, Render::SBlurContext const&)")) {
-            blurFramebufferHook = HyprlandAPI::createFunctionHook(handle, address, reinterpret_cast<void*>(&blurFramebufferThunk));
+            blurFramebufferHook = hooks::create(handle, address, hooks::target(&blurFramebufferThunk));
             if (blurFramebufferHook && !blurFramebufferHook->hook()) {
-                HyprlandAPI::removeFunctionHook(handle, blurFramebufferHook);
+                hooks::remove(handle, blurFramebufferHook);
                 blurFramebufferHook = nullptr;
             }
         }
@@ -1308,7 +1309,7 @@ void StageController::Impl::releaseHooks() {
         if (!*hook)
             continue;
         (*hook)->unhook();
-        HyprlandAPI::removeFunctionHook(handle, *hook);
+        hooks::remove(handle, *hook);
         *hook = nullptr;
     }
     hooksReady = false;
@@ -3699,6 +3700,12 @@ void StageController::endVisibilityGesture(bool cancelled) {
 }
 
 void StageController::initialize() { m_impl->initialize(); }
+void StageController::renderInViewport(const PHLMONITOR& monitor, const stage::EdgeViewport& viewport, const Rect& clip, const std::function<void()>& render) {
+    if (auto* self = Impl::instance)
+        self->captureWindowPasses(g_pHyprRenderer.get(), monitor, viewport, render, clip);
+    else
+        render();
+}
 std::string StageController::stateJson() const { return m_impl->stateJson(); }
 
 std::optional<stage::OverviewEndpoint> StageController::Impl::cardEndpoint(const Screen& screen, const PHLWINDOW& window, bool settled) const {
