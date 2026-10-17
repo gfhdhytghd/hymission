@@ -160,7 +160,9 @@ def main():
         assert tiles_state()[0]["focused"]
         evaluate('hl.dispatch(hl.dsp.focus({workspace=2,on_current_monitor=true}))')
         assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[2,1,3],tiles_state()
-        if args.fixture: evaluate('hl.config({animations={enabled=true}})')
+        if args.fixture:
+            evaluate('assert(hl.plugin.hymission_tiles_test.change_workspace("98",true)==0); assert(hl.plugin.hymission_tiles_test.change_workspace("2",false)==1)')
+            evaluate('hl.config({animations={enabled=true}})')
         evaluate('hl.dispatch(hl.dsp.focus({workspace=4}))')
         assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[4,1,3]
         if args.fixture:

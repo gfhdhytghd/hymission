@@ -27,6 +27,31 @@ extern "C" {
 #include <lauxlib.h>
 }
 namespace {
+HANDLE fixtureHandle=nullptr;
+CFunctionHook* releaseHook=nullptr;
+int mouseReleases=0;
+void releaseButtons(CInputManager* input) {
+    ++mouseReleases;
+    reinterpret_cast<decltype(&releaseButtons)>(releaseHook->m_original)(input);
+}
+int workspaceChange(lua_State* L) {
+    if (!releaseHook) {
+        for (const auto& symbol:HyprlandAPI::findFunctionsByName(fixtureHandle,"releaseAllMouseButtons"))
+            if (symbol.demangled=="CInputManager::releaseAllMouseButtons()") {
+                releaseHook=HyprlandAPI::createFunctionHook(fixtureHandle,symbol.address,reinterpret_cast<void*>(&releaseButtons));
+                break;
+            }
+        if (!releaseHook || !releaseHook->hook()) return luaL_error(L,"test release spy unavailable");
+    }
+    const auto mon=Desktop::focusState()->monitor();
+    const auto target=State::Workspace::resolver()->getWorkspaceTargetFromString(luaL_checkstring(L,1),mon);
+    auto ws=State::workspaceState()->find(target);
+    if (!ws) ws=State::workspaceState()->create(target,mon,true);
+    const int before=mouseReleases;
+    mon->changeWorkspace(ws,lua_toboolean(L,2),true);
+    lua_pushinteger(L,mouseReleases-before);
+    return 1;
+}
 int meta(lua_State* L) {
     const auto keyboard=g_pSeatManager->m_keyboard.lock();
     if (!keyboard || !keyboard->m_xkbKeymap || !keyboard->m_xkbState) return luaL_error(L,"isolated keyboard unavailable");
@@ -122,6 +147,8 @@ int pointer(lua_State* L) {
 }
 APICALL EXPORT std::string PLUGIN_API_VERSION() { return HYPRLAND_API_VERSION; }
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+    fixtureHandle=handle;
+    HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","change_workspace",workspaceChange);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","meta",meta);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","workspace_animation",workspaceAnimation);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","refresh",refresh);
@@ -131,4 +158,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         !HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","pointer",pointer)) throw std::runtime_error("test fixture Lua registration failed");
     return {"hymission_tiles_test","private native gesture/input test fixture","hymission","1"};
 }
-APICALL EXPORT void PLUGIN_EXIT() { g_pUnifiedWorkspaceSwipe->cancel(); }
+APICALL EXPORT void PLUGIN_EXIT() {
+    g_pUnifiedWorkspaceSwipe->cancel();
+    if (releaseHook) HyprlandAPI::removeFunctionHook(fixtureHandle,releaseHook);
+    releaseHook=nullptr;
+}

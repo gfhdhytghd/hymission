@@ -153,7 +153,7 @@ struct TilesController::Impl {
         if (stopping || deferred || !g_pEventLoopManager) return;
         deferred = g_pEventLoopManager->doLaterLock([this] { deferred.reset(); reconcile(); });
     }
-    void apply(Output& o, bool focusWindow = false, bool warp = false);
+    void apply(Output& o, bool focusWindow = false, bool warp = false, bool internal = false);
     bool publish(Output& o, tiles::Model draft, const std::vector<PHLWINDOW>& windows={}, PHLWORKSPACE destination=nullptr, bool focus=true, bool warp=false) {
         if (applying) return false;
         std::vector<PHLWORKSPACE> origins;
@@ -373,7 +373,7 @@ struct TilesController::Impl {
         }
         if (ws->m_monitor != monitor) return; // placement is handled before this boundary
         auto* o = self->output(monitor);
-        if (o->model.activate(workspaceKey(ws))) self->apply(*o, !internal && !noFocus, !noMouseMove);
+        if (o->model.activate(workspaceKey(ws))) self->apply(*o, !internal && !noFocus, !noMouseMove, internal);
     }
     static bool visible(const Workspace::CHLWorkspace* ws) {
         if (!locked() && self->view(const_cast<Workspace::CHLWorkspace*>(ws)->m_self.lock())) return !ws->m_monitor->m_activeSpecialWorkspace;
@@ -866,7 +866,7 @@ void TilesController::Impl::notify(Output& o, PHLWORKSPACE old) {
         if (topologyChanged) topologyChanged();
     }
 }
-void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp) {
+void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp, bool internal) {
     const auto mon = o.monitor.lock();
     if (!mon || applying) return;
     applying = true;
@@ -886,7 +886,7 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp) {
             const auto allocation=box(o.model.box(*o.model.index(t.id)));
             std::erase_if(o.outgoing,[&](const auto& v) { return v.workspace==exiting; });
             o.outgoing.push_back({mon,exiting,t.id,allocation,false});
-            g_pInputManager->releaseAllMouseButtons();
+            if (!internal) g_pInputManager->releaseAllMouseButtons();
             for (const auto& [w,type]:{std::pair{exiting,Animation::Workspace::ANIMATION_TYPE_OUT},std::pair{ws,Animation::Workspace::ANIMATION_TYPE_IN}}) {
                 static auto animations=CConfigValue<Config::INTEGER>("animations:enabled");
                 const bool instant=!*animations;
