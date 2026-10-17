@@ -539,7 +539,7 @@ struct TilesController::Impl {
         if (!active(mon) || !ws || ws->type() == Workspace::eWorkspaceType::SPECIAL || applying || locked()) {
             // Native on-current-monitor recognizes visible workspaces through
             // the physical output's compatibility active pointer.
-            if (!applying && current && ws && ws->m_monitor!=mon && active(ws->m_monitor.lock())) if (const auto v=view(ws);v && !v->focused) {
+            if (!applying && !locked() && mon && current && ws && ws->m_monitor!=mon && active(ws->m_monitor.lock())) if (const auto v=view(ws);v && !v->focused) {
                 auto* target=output(v->monitor);
                 if (target->model.activate(workspaceKey(ws))) apply(*target);
             }
@@ -977,6 +977,9 @@ void TilesController::initialize() {
     m->listeners.emplace_back(e.workspace.removed.listen([this](PHLWORKSPACEREF) { finishTransfer(false); m->request(); }));
     m->listeners.emplace_back(e.workspace.moveToMonitor.listen([this](PHLWORKSPACE, PHLMONITOR) { finishTransfer(false); m->request(); }));
     m->listeners.emplace_back(e.window.close.listen([this](PHLWINDOW w) { if (transferMember(w)) finishTransfer(false); }));
+    m->listeners.emplace_back(e.window.destroy.listen([this](const PHLWINDOWREF& ref) {
+        if (m->transfer && std::ranges::find(m->transfer->windows,ref)!=m->transfer->windows.end()) finishTransfer(false);
+    }));
     m->listeners.emplace_back(e.window.moveToWorkspace.listen([this](PHLWINDOW w,PHLWORKSPACE) { if (transferMember(w) && m->transfer && w->m_workspace!=m->transfer->sourceWorkspace) finishTransfer(false); }));
     m->listeners.emplace_back(e.render.preChecks.listen([this](PHLMONITOR mon) { if (m->active(mon)) mon->m_solitaryClient.reset(); }));
     m->listeners.emplace_back(e.render.stage.listen([this](Event::SRenderStageEvent event) { m->chrome(event); }));

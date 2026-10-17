@@ -1389,6 +1389,10 @@ void StageController::Impl::initialize() {
         if ((TilesController::get() && TilesController::get()->transferMember(window)) || std::ranges::find(tileDragMembers,window)!=tileDragMembers.end()) StageController::cancelTileTransfer();
         request();
     }));
+    listeners.emplace_back(events.window.destroy.listen([this](const PHLWINDOWREF& ref) {
+        if (std::ranges::find(tileDragMembers,ref)!=tileDragMembers.end()) StageController::cancelTileTransfer();
+        request();
+    }));
     listeners.emplace_back(events.window.floating.listen([this](PHLWINDOW) { request(); }));
     listeners.emplace_back(events.window.fullscreen.listen([this](PHLWINDOW) { request(); }));
     listeners.emplace_back(events.window.title.listen([this](PHLWINDOW) { request(); }));
