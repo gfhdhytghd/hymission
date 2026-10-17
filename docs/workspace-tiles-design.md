@@ -1,6 +1,8 @@
 # 工作区分块：可行性与设计评审稿
 
-状态：**第一阶段设计，等待 Claude 审阅；尚未实现。**
+状态：**设计已审，正式采用路线 A（纯插件）；核心扩展路线未采纳。实施按阶段本地提交。**
+
+最新用户约束：每个物理 monitor 最多 3 个 tile；tile 交互以原生多 monitor 为参照。每 tile 有独立 active workspace/history，切换至另一 tile 已呈现 workspace 时聚焦该 tile（on-current-monitor 显式请求采用原生 swap 语义）；不再占用报错。提供跨 tile 移窗、方向焦点与 monitor 风格状态。
 
 日期：2026-10-17。范围仅为此文档和本地提交；不修改 Hyprland 源码、用户配置或运行中的插件，不 push，不运行 `hyprpm update`，不 load/unload。
 
@@ -8,9 +10,7 @@
 
 推荐语义是：**同一物理 monitor 上同时呈现多个真实 workspace，每个 workspace 有独立 viewport；键盘焦点对应的 tile 决定普通工作区切换的目标区域。** 窗口保留真实 workspace 身份、原生 layout 和客户端 surface。分块不是 workspace 截图，也不是把多个 workspace 的窗口迁入一个 workspace。
 
-推荐工程路线为 **Hyprland 核心增加 workspace presentation/viewport 支持，Hymission 提供分块管理、dispatcher、拖缝及 overview/Stage 集成**。目前源码有可复用的 workspace 布局空间、workspace 场景选择和原生 surface 绘制，但没有完整的多 viewport 切换事务。纯插件可以做受限原型；本次调研没有证明它能无遗漏满足“所有切换入口、其他分块不变”，不能把原型作为完整交付。
-
-这意味着下一阶段若采纳推荐路线，需将小范围核心扩展纳入实施范围，并确定对应 compositor 的交付方式。这里的“小范围”指职责集中，不代表仅改一两个函数。若要求始终只支持未打补丁的上游 Hyprland，则必须单独评审纯插件适配成本，不能默默缩减需求。本阶段不开始任一路线的实现。
+正式工程路线为 **纯插件：真实 workspace 多可见、每 workspace work area、统一 hook broker 与原生 surface 渲染/输入适配**。不修改 Hyprland 核心，不依赖核心补丁，不使用截图交互。原路线 B 未采纳。以下源码缺口通过插件事务、hook 和状态收敛处理；确实无法覆盖的路径必须记录具体证据，同时继续其他阶段。
 
 ### 1.1 本次实际检查的版本
 
@@ -23,7 +23,7 @@
 
 下文 Hyprland 行号以 `25f09b26…` 为准；本地树路径相同但行号可能不同。尤其 `Monitor.cpp` 和 `Renderer.cpp` 存在本地差异，不能将本地 CM 行为当作上游保证。`docs/compatibility/hyprland-master.md` 是历史记录，不据此推断当前构建结果。
 
-后续报告开发兼容性前，仍须刷新 `hyprland` flake input、运行 `nix build -L .#hymission`（必要时使用仓库已有的本地 store 方式）、提交 lock 与必要修复，并记录解析出的上游 revision 和跳过的测试。这次仅提交设计文档，不刷新 lock 或为文档变更启动完整构建。
+后续报告开发兼容性前，仍须刷新 `hyprland` flake input、运行 `nix build -L .#hymission`（必要时使用仓库已有的本地 store 方式）、提交 lock 与必要修复，并记录解析出的上游 revision 和跳过的测试。实现阶段使用默认 pkg-config 的 git 头文件逐阶段构建/测试；本机验证禁止 coverage 构建。
 
 ## 2. 源码发现：为什么不能只多画几个工作区
 
@@ -60,22 +60,18 @@
 
 | 路线 | 优点 | 主要问题 | 结论 |
 | --- | --- | --- | --- |
-| A. 纯插件：真实 workspace 多可见 + 每 workspace 区域 hook + 原生渲染/输入适配 | 不需用户替换 compositor；能复用大量 Stage 代码；可分步验证 | 要覆盖 actions 的 typed/string 入口、monitor、placement、raw focus、resolver/history、swipe、fullscreen、frame scheduling、visibility 等；内联/直接写字段无法靠同一个 hook 拦截；事件重入与 ABI 风险高 | 可作为隔离原型/对照，不能仅凭静态分析宣称完整可行 |
-| B. 核心提供 presentation topology，插件负责交互与效果 | 状态修改可在核心事务边界完成；渲染、输入、协议共享同一事实；可测试所有原生入口 | 需要核心补丁或上游接受扩展；版本升级需跟进；跨仓库交付成本 | **推荐**，最能保证原需求 |
+| A. 纯插件：真实 workspace 多可见 + 每 workspace 区域 hook + 原生渲染/输入适配 | 不需用户替换 compositor；能复用大量 Stage 代码；可分步验证 | 要覆盖 actions 的 typed/string 入口、monitor、placement、raw focus、resolver/history、swipe、fullscreen、frame scheduling、visibility 等；内联/直接写字段无法靠同一个 hook 拦截；事件重入与 ABI 风险高 | **已采纳**；实现并按入口逐项验证，未验证内容保留证据边界 |
+| B. 核心提供 presentation topology，插件负责交互与效果 | 状态修改可在核心事务边界完成；渲染、输入、协议共享同一事实；可测试所有原生入口 | 需要核心补丁或上游接受扩展；版本升级需跟进；跨仓库交付成本 | **未采纳：违反纯插件硬性要求** |
 | C. 多个 headless/虚拟 monitor，再将其内容映射到物理 monitor 的 tile | 每个虚拟 monitor 自带 active workspace、layout 和 fullscreen | 输出身份、scale、CM、layer-shell、捕获、pointer 坐标和 bar 全变；仍需物理输出合成及跨输出输入；不是免费获得多视口 | 不推荐作为当前实现 |
 | D. 一个 workspace 内合并窗口/自定义 layout，或交互截图 | UI 容易做、hook 少 | 丢失 workspace 身份/规则/历史；截图不能直接承载正常客户端交互；无法让现有 workspace dispatcher 语义成立 | 不满足需求 |
 
 “仅在 render 前换 active 指针、render 后恢复”也不采用：它把可观察的全局状态临时变成谎言；布局、焦点、IPC、帧回调和异步 pass 不保证在同一栈内完成。
 
-### 3.1 推荐路线的核心扩展边界（拟议，并非现有 API）
+### 3.1 未采纳路线
 
-核心保存 monitor 的 presentation 列表，提供版本化能力接口：枚举/修改 viewport、按输入点查询 viewport、按 workspace 查询 layout/fullscreen/render 区域、请求 activation、只更换焦点 viewport、查询已呈现 workspaces。插件提交拓扑事务，不直接写 monitor 的尺寸、reserved area 或 workspace 可见字段。
+核心 presentation topology/版本化能力接口均未采纳，不作为运行依赖，也不修改核心源码。插件维护 topology、可见性、work area、输入/动画上下文和失败回滚。必需 hook 不完整时整体禁用 tiles，以 initError 上报，不以部分功能静默运行。
 
-核心接入点为 §2 的 native 路径：`Config::Actions`、`CMonitor::changeWorkspace`、placement、raw focus、workspace visibility、`CSpace`、scene renderer、frame scheduler、fullscreen、resolver/history、unified swipe。single-tile 时走现有语义。核心保留 session lock、seat 和输出协议的所有权；插件故障时核心能独立收敛回一个 workspace。
-
-接口最低能力应包括 `topology`、`activation`、`work-area`、`input`、`swipe`、`fullscreen`、`presentation-feedback`；缺少任一项就拒绝启用多 tile，返回具体错误。能力检查不能只确认符号存在，还要确认语义版本。目标是减少长期私有 hook，并不声称 Hyprland 当前已有稳定 ABI。
-
-### 3.2 若评审决定探索纯插件，需要哪些 hook
+### 3.2 正式路线：统一 broker 与必需 hook
 
 | 功能面 | 候选函数/事件 | 稳定性与验证要求 |
 | --- | --- | --- |
@@ -112,11 +108,11 @@ TileInteraction {
 }
 ```
 
-核心 topology 是唯一权威。Hymission 仅持有带 generation 的快照及交互状态。身份复用 `src/workspace_key.hpp` 已适配的 typed id/address/type，展示名可变；不能把显示名、数组下标或插件负数 key 直接当稳定核心身份。引用用 weak handle，销毁后不解引用，tile ID 生命周期内不复用。
+插件 topology 是 tiles 的唯一权威，并与原生 workspace/monitor 状态同步。controller 使用带 generation 的快照及交互状态。身份复用 `src/workspace_key.hpp` 已适配的 typed id/address/type，展示名可变；不能把显示名、数组下标或插件负数 key 直接当稳定核心身份。引用用 weak handle，销毁后不解引用，tile ID 生命周期内不复用。
 
 必须维持：
 
-1. 每个 tile 有且仅有一个 normal workspace；每个真实 workspace 至多出现在一个 tile。special、pinned 和 shell 有单独规则。
+1. 每个物理 monitor 最多 3 个 tile，第四次 add 在任何 mutation 前报错。每个 tile 有且仅有一个 normal workspace；每个真实 workspace 至多出现在一个 tile。special、pinned 和 shell 有单独规则。
 2. 每个 monitor 的 `m_activeWorkspace` 作为兼容投影，始终等于该 monitor `focusedTileId` 的 workspace。其他 tile 仍 visible；visible 不意味着键盘 activated。seat 全局仍只有一个键盘焦点。
 3. 切换事务只修改目标 tile 的 binding/history/动画，其他 tile 的 workspace、窗口、相机和几何不变。改比例属于显式拓扑修改，可影响相邻 tile。
 4. Fit 模式在 monitor **完整逻辑宽度**上分配正宽度，`Σ width = monitor.width`，连续边界无洞无交叠。分缝线和 hit slop 是叠加层，不额外占宽。
@@ -142,13 +138,15 @@ TileInteraction {
 | 点击另一 tile 的窗口/空白 | 按 input box 先选 tile；更新 active 投影与事件，再聚焦该窗口/空白；不对原 tile 运行 workspace-out 动画或迁移 pinned |
 | 仅鼠标经过另一 tile | 遵循原 `input:follow_mouse`；关闭时不偷键盘焦点，开启时先切 tile 再 native focus；不能仅凭 pointer 所在位置决定随后键盘 dispatcher 的目标 |
 | 直接 focuswindow / urgent / toplevel activation | 已呈现窗口聚焦其所属 tile；隐藏窗口在当前 tile 激活其 workspace，再聚焦；显式 focusmonitor 保留其原用途 |
-| 相对 `m/r/e/+/-`、named、previous/back-and-forth | 保留已支持的 selector 语法和排序基础，解析上下文改为 tile；相对浏览跳过其他 tile 已呈现 workspace；previous 从该 tile 历史取未被占用的有效目标；无目标按原 create/wrap 配置或取消，不循环卡死 |
+| 相对 `m/r/e/+/-`、named、previous/back-and-forth | 保留已支持的 selector 语法和排序基础，解析上下文改为 tile；相对浏览遵循同屏 tile 的多屏策略，swipe 的候选跳过其他 tile 已呈现 workspace；previous 从该 tile 历史取未被占用的有效目标；无目标按原 create/wrap 配置或取消，不循环卡死 |
 | 目标已在当前 tile | no-op；back-and-forth 另按当前 tile 历史处理 |
-| 明确点名的目标已在另一 tile / 另一 monitor 呈现 | 返回 `workspace already presented`，其他 tile 不变。strip 标注占用并禁用该切换目标；不会暗中交换或克隆 workspace |
+| 明确点名的目标已在另一 tile / 另一 monitor 呈现 | 普通 workspace 请求聚焦该 workspace 所在 tile，不克隆；`on_current_monitor` 请求按原生多屏语义交换两个 tile 的 active workspace，更新各自历史和区域；strip 同样路由 |
 | 目标是其他 monitor 的隐藏 workspace | 普通切换不隐式迁移，返回明确错误；同屏隐藏 workspace 可激活。显式 monitor-placement 操作走下述独立管理事务 |
-| 显式 move/swap workspace、窗口跨 monitor | 属于有意改变归属的管理操作；走 topology-aware placement 事务，补齐源空缺 workspace，保留其他 binding。不能借普通 workspace action 的 on-current-monitor 隐式 swap 绕过占用保护 |
+| 显式 move/swap workspace、窗口跨 monitor | 属于有意改变归属的管理操作；走 topology-aware placement 事务，补齐源空缺 workspace，保留其他 binding。on-current-monitor 对另一 tile 的可见 workspace 使用有意的 active-workspace swap |
 
-这里对原生跨屏 workspace 自动聚焦/搬移行为作了明确取舍：多 tile 时优先满足“操作只切当前分块”。`on_current_monitor` 入口也不能偷偷换掉其他可见 tile；跨屏管理需要显式操作。单 tile monitor 且未启用 tiles 时保持原行为。
+每 tile 尽量表现为独立 monitor：普通切换到已呈现 workspace 聚焦其 tile，on-current-monitor 则交换源/目标 tile 的 active workspace；遵循原生 focus/warp 配置。物理 monitor 绑定规则仍匹配真实输出，不伪造输出协议对象；在匹配输出内根据 focused tile 定位。单 tile 且未启用时严格保持原行为。
+
+方向焦点到本 tile 边界时进入相邻 tile，仍优先采用原生布局内候选；`tile_focus left/right` 显式跨区，`tile_move_window left/right` 将焦点窗口移入邻区 active workspace。新窗口跟随 focused tile，移窗与 focus 走同一事务维护 history/active 投影。
 
 ### 5.2 一次 activation 事务
 
@@ -164,7 +162,7 @@ TileInteraction {
 
 输入优先级：session lock / exclusive grab → monitor 级 special 与 pinned → overview/Stage 命中 → 分缝 grab → tile 内 native workspace hit test。只有缝的窄 hit slop 截获 resize；不能吞掉客户端普通 resize 和点击。
 
-tile 内窗口使用真实全局几何，不对普通 surface 输入做截图坐标反算。popup、subsurface、装饰、XWayland、触摸和 tablet 的候选集合及 clip 必须与画面一致；视觉上被裁掉的溢出部分不能抢另一个 tile 的输入。已有 implicit grab 的按下/抬起保持配对，不能中途切 tile 丢 release。relative pointer、locked/confined pointer 继续由核心管理；被约束的客户端不能通过移动越界夺焦点或开始拖缝。
+tile 内窗口使用真实全局几何，不对普通 surface 输入做截图坐标反算。popup、subsurface、装饰、XWayland、触摸和 tablet 的候选集合及 clip 必须与画面一致；视觉上被裁掉的溢出部分不能抢另一个 tile 的输入。已有 implicit grab 的按下/抬起保持配对，不能中途切 tile 丢 release。relative pointer、locked/confined pointer 继续由原生 Hyprland 管理；被约束的客户端不能通过移动越界夺焦点或开始拖缝。
 
 拖窗口跨 tile 仅在显式 drop 时迁入目标 tile 的 workspace，保留目标 workspace 当前 binding；普通指针穿越不移动窗口。失败/取消回原 workspace 和几何。移动焦点窗口后其新所属 tile 成为 focused tile。
 
@@ -238,11 +236,12 @@ monitor 的 scale/transform/尺寸/CM/目标格式变化后完整替换附件并
 | `hymission:tile_add` | `tile_add({workspace="name:dev", width="40%"})` | 当前焦点 monitor/当前 tile 右边新增；默认平分当前 tile 并创建未占用 normal workspace；传入 hidden 同屏 workspace 时直接使用；新增 tile 得焦点 |
 | `hymission:tile_resize` | `tile_resize({width="60%", neighbor="right"})` | 调整当前 tile 绝对宽度；或传 `{delta="+80px"}`；width/delta 二选一；neighbor 省略时按 §4.1；不能改总宽 |
 | `hymission:tile_remove` | `tile_remove()` | 删除当前 tile，将其宽度交给左邻（无左邻则右邻），焦点落到接收者；不能删最后一个 |
+| `hymission:tile_move_window` | `tile_move_window("left")` / `tile_move_window("right")` | 移动焦点窗口到相邻 tile 的 active workspace |
 | `hymission:tile_focus` | `tile_focus("left")` / `tile_focus("right")` | 显式改变 focused tile，不切 workspace；到边界 no-op |
 
 legacy 参数使用同一解析器：`tile_add` 为空或 `workspace=name:dev width=40%`，`tile_resize` 为 `width=60% neighbor=right` 或 `delta=+80px`，`tile_remove` 无参，`tile_focus` 为 `left|right`。只接受列出的 key=value 字段，不拼 shell；workspace selector 仅允许可定位单个 normal workspace 的绝对形式。resize 百分比是 monitor 完整逻辑宽度的比例；add 的 width 表示新 tile 宽度，从当前 tile 扣除。`width="40%"` 在当前 tile 本身不足 40% 时失败。
 
-`hl.plugin.hymission.tiles_state()` 提供只读表；同内容提供 `hyprctl -j hymission-tiles-state` 查询。字段至少含 schema/version、backend/capabilities、monitor、generation、mode、focused tile、每 tile 的稳定 ID/workspace identity/各 box/比例、interaction owner、edge 降级原因。可加 `hymission-tiles` 自定义 socket2 event 通知 generation；bar 收到事件后按 generation 读完整状态，不解析日志。
+`hl.plugin.hymission.tiles_state()` 提供只读表；同内容提供 `hyprctl -j hymission-tiles-state` 查询。字段至少含 schema/version、backend/capabilities、monitor、generation、mode、focused tile、每 tile 的稳定 ID/workspace identity/各 box/比例，以及 monitor 风格 `name/x/y/width/height/activeWorkspace/focused` 字段（最多三个条目）、interaction owner、edge 降级原因。可加 `hymission-tiles` 自定义 socket2 event 通知 generation；bar 收到事件后按 generation 读完整状态，不解析日志。
 
 配置提案（数字开关沿用当前插件约定）：
 
@@ -273,7 +272,7 @@ end)
 
 删除 tile 时**不杀窗口、不把多个 workspace 的窗口静默合并**。被删 tile 的 workspace 变为此物理 monitor 上的普通隐藏 workspace，移除 binding/可见 lease，保留窗口、布局算法、身份与正常历史可达性；其布局区域恢复该 monitor 常规 work area，浮窗做有界归位。接收 tile 保留自己的 workspace 和 focus candidate，仅增宽。删除产生的空 workspace 是否回收遵循 native 生命周期与 persistent 规则，不强删。
 
-显式关闭 tiles / 插件正常卸载：取消所有交互、释放预览/effect 资源、保留最后 focused workspace 为唯一 active，其余变隐藏、恢复原生 work area，再解绑服务。核心负责兜底，不能依赖即将卸载的插件继续运行。应用退出/断屏时 stale ID 的 pending callback 因 generation 不符失效。
+显式关闭 tiles / 插件正常卸载：取消所有交互、释放预览/effect 资源、保留最后 focused workspace 为唯一 active，其余变隐藏、恢复原生 work area，再解绑服务。插件析构时先归位再卸 hook，不保留指向插件的回调。应用退出/断屏时 stale ID 的 pending callback 因 generation 不符失效。
 
 ## 9. 多显示器、IPC 与生命周期
 
@@ -283,30 +282,29 @@ end)
 
 旧 IPC `activeworkspace`、`monitors.activeWorkspace` 和 ext-workspace active 位继续表示该 monitor 的 focused tile workspace；普通 bar 会看到唯一 active，其他可见 workspace 可能显示为 inactive，这是明确的兼容语义。不能轮流写 active 指针让 bar 看似多个 active。焦点换 tile 时发一次与新 active 相符的 native 事件，并发 tiles generation 事件；拓扑内多个可见关系由 tiles_state 提供。
 
-有 tiles 时禁用 `bar_single_mission_control` 对多 workspace 的临时重命名并给诊断原因，避免覆盖真实名字/身份或误导 bar。rename workspace 不改变 tile binding。窗口规则、新窗口 placement、空工作区清理、persistent workspace、monitor workspace 规则均需以核心 topology 查询收敛；可见空 tile 不能无声消失。
+有 tiles 时禁用 `bar_single_mission_control` 对多 workspace 的临时重命名并给诊断原因，避免覆盖真实名字/身份或误导 bar。rename workspace 不改变 tile binding。窗口规则、新窗口 placement、空工作区清理、persistent workspace、monitor workspace 规则均需以插件 topology 查询收敛；可见空 tile 不能无声消失。
 
 新窗口默认进入 focused tile 的 workspace；显式 workspace/window rule 仍先决定真实归属。rule 将窗口放入另一可见 tile 时不移动其 workspace，是否自动聚焦遵循原生规则；若接受聚焦则同步 focused tile。落在隐藏 workspace 且规则要求 silent 时保留隐藏，不借创建窗口改掉当前 tile。workspace 规则强制 monitor 归属与 tile 请求冲突时返回错误，禁止先迁移再回滚规则的循环。
 
 ## 10. 分阶段实施与停止条件
 
-本文件通过评审之前，以下全是计划，**不执行任何实现阶段**。
+设计已审，按以下阶段编译、测试和单独本地提交：
 
-| 阶段 | 工作与交付 | 进入下一阶段的门槛 |
-| --- | --- | --- |
-| 0. 评审与基线 | Claude 确认推荐路线、核心变更范围、跨屏/占用/fullscreen/ws-only 语义；刷新上游锁并建立插件构建基线 | 锁定 revision、构建与现有检查结果可复现；不把历史 compatibility 文档当结果 |
-| 1. 拓扑/纯逻辑 | geometry、binding、history、generation、事务、add/resize/remove/focus；核心能力合约与生命周期兜底 | 不变量/失败回滚/随机序列测试；缺能力时不能启用 |
-| 2. 原生多 viewport | work area、可见性、场景、frame feedback、hit test、raw focus、配置/API；先在隔离 compositor 验证双 tile | 两边可实时操作/出新帧，空 tile 正常；其他 tile 未受键位/action/IPC 影响 |
-| 3. 完整原生路由 | selector/history、monitor/typed actions、placement、swipe、fullscreen/special/pinned、grab/drag、断屏 | 路由矩阵无旁路；cancel/重入一致；未通过功能不能宣称完成 |
-| 4. Hymission 集成 | 共用 edge service、Stage 每 tile 状态、overview/ws-only/strip、出入动画、HDR/CM/capture | 无重复绘制/双动画/越界输入；主 framebuffer 和 mirror 均验证 |
-| 5. 收尾 | 性能实测、配置文档、完整构建/回归、本地分阶段提交 | 全部需求验收记录；真机未做项明确 PENDING；发布/push/reload 另按授权 |
+1. 更新本设计并建立默认 pkg-config 构建/既有测试基线。
+2. 纯逻辑 geometry、binding、history、generation、事务、最多三个 tile、add/resize/remove/focus 与随机序列不变量。
+3. 统一 broker、CSpace 多视口、可见性/clip、frame callback、hit test/raw focus、Lua/legacy API 和 tiles_state。
+4. string/typed actions、resolver/history、strip 路由、tile swipe，原生多屏 focus/swap、跨 tile 移窗与方向焦点。
+5. 拖缝、Esc 回滚、最小宽度、swipe 互斥。
+6. 复用 StageEdgeEffect 的 blur/fade 与硬裁剪降级诊断。
+7. overview/ws-only/Stage、fullscreen、special/pinned、多显示器与生命周期回归。
 
-若核心扩展无法交付，或纯插件必需 hook 无法可靠覆盖，不退回“截图交互版本”充数：停在可复现的原型/缺口清单，重新评审路线。开发 API 修改仅进入本开发分支体系，不未经验证传播到 stable/Omarchy。
+不 push、不 reload 当前会话；只在独立 nested/headless 会话验证。纯插件某路径如确实无法实现，记录符号/调用链/隔离实验等证据后继续其余阶段。硬件输入、HDR 真机视觉未验证项标记 PENDING。
 
 ## 11. 测试方案与证据分级
 
 ### 11.1 无 compositor 的模型测试
 
-新增独立 tiles logic 测试：多种宽度/权重/NaN/Inf/越界参数、add/remove/resize 交错、边界钳制、物理像素覆盖、named/typed identity/rename/destroy、busy target、previous/back-and-forth、generation stale callback、事务失败与回滚、空 workspace lease、分辨率缩小/断屏迁移。固定种子的随机操作序列每步检查 §4 不变量，不能只镜像实现重写一遍。
+新增独立 tiles logic 测试：多种宽度/权重/NaN/Inf/越界参数、add/remove/resize 交错、边界钳制、物理像素覆盖、named/typed identity/rename/destroy、presented target focus/swap、previous/back-and-forth、generation stale callback、事务失败与回滚、空 workspace lease、分辨率缩小/断屏迁移。固定种子的随机操作序列每步检查 §4 不变量，不能只镜像实现重写一遍。
 
 ### 11.2 隔离 compositor 的合约与输入测试
 
@@ -317,7 +315,7 @@ end)
 | 测试组 | 操作 | 必须观察的断言 |
 | --- | --- | --- |
 | 全入口路由 | 键位、string/typed Actions、Lua focus、monitor:set_workspace(...) 对象入口、IPC、Hymission strip、overview 内部切换、直接窗口激活 | A:1→3 时 B 的 workspace/窗口盒/相机不变；focus B 后切 B；读取 active 投影与完整 topology |
-| 冲突/跨屏 | 目标是 B 的 2、其他输出可见/隐藏 workspace、on-current-monitor、显式 swap/move | 普通切换拒绝且无部分迁移；管理操作按事务完整补源空缺；第二输出不被普通切换连带改变 |
+| 冲突/跨屏 | 目标是 B 的 2、其他输出可见/隐藏 workspace、on-current-monitor、显式 swap/move | 已呈现目标聚焦对应 tile；on-current-monitor 交换绑定；管理操作按事务完整补源空缺；无克隆/丢失窗口 |
 | 帧/交互 | 两边运行动画客户端，改变非焦点 tile surface，popup/subsurface/浮窗/X11/空白/touch/tablet | 两边持续出新帧、无误 suspend；画面 clip 与命中一致；button press/release 配对、约束不绕过 |
 | 手势 | begin/update/commit/cancel、反向、阈值、forever/create-new、过程中外部 focus/resize/destroy | 只有绑定 tile 平移；取消不损坏其他动画；无双 controller 提交、无 stale session |
 | fullscreen 等 | 两边各 fullscreen/maximize、允许覆盖浮窗、layout-handled fullscreen、special 开闭、pinned/unpin | 全屏限定自身 tile；shell 策略一致；special/pinned 只一份；关闭恢复 focused tile |
@@ -334,15 +332,8 @@ end)
 
 完整编译验证运行仓库 CTest 和开发 flake build；native-symbol/GL 目标未注册或 skip 不能计作通过。真实 HDR/SDR 混合显示、10-bit/FP16、截屏 mirror、硬件触控板 swipe、fractional scaling、VRR/tearing、锁屏与 pointer lock 仍需隔离硬件会话验收。构建、软件像素检查、隔离运行、真机输入与视觉证据分开记录。
 
-## 12. 风险与评审决策
+## 12. 风险与实施记录
 
-最高风险是原生 active/visible 假设散落多个子系统、同步事件重入、私有 ABI 漂移、双渲染/双动画、blur scratch/CM 附件错误和 tile 外输入泄漏。其次是 sidebar 在窄 tile 的可用性、pinned/fullscreen/special 的用户预期、bar 单 active 投影、客户端最小尺寸导致的裁剪以及多输出规则冲突。以上不能仅以 build 通过关闭。
+最高风险仍为原生 active/visible 假设、同步事件重入、私有 ABI 漂移、双渲染/动画、CM 附件错误、tile 外输入泄漏及原生多屏规则语义不一致。实现必须完整签名唯一匹配、必需 hook 安装失败整体回滚，默认关闭时保留现有路径。
 
-请评审以下具体决策：
-
-1. 是否接受“核心 viewport 支持 + Hymission 交互”作为完整功能路线，以及核心变更的后续范围；若坚持纯插件，是否先只批准覆盖面原型。
-2. 是否接受独占 workspace：已在其他 tile 呈现的目标报错，相对浏览跳过；普通跨屏 workspace 切换不搬动/切换其他分块。
-3. 是否接受 tile 内 fullscreen、monitor 级 special/pinned，以及删除 tile 后 workspace 保持隐藏可达的默认行为。
-4. 是否接受 ws-only 同时覆盖 active-workspace overview 与空 strip-only 路径，显式新入口另行确定。
-
-**到此停止。提交此设计后等待 Claude 审阅，不开始实现、不修改运行时、不更新/重载插件。**
+实施进度写 `.tiles-progress.md`，该文件不提交；各阶段单独提交并记录测试结果。已采纳的新语义优先于早期讨论：最多三个 tile；可见目标聚焦/显式 swap；monitor 风格条目；方向焦点和相邻移窗；删除后 workspace 隐藏可达。
