@@ -57,6 +57,7 @@ class StageController {
     static void finishOverview();
     // Shared native-pass capture/edge service. It also works with Stage hidden.
     static void renderInViewport(const PHLMONITOR&, const stage::EdgeViewport&, const Rect&, const std::function<void()>&);
+    static bool ensureEdgeService();
 
   private:
     struct Impl;

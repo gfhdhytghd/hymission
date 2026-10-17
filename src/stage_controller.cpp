@@ -3,6 +3,7 @@
 #include "numeric_config.hpp"
 #include "stage_logic.hpp"
 #include "stage_edge_effect.hpp"
+#include "tiles_controller.hpp"
 #include "input_guard.hpp"
 
 #include <algorithm>
@@ -492,6 +493,7 @@ struct StageController::Impl {
     void armMotion();
     void motion();
     bool installHooks();
+    bool ensureEdgeHook();
     void releaseHooks();
     void afterRecheck(Layout::CSpace* space);
     bool endDrag(Layout::Supplementary::CDragStateController* drag);
@@ -1290,17 +1292,24 @@ bool StageController::Impl::installHooks() {
     } else {
         // Soft effects are optional. Missing blur interception must never
         // disable the independent viewport clip or Stage itself.
-        if (const auto address = find("blurMainFramebuffer", "Render::IHyprRenderer::blurMainFramebuffer(Render::CRenderContext&, float, Hyprutils::Math::CRegion const&, Render::SBlurContext const&)")) {
-            blurFramebufferHook = hooks::create(handle, address, hooks::target(&blurFramebufferThunk));
-            if (blurFramebufferHook && !blurFramebufferHook->hook()) {
-                hooks::remove(handle, blurFramebufferHook);
-                blurFramebufferHook = nullptr;
-            }
-        }
+        (void)ensureEdgeHook();
         if (!blurFramebufferHook)
             LOG(Log::WARN, "[hymission] Stage edge blur hook unavailable; retaining hard clipping");
     }
     return hooksReady;
+}
+
+bool StageController::Impl::ensureEdgeHook() {
+    if (blurFramebufferHook) return true;
+    constexpr auto signature="Render::IHyprRenderer::blurMainFramebuffer(Render::CRenderContext&, float, Hyprutils::Math::CRegion const&, Render::SBlurContext const&)";
+    void* address=nullptr;
+    size_t matches=0;
+    for (const auto& m : HyprlandAPI::findFunctionsByName(handle,"blurMainFramebuffer")) if (m.demangled==signature) { address=m.address; ++matches; }
+    if (matches!=1) return false;
+    blurFramebufferHook=hooks::create(handle,address,hooks::target(&blurFramebufferThunk));
+    if (blurFramebufferHook && blurFramebufferHook->hook()) return true;
+    hooks::remove(handle,blurFramebufferHook); blurFramebufferHook=nullptr;
+    return false;
 }
 
 void StageController::Impl::releaseHooks() {
@@ -1570,7 +1579,8 @@ void StageController::Impl::sync() {
     if (!enabled) {
         canvasRelease.reset();
         canvasScrolls.clear();
-        edgeEffect.reset();
+        if (!TilesController::get() || std::ranges::none_of(State::monitorState()->monitors(), [](const auto& mon) { return TilesController::get()->enabled(mon); }))
+            edgeEffect.reset();
         clearSwipe();
         stopTimer(refreshTimer);
         stopTimer(motionTimer);
@@ -3182,6 +3192,10 @@ void StageController::Impl::drawWindowPasses(StageWindowPassElement::Elements& e
             g_pHyprRenderer->draw(renderContext(), element, damage);
         }
     });
+    if (auto* tiles=TilesController::get(); tiles && tiles->enabled(monitor)) {
+        tiles->edgeError(edgeEffect.error());
+        if (drawn && edgeEffect.error().empty() && (viewport.left>0 || viewport.right>0 || viewport.top>0 || viewport.bottom>0)) tiles->edgeActive();
+    }
     if (!drawn)
         for (auto& element : elements)
             element->discard(renderContext());
@@ -3706,6 +3720,7 @@ void StageController::renderInViewport(const PHLMONITOR& monitor, const stage::E
     else
         render();
 }
+bool StageController::ensureEdgeService() { return Impl::instance && Impl::instance->ensureEdgeHook(); }
 std::string StageController::stateJson() const { return m_impl->stateJson(); }
 
 std::optional<stage::OverviewEndpoint> StageController::Impl::cardEndpoint(const Screen& screen, const PHLWINDOW& window, bool settled) const {

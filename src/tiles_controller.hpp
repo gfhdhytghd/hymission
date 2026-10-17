@@ -37,6 +37,7 @@ class TilesController {
     Owner owner() const;
     // Purely visual shared edge service diagnostics.
     void edgeError(std::string error);
+    void edgeActive();
   private:
     struct Impl;
     std::unique_ptr<Impl> m;

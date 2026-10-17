@@ -162,6 +162,7 @@ int main() {
     int antiAliasSamples = 0;
     int boundarySamples = 0;
     for (int transform = 0; transform < 8; ++transform) {
+      for (int tileViewport=0;tileViewport<3;++tileViewport) {
       for (const float fraction : {0.F, 0.25F, 0.75F}) {
         const auto tr = static_cast<Hyprutils::Math::eTransform>(transform);
         const auto map = [&](const Vector2D& p) { return Hyprutils::Math::CBox{p.x, p.y, 0, 0}.transform(tr, W, H).pos(); };
@@ -169,7 +170,9 @@ int main() {
         const auto dx = map({1, 0}) - origin;
         const auto dy = map({0, 1}) - origin;
         const bool rotated = transform % 2;
-        const float viewX = 16 + fraction, viewY = 12 + fraction, viewW = (rotated ? H : W) - 32, viewH = (rotated ? W : H) - 24;
+        const float extentX=rotated?H:W;
+        const float viewX = tileViewport==0 ? 16+fraction : (tileViewport==1?4:extentX/2+4)+fraction;
+        const float viewY=12+fraction, viewW=tileViewport==0?extentX-32:extentX/2-8, viewH=(rotated?W:H)-24;
         const auto inside = [&](const Vector2D& m) { return m.x >= viewX && m.x < viewX + viewW && m.y >= viewY && m.y < viewY + viewH; };
         int minX = W, minY = H, maxX = 0, maxY = 0;
         for (int y = 0; y < H; ++y)
@@ -186,8 +189,8 @@ int main() {
         for (const float scale : {1.F, 1.5F, 2.F}) {
             glUniform1f(location("uMaxRadius"), 12 * scale);
             for (int mode = 0; mode < 16; ++mode) {
-                const float left = mode & 1 ? 16 * scale : 0;
-                const float right = mode & 2 ? 16 * scale : 0;
+                const float left = mode & 1 ? std::min(16 * scale,viewW/2) : 0;
+                const float right = mode & 2 ? std::min(16 * scale,viewW/2) : 0;
                 const float top = mode & 4 ? 16 * scale : 0;
                 const float bottom = mode & 8 ? 16 * scale : 0;
                 glUniform4f(location("uWidths"), left, right, top, bottom);
@@ -298,6 +301,7 @@ int main() {
         }
       }
     }
+    } // sequential neighboring tile viewports reuse the same scratch attachments
     ok &= glGetError() == GL_NO_ERROR && antiAliasSamples > 0 && boundarySamples > 0;
     std::cout << cases << " GPU cases; anti-alias samples: " << antiAliasSamples << "; renderer: " << glGetString(GL_RENDERER) << '\n';
     glDeleteFramebuffers(1, &framebuffer);

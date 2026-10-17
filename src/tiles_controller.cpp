@@ -20,6 +20,7 @@
 #include <hyprland/src/ipc/s2/S2.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
+#include <hyprland/src/layout/supplementary/WorkspaceAlgoMatcher.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/managers/SessionLockManager.hpp>
@@ -43,6 +44,8 @@
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
 #undef private
 #include <hyprland/src/managers/fullscreen/handler/FullscreenHandler.hpp>
+#include <hyprland/src/layout/algorithm/Algorithm.hpp>
+#include <hyprland/src/layout/algorithm/TiledAlgorithm.hpp>
 
 namespace hymission {
 namespace {
@@ -71,6 +74,7 @@ struct TilesController::Impl {
     UP<SEventLoopDoLaterLock> deferred;
     bool ready = false, applying = false, frameFanout = false, stopping = false;
     std::string initError, edgeFailure;
+    bool softEdgeDrawn=false;
     Owner interaction = Owner::None;
     struct Swipe {
         PHLMONITORREF monitor;
@@ -247,7 +251,18 @@ struct TilesController::Impl {
         }
         RenderContextScope scope{ctx};
         const Rect clip{v->allocation.x, v->allocation.y, v->allocation.w, v->allocation.h};
-        StageController::renderInViewport(mon, stage::edgeViewport(clip, 0, 0), clip, [&] { original(r, ctx, w, mon, p, now, decorate, mode, ignore, standalone); });
+        auto edge=stage::edgeViewport(clip,0,0);
+        const auto algorithm=w->m_workspace->space()->algorithm();
+        const bool scrolling=algorithm && algorithm->tiledAlgo() && Layout::Supplementary::algoMatcher()->getNameForTiledAlgo(&typeid(*algorithm->tiledAlgo()))=="scrolling";
+        if (scrolling && !w->isFloating() && !Fullscreen::controller()->isFullscreen(w)) {
+            const double width=std::max(0L,integer("stage_scrolling_desktop_edge_width",32));
+            if (width>0 && StageController::ensureEdgeService()) {
+                const auto pos=w->positionAnimation()->value()+w->m_workspace->m_renderOffset->value()+w->presentation().floatingOffset();
+                const auto size=w->sizeAnimation()->value();
+                edge=stage::edgeViewportForWindow(stage::edgeViewport(clip,width,width,width,width),{pos.x,pos.y,size.x,size.y});
+            } else if (width>0) self->edgeFailure="native blur backdrop hook unavailable; hard clip retained";
+        }
+        StageController::renderInViewport(mon, edge, clip, [&] { original(r, ctx, w, mon, p, now, decorate, mode, ignore, standalone); });
     }
     using SceneFn = void (*)(Render::IHyprRenderer*, Render::CRenderContext&, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp&, Render::eSceneMode);
     static void scenes(bool full, Render::IHyprRenderer* r, Render::CRenderContext& ctx, PHLMONITOR mon, PHLWORKSPACE ws, const Time::steady_tp& now, Render::eSceneMode mode) {
@@ -689,7 +704,8 @@ bool TilesController::busy() const { return m->interaction != Owner::None; }
 bool TilesController::acquire(Owner owner) { if (locked() || owner == Owner::None || busy()) return false; m->interaction = owner; return true; }
 void TilesController::release(Owner owner) { if (m->interaction == owner) m->interaction = Owner::None; }
 TilesController::Owner TilesController::owner() const { return m->interaction; }
-void TilesController::edgeError(std::string e) { m->edgeFailure = std::move(e); }
+void TilesController::edgeError(std::string e) { if (!e.empty()) { m->edgeFailure=std::move(e); m->softEdgeDrawn=false; } }
+void TilesController::edgeActive() { m->softEdgeDrawn=true; m->edgeFailure.clear(); }
 SDispatchResult TilesController::dispatch(const std::string& action, const std::string& args) {
     if (locked()) return {.success=false, .error="tiles unavailable while locked"};
     if (!m->ensure()) return {.success=false, .error=m->initError.empty() ? "tiles_enabled is 0" : m->initError};
@@ -759,6 +775,6 @@ std::string TilesController::stateJson() const {
         monitors.push_back({{"name",mon->m_name},{"generation",o->model.state().generation},{"tiles",entries}});
     }
     return dumpStateJson({{"version",1},{"backend","plugin"},{"enabled",m->ready},{"max_tiles",tiles::maxTiles},{"initError",m->initError},{"interaction_owner",static_cast<int>(m->interaction)},
-        {"edge_effect",m->edgeFailure.empty()?"hard_clip":"hard_clip"},{"edge_error",m->edgeFailure},{"monitors",monitors},{"tiles",tiles}})+"\n";
+        {"edge_effect",m->softEdgeDrawn?"blur_fade":"hard_clip"},{"edge_error",m->edgeFailure},{"monitors",monitors},{"tiles",tiles}})+"\n";
 }
 } // namespace hymission
