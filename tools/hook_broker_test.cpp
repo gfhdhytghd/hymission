@@ -13,6 +13,13 @@ int allocations = 0;
 bool fail = false;
 int original(int n) { return n * 2; }
 h::Lease *a, *b;
+struct ActionError { std::string message; explicit ActionError(std::string m):message(std::move(m)) {} };
+using ActionResult=std::expected<void,ActionError>;
+ActionResult action() { return {}; }
+ActionResult actionHook() { return {}; }
+struct DispatchResult { bool success=true; std::string error; };
+DispatchResult dispatch() { return {}; }
+DispatchResult dispatchHook() { return {}; }
 h::Lease *ownedA, *ownedB;
 int consume(std::shared_ptr<int> value, std::unique_ptr<int>&& moved) { return *value + *moved; }
 int wrapOwnedA(std::shared_ptr<int> value, std::unique_ptr<int>&& moved) {
@@ -72,6 +79,21 @@ int main() {
     assert(cached(3)==0 && call(3)==0); // removed lease/group cannot be dereferenced
     assert(allocations == 0 && h::groups().empty());
     fail=false;
+    auto* actionLease=h::create(nullptr,reinterpret_cast<void*>(&action),h::target(&actionHook));
+    assert(actionLease && actionLease->hook());
+    const auto actionCall=reinterpret_cast<decltype(&action)>(actionLease->group->bridge());
+    const auto actionNext=reinterpret_cast<decltype(&action)>(actionLease->m_original);
+    assert(actionCall() && actionNext());
+    actionLease->unhook(); assert(actionCall() && actionNext());
+    h::remove(nullptr,actionLease);
+    assert(!actionCall() && !actionNext());
+    assert(actionCall().error().message=="hook continuation unavailable");
+    assert(actionNext().error().message=="hook continuation unavailable");
+    auto* dispatchLease=h::create(nullptr,reinterpret_cast<void*>(&dispatch),h::target(&dispatchHook));
+    assert(dispatchLease && dispatchLease->hook());
+    const auto dispatchNext=reinterpret_cast<decltype(&dispatch)>(dispatchLease->m_original);
+    h::remove(nullptr,dispatchLease);
+    assert(!dispatchNext().success && !dispatchNext().error.empty());
     ownedA=h::create(nullptr,reinterpret_cast<void*>(&consume),h::target(&wrapOwnedA));
     ownedB=h::create(nullptr,reinterpret_cast<void*>(&consume),h::target(&wrapOwnedB));
     assert(ownedA->hook() && ownedB->hook());

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <functional>
+#include <expected>
+#include <string>
 #include <map>
 #include <memory>
 #include <type_traits>
@@ -96,6 +98,19 @@ template<class R, class... A> struct TypedGroup<R (*)(A...)> final : Group {
         else if constexpr (std::is_reference_v<R>) {
             static std::remove_reference_t<R> empty{};
             return static_cast<R>(empty);
+        } else if constexpr (requires { typename R::error_type; typename R::value_type; }) {
+            // ActionResult/expected default construction means success. A
+            // removed continuation must fail explicitly instead of claiming
+            // that an action it never called completed successfully.
+            using Error=typename R::error_type;
+            if constexpr (std::is_constructible_v<Error,std::string>)
+                return R{std::unexpect,std::string{"hook continuation unavailable"}};
+            else return R{std::unexpect};
+        } else if constexpr (requires(R value) { value.success=false; value.error=std::string{}; }) {
+            R value{};
+            value.success=false;
+            value.error="hook continuation unavailable";
+            return value;
         } else return R{};
     }
     TypedGroup() {
