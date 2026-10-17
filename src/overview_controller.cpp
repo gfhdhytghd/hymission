@@ -2879,9 +2879,10 @@ std::string OverviewController::overviewStateJson() const {
     if (!isVisible())
         return dumpStateJson(root) + "\n";
 
+    root["window_layout_scope"]=m_state.collectionPolicy.onlyActiveWorkspace?"workspace":"all";
     root["tile_groups"]=nlohmann::json::array();
     root["strip"]=nlohmann::json::array();
-    if (auto* tiles=TilesController::get()) for (const auto& mon:m_state.participatingMonitors) for (const auto& view:tiles->views(mon)) {
+    if (auto* tiles=TilesController::get();tiles && workspaceScoped()) for (const auto& mon:m_state.participatingMonitors) for (const auto& view:tiles->views(mon)) {
         root["tile_groups"].push_back({{"monitor",mon->m_name},{"tile_id",view.id},{"focused",view.focused && Desktop::focusState()->monitor()==mon},{"geometry",rectJson({view.allocation.x,view.allocation.y,view.allocation.w,view.allocation.h})}});
     }
     for (const auto& entry:m_state.stripEntries) root["strip"].push_back({{"monitor",entry.monitor?entry.monitor->m_name:""},{"tile_id",entry.tileId},{"workspace",entry.workspaceId},{"active",entry.active},{"focused_tile",entry.groupFocused},{"geometry",rectJson(entry.rect)}});
@@ -5232,7 +5233,7 @@ std::optional<OverviewController::ScopeOverride> OverviewController::parseScopeO
 
     if (trimmed == "onlycurrentworkspace")
         return ScopeOverride::OnlyCurrentWorkspace;
-    if (trimmed == "forceall")
+    if (trimmed == "forceall" || trimmed == "all")
         return ScopeOverride::ForceAll;
 
     error = "invalid overview scope: " + trimmed;
@@ -8108,7 +8109,7 @@ void OverviewController::handleTilesChange() {
 
 bool OverviewController::pointInWindowTile(const ManagedWindow& managed,double x,double y) const {
     auto* tiles=TilesController::get();
-    if (!tiles || !tiles->enabled(managed.targetMonitor) || managed.isPinned) return true;
+    if (!workspaceScoped() || !tiles || !tiles->enabled(managed.targetMonitor) || managed.isPinned) return true;
     const auto id=tiles->preferredTile(managed.window->m_workspace,managed.targetMonitor);
     for (const auto& view:tiles->views(managed.targetMonitor)) if (view.id==id) return view.allocation.containsPoint({x,y});
     return false;
@@ -8488,6 +8489,12 @@ Rect OverviewController::workspaceStripBandRectForMonitor(const PHLMONITOR& moni
     if (!monitor || !workspaceStripEnabled(state))
         return {};
 
+    if (auto* tiles=TilesController::get();tiles && tiles->enabled(monitor)) {
+        const auto views=tiles->views(monitor);
+        const auto first=tileStripBand(monitor,views.front().id,state);
+        const auto last=tileStripBand(monitor,views.back().id,state);
+        return {first.x,first.y,last.x+last.width-first.x,first.height};
+    }
     const auto reservation =
         reserveWorkspaceStripBand(makeRect(monitor->m_position.x, monitor->m_position.y, monitor->m_size.x, monitor->m_size.y),
                                   parseWorkspaceStripAnchor(workspaceStripAnchor()), workspaceStripThickness(monitor), workspaceStripGap());
@@ -8513,6 +8520,11 @@ Rect OverviewController::overviewContentRectForMonitor(const PHLMONITOR& monitor
     if (!workspaceStripEnabled(state))
         return available;
 
+    if (auto* tiles=TilesController::get();tiles && tiles->enabled(monitor)) {
+        const auto band=workspaceStripBandRectForMonitor(monitor,state);
+        const double left=std::clamp(band.x+band.width+workspaceStripGap()-monitor->m_position.x,available.x,available.x+available.width-1);
+        return {left,available.y,available.x+available.width-left,available.height};
+    }
     const auto reservation = reserveWorkspaceStripBand(available,
                                                        parseWorkspaceStripAnchor(workspaceStripAnchor()), workspaceStripThickness(monitor), workspaceStripGap());
     return makeRect(reservation.content.x, reservation.content.y, reservation.content.width, reservation.content.height);
@@ -10310,6 +10322,8 @@ Vector2D OverviewController::workspaceStripEnterOffset(const PHLMONITOR& monitor
     const Rect band = workspaceStripBandRectForMonitor(monitor, m_state);
     const double hiddenFraction = 1.0 - progress;
 
+    if (auto* tiles=TilesController::get();tiles && tiles->enabled(monitor))
+        return Vector2D{-band.width*hiddenFraction,0.0};
     switch (parseWorkspaceStripAnchor(workspaceStripAnchor())) {
         case WorkspaceStripAnchor::Left:
             return Vector2D{-band.width * hiddenFraction, 0.0};
@@ -11005,7 +11019,7 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
 
     auto boundsLocal = overviewContentRectForMonitor(currentManaged->targetMonitor, m_state);
     auto* tiles=TilesController::get();
-    const auto expansionTile=tiles && tiles->enabled(currentManaged->targetMonitor)?tiles->preferredTile(currentManaged->window->m_workspace,currentManaged->targetMonitor):0;
+    const auto expansionTile=workspaceScoped() && tiles && tiles->enabled(currentManaged->targetMonitor)?tiles->preferredTile(currentManaged->window->m_workspace,currentManaged->targetMonitor):0;
     if (expansionTile) boundsLocal=tileContentRect(currentManaged->targetMonitor,expansionTile,m_state);
     const Rect boundsGlobal =
         makeRect(currentManaged->targetMonitor->m_position.x + boundsLocal.x, currentManaged->targetMonitor->m_position.y + boundsLocal.y, boundsLocal.width, boundsLocal.height);
@@ -15127,7 +15141,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 continue;
             }
 
-            if (auto* tiles=TilesController::get();tiles && tiles->enabled(candidateMonitor)) {
+            if (auto* tiles=TilesController::get();state.collectionPolicy.onlyActiveWorkspace && tiles && tiles->enabled(candidateMonitor)) {
                 for (const auto& view:tiles->views(candidateMonitor)) addWorkspace(view.workspace);
             } else if (candidateMonitor->m_activeWorkspace)
                 addWorkspace(candidateMonitor->m_activeWorkspace);
@@ -15539,7 +15553,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         if (inputsIt == inputsByMonitor.end() || inputsIt->second.empty())
             continue;
 
-        if (auto* tiles=TilesController::get();tiles && tiles->enabled(candidateMonitor)) {
+        if (auto* tiles=TilesController::get();state.collectionPolicy.onlyActiveWorkspace && tiles && tiles->enabled(candidateMonitor)) {
             for (const auto& view:tiles->views(candidateMonitor)) {
                 std::vector<WindowInput> inputs;
                 for (const auto& input:inputsIt->second) if (input.index<state.windows.size() && tiles->preferredTile(state.windows[input.index].window->m_workspace,candidateMonitor)==view.id) inputs.push_back(input);

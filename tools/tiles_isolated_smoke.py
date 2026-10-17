@@ -517,7 +517,7 @@ def main():
             assert "special" in result,result
             evaluate('hl.plugin.hymission_tiles_test.special(false)')
             assert [t["activeWorkspace"] for t in tiles_state()]==before_special
-            # Overview exposes aligned groups and keeps each window inside its tile.
+            # All overview is unified; only workspace overview confines windows to tiles.
             for finish in ("close","escape"):
                 evaluate('hl.plugin.hymission.open("forceall")')
                 drag_state=wait_json("j/hymission-overview-state",lambda s:s["active"] and s["phase"]=="active" and not s.get("relayout_active",False) and s["windows"],"overview-drag-ready")
@@ -531,10 +531,11 @@ def main():
                 pointer("release",x+35,y+35)
                 if finish=="escape": evaluate('hl.plugin.hymission.close()')
                 wait_json("j/hymission-overview-state",lambda s:not s["active"],"overview-drag-closed")
-            for anchor in ("left","top"):
+            for anchor,scope in (("left","all"),("top","forceall")):
                 evaluate(f'hl.config({{plugin={{hymission={{workspace_strip_anchor="{anchor}"}}}}}})')
-                evaluate('hl.plugin.hymission.open("forceall")')
-                ov=wait_json("j/hymission-overview-state",lambda s:s["active"] and s["phase"]=="active" and not s.get("relayout_active",False) and len(s.get("tile_groups",[]))==3,"overview")
+                evaluate(f'hl.plugin.hymission.open("{scope}")')
+                ov=wait_json("j/hymission-overview-state",lambda s:s["active"] and s["phase"]=="active" and not s.get("relayout_active",False),"overview")
+                assert ov["window_layout_scope"]=="all" and not ov["tile_groups"],ov
                 grouped={t["id"]:[e for e in ov["strip"] if e["tile_id"]==t["id"]] for t in tiles_state()}
                 previous_right=-1
                 for t in tiles_state():
@@ -550,9 +551,13 @@ def main():
                     entries=[e for e in ov["strip"] if e["tile_id"]==tile["id"]]
                     if len(entries)>1: assert len({round(e["geometry"]["y"],2) for e in entries})>1
                 by_id={t["id"]:t for t in tiles_state()}
+                crossing=[]
+                output_left=min(t["x"] for t in tiles_state());output_right=max(t["x"]+t["width"] for t in tiles_state())
                 for win in ov["windows"]:
                     t=by_id[win["tile_id"]]; b=win["contentGeometry"]
-                    assert b["x"]>=t["x"]-1 and b["x"]+b["width"]<=t["x"]+t["width"]+1, (win,t)
+                    assert b["x"]>=output_left-1 and b["x"]+b["width"]<=output_right+1,(win,t)
+                    if b["x"]<t["x"]-1 or b["x"]+b["width"]>t["x"]+t["width"]+1:crossing.append(win)
+                assert crossing,(scope,"all layout still confined to home tiles",ov)
                 entry=next(e for e in ov["strip"] if not e["active"])
                 old={t["id"]:t["activeWorkspace"]["id"] for t in tiles_state()}
                 b=entry["geometry"]; pointer("press",b["x"]+b["width"]/2,b["y"]+b["height"]/2); pointer("release",b["x"]+b["width"]/2,b["y"]+b["height"]/2)
@@ -562,7 +567,13 @@ def main():
                 wait_json("j/hymission-overview-state",lambda s:not s["active"],"overview-closed")
             evaluate('hl.plugin.hymission.open("onlycurrentworkspace")')
             compact=wait_json("j/hymission-overview-state",lambda s:s["active"] and s["phase"]=="active","compact")
-            assert len(compact["tile_groups"])==3
+            assert compact["window_layout_scope"]=="workspace" and len(compact["tile_groups"])==3
+            by_id={t["id"]:t for t in tiles_state()}
+            for win in compact["windows"]:
+                t=by_id[win["tile_id"]];b=win["contentGeometry"]
+                assert b["x"]>=t["x"]-1 and b["x"]+b["width"]<=t["x"]+t["width"]+1,(win,t)
+            (root/"overview-workspace.json").write_text(json.dumps(compact,indent=2))
+            capture("overview-workspace")
             shown={t["activeWorkspace"]["id"] for t in tiles_state()}
             clients_by_address={v["address"]:v for v in json.loads(request("j/clients"))}
             assert all(clients_by_address[v["address"]]["workspace"]["id"] in shown for v in compact["windows"])

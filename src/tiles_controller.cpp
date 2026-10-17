@@ -81,6 +81,7 @@ struct TilesController::Impl {
     };
     HANDLE handle;
     std::function<bool()> overview;
+    std::function<bool()> overviewGrouped;
     std::function<void()> topologyChanged;
     std::vector<std::unique_ptr<Output>> outputs;
     std::vector<CHyprSignalListener> listeners;
@@ -126,7 +127,7 @@ struct TilesController::Impl {
     };
     std::optional<Transfer> transfer;
     PHLWORKSPACE pointerWorkspace, layoutWorkspace;
-    Impl(HANDLE h, std::function<bool()> o, std::function<void()> changed) : handle(h), overview(std::move(o)),topologyChanged(std::move(changed)) {}
+    Impl(HANDLE h, std::function<bool()> o, std::function<void()> changed, std::function<bool()> grouped) : handle(h), overview(std::move(o)), overviewGrouped(std::move(grouped)),topologyChanged(std::move(changed)) {}
     Output* output(PHLMONITOR mon) const {
         for (auto& o : outputs) if (o->monitor == mon) return o.get();
         return nullptr;
@@ -378,6 +379,10 @@ struct TilesController::Impl {
         const auto original = reinterpret_cast<decltype(&window)>(windowHook->m_original);
         if (!ignore && !standalone && !ctx.m_renderingSnapshot && instance->transferMember(w) && instance->transferDragging()) return;
         const bool overview=self->overview && self->overview();
+        // Unified all/forceall previews own their physical-output clipping.
+        if (overview && (!self->overviewGrouped || !self->overviewGrouped())) {
+            original(r, ctx, std::move(w), std::move(mon), p, now, decorate, mode, ignore, standalone); return;
+        }
         auto v = self->view(w ? w->m_workspace : nullptr);
         if (!v && !overview) v=self->outgoingView(w?w->m_workspace:nullptr);
         if (!v && overview && w && w->m_workspace) if (const auto id=instance->preferredTile(w->m_workspace,mon)) {
@@ -1035,7 +1040,7 @@ void TilesController::Impl::reconcile() {
     }
 }
 
-TilesController::TilesController(HANDLE h, std::function<bool()> o,std::function<void()> changed) : m(std::make_unique<Impl>(h, std::move(o),std::move(changed))) { instance = this; Impl::self = m.get(); }
+TilesController::TilesController(HANDLE h, std::function<bool()> o,std::function<void()> changed,std::function<bool()> grouped) : m(std::make_unique<Impl>(h, std::move(o),std::move(changed),std::move(grouped))) { instance = this; Impl::self = m.get(); }
 TilesController::~TilesController() { m->stopping = true; m->deferred.reset(); m->resizeDeferred.reset(); m->listeners.clear(); if (m->ready) m->collapse(); m->resetHooks(); Impl::self = nullptr; instance = nullptr; }
 TilesController* TilesController::get() { return instance; }
 void TilesController::initialize() {

@@ -19,7 +19,7 @@ class TilesController {
         CBox allocation;
         bool focused = false;
     };
-    explicit TilesController(HANDLE, std::function<bool()> overviewVisible, std::function<void()> topologyChanged = {});
+    explicit TilesController(HANDLE, std::function<bool()> overviewVisible, std::function<void()> topologyChanged = {}, std::function<bool()> overviewGrouped = {});
     ~TilesController();
     void initialize();
     SDispatchResult dispatch(const std::string& action, const std::string& args);

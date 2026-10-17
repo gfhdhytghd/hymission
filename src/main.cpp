@@ -538,7 +538,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_tilesController = std::make_unique<hymission::TilesController>(g_pluginHandle, [] { return g_overviewController && g_overviewController->suspendsStage(); }, [] {
         if (g_overviewController) g_overviewController->handleTilesChange();
         if (g_stageController) g_stageController->handleTilesChange();
-    });
+    }, [] { return g_overviewController && g_overviewController->workspaceScoped(); });
     if (!overviewReady) g_tilesController->fail("overview required hooks are unavailable");
     g_tilesController->initialize();
     g_tilesStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, IPC::Socket1::SCommand{
