@@ -871,6 +871,7 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp, bool i
     if (!mon || applying) return;
     applying = true;
     Hyprutils::Utils::CScopeGuard reset{[this] { applying = false; }};
+    if (!active(mon)) o.outgoing.clear();
     const auto old = mon->m_activeWorkspace;
     auto held = std::move(o.held);
     auto previous=std::move(o.bindings);
@@ -923,6 +924,7 @@ void TilesController::Impl::collapse() {
     if (transfer) { transfer.reset(); interaction=Owner::None; }
     endResize(true);
     cancelSwipe();
+    for (auto& o : outputs) o->outgoing.clear();
     for (auto& o : outputs) if (auto mon = o->monitor.lock()) {
         auto keep = mon->m_activeWorkspace;
         for (const auto& w : o->held) if (w->m_monitor == mon) w->setVisible(w == keep);
@@ -936,6 +938,7 @@ void TilesController::Impl::collapse() {
     Desktop::globalWindowController()->updateSuspendedStates();
 }
 void TilesController::Impl::reconcile() {
+    if (!integer("tiles_enabled",0)) for (auto& o:outputs) o->outgoing.clear();
     if (locked() || applying || stopping) return;
     if (!integer("tiles_enabled", 0) || !initError.empty()) { if (ready) { collapse(); resetHooks(); } return; }
     if (!ensure()) return;
@@ -945,6 +948,7 @@ void TilesController::Impl::reconcile() {
         if (!mon->m_enabled || mon->isMirror() || !mon->m_activeWorkspace || !std::isfinite(mon->m_size.x) || !std::isfinite(mon->m_size.y) || mon->m_size.x <= 0 || mon->m_size.y <= 0) continue;
         auto* o = output(mon);
         if (!o) { outputs.push_back(std::make_unique<Output>(mon, std::max(1L, integer("tile_min_width", 240)))); continue; }
+        if (!active(mon)) o->outgoing.clear();
         const auto generation = o->model.state().generation;
         if (!o->model.geometry(geometry(mon), std::max(1L, integer("tile_min_width", 240)))) continue;
         bool changed = generation != o->model.state().generation;
@@ -1240,7 +1244,7 @@ std::string TilesController::stateJson() const {
                 {"scale",mon->m_scale},{"transform",static_cast<int>(mon->m_transform)},{"focused", t.id==o->model.state().focused && Desktop::focusState()->monitor()==mon}, {"activeWorkspace",{{"id",t.workspace},{"name",ws?ws->displayName():""},{"address",ws?ws->addressableName():""},{"selector",ws?(ws->numberedID()?ws->addressableName():"name:"+ws->addressableName()):""}}},{"history",t.history},{"renderOffset",ws?nlohmann::json::array({ws->m_renderOffset->value().x,ws->m_renderOffset->value().y}):nlohmann::json::array({0,0})}};
             entries.push_back(entry); tiles.push_back(entry);
         }
-        monitors.push_back({{"name",mon->m_name},{"generation",o->model.state().generation},{"tiles",entries}});
+        monitors.push_back({{"name",mon->m_name},{"generation",o->model.state().generation},{"outgoing_workspace_count",o->outgoing.size()},{"tiles",entries}});
     }
     return dumpStateJson({{"version",1},{"backend","plugin"},{"enabled",m->ready},{"max_tiles",tiles::maxTiles},{"initError",m->initError},{"interaction_owner",static_cast<int>(m->interaction)},
         {"edge_effect",m->softEdgeDrawn?"blur_fade":"hard_clip"},{"edge_error",m->edgeFailure},{"monitors",monitors},{"tiles",tiles}})+"\n";

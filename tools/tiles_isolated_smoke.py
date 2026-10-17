@@ -241,6 +241,21 @@ def main():
                 raise AssertionError((label,value))
             evaluate('hl.plugin.hymission.tile_remove()')
             assert len(tiles_state())==1
+            # Retired animation leases cannot survive collapse or disabling.
+            for collapse in ("remove","disable"):
+                evaluate('hl.plugin.hymission.tile_add(); hl.config({animations={enabled=true}}); hl.plugin.hymission_tiles_test.change_workspace("198",false)')
+                lease_state=json.loads(request("j/hymission-tiles-state"))
+                assert lease_state["monitors"][0]["outgoing_workspace_count"]>0
+                if collapse=="remove":
+                    evaluate('hl.plugin.hymission.tile_remove()')
+                    lease_state=json.loads(request("j/hymission-tiles-state"))
+                    assert len(lease_state["tiles"])==1 and lease_state["monitors"][0]["outgoing_workspace_count"]==0
+                else:
+                    evaluate('hl.config({plugin={hymission={tiles_enabled=0}}}); hl.plugin.hymission_tiles_test.refresh()')
+                    wait_json("j/hymission-tiles-state",lambda s:not s["enabled"] and not s["monitors"],"disabled-outgoing-released")
+                    evaluate('hl.config({plugin={hymission={tiles_enabled=1}}}); hl.plugin.hymission_tiles_test.refresh()')
+                    wait_json("j/hymission-tiles-state",lambda s:s["enabled"] and len(s["tiles"])==1,"outgoing-reenabled")
+                evaluate('hl.config({animations={enabled=false}})')
             client_env=env.copy()
             client_env.pop("LD_PRELOAD",None)
             child_displays=[p for p in runtime.glob("wayland-*") if not p.name.endswith(".lock") and p.is_socket()]
