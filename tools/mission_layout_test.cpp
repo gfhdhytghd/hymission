@@ -1,6 +1,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 #include "mission_layout.hpp"
@@ -70,6 +71,35 @@ int main() {
 
     MissionControlLayout engine;
     bool                 ok = true;
+
+    for (const auto layoutEngine : {LayoutEngine::Grid, LayoutEngine::Natural, LayoutEngine::Thumbnail}) {
+        for (double invalid : {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(),
+                               -std::numeric_limits<double>::infinity(), static_cast<double>(std::numeric_limits<long>::max())}) {
+            auto config = deterministicConfig();
+            config.engine = layoutEngine;
+            config.smallWindowBoost = invalid;
+            config.maxPreviewScale = invalid;
+            config.naturalScaleFlex = invalid;
+            config.minSlotScale = invalid;
+            config.layoutSpaceWeight = invalid;
+            config.layoutScaleWeight = invalid;
+            config.minWindowLength = invalid;
+            config.minPreviewShortEdge = invalid;
+            config.outerPaddingTop = invalid;
+            config.rowSpacing = invalid;
+            config.columnSpacing = invalid;
+            const auto normalized = normalizeLayoutConfig(config);
+            ok &= expect(std::isfinite(normalized.smallWindowBoost) && normalized.smallWindowBoost <= 4 &&
+                         normalized.naturalScaleFlex <= 0.25 && normalized.minWindowLength <= 4096,
+                         "layout input must be finite and bounded before entering the solvers");
+            const auto slots = engine.compute({{.index = 0, .natural = {0, 0, 640, 480}},
+                                               {.index = 1, .natural = {640, 0, 800, 600}}}, {0, 0, 1920, 1080}, config);
+            ok &= expect(slots.size() == 2, "invalid layout configuration must retain every window");
+            for (const auto& slot : slots)
+                ok &= expect(std::isfinite(slot.target.x) && std::isfinite(slot.target.y) && std::isfinite(slot.target.width) &&
+                             std::isfinite(slot.target.height) && std::isfinite(slot.scale), "invalid layout configuration must produce finite geometry");
+        }
+    }
 
     {
         const std::vector<WindowInput> windows = {

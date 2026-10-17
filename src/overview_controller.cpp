@@ -1,4 +1,6 @@
 #include "overview_controller.hpp"
+#include "numeric_config.hpp"
+#include "snapshot_framebuffer.hpp"
 #include "stage_controller.hpp"
 
 #include <algorithm>
@@ -30,7 +32,7 @@
 #include <unistd.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
-#include "vendor/nlohmann/json.hpp"
+#include "state_json.hpp"
 
 #define private public
 #include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
@@ -84,6 +86,7 @@
 #include "overview_logic.hpp"
 #include "private_debug_log.hpp"
 #include "input_guard.hpp"
+#include "config_command.hpp"
 
 extern char** environ;
 
@@ -415,7 +418,7 @@ long getConfigInt(HANDLE handle, const char* name, long fallback) {
     return fallback;
 }
 
-double getConfigFloat(HANDLE handle, const char* name, double fallback) {
+double getConfigFloat(HANDLE handle, const char* name, double fallback, double minimum, double maximum) {
     (void)handle;
 
     const auto value = Config::mgr()->getConfigValue(name);
@@ -423,10 +426,10 @@ double getConfigFloat(HANDLE handle, const char* name, double fallback) {
         return fallback;
 
     if (*value.type == typeid(Config::FLOAT))
-        return static_cast<double>(**reinterpret_cast<Config::FLOAT* const*>(value.dataptr));
+        return finiteConfig(static_cast<double>(**reinterpret_cast<Config::FLOAT* const*>(value.dataptr)), fallback, minimum, maximum);
 
     if (*value.type == typeid(Config::INTEGER))
-        return static_cast<double>(**reinterpret_cast<Config::INTEGER* const*>(value.dataptr));
+        return finiteConfig(static_cast<double>(**reinterpret_cast<Config::INTEGER* const*>(value.dataptr)), fallback, minimum, maximum);
 
     return fallback;
 }
@@ -483,65 +486,12 @@ std::string getConfigString(HANDLE handle, const char* name, std::string fallbac
     return fallback;
 }
 
-std::string luaStringLiteral(const std::string& value) {
-    std::string out = "\"";
-    for (const char ch : value) {
-        if (ch == '\\' || ch == '"')
-            out += '\\';
-        out += ch;
-    }
-    out += '"';
-    return out;
-}
-
-std::string luaConfigExpression(const std::string& name, const std::string& value) {
-    std::vector<std::string> parts;
-    std::string              current;
-    for (const char ch : name) {
-        if (ch == ':' || ch == '.') {
-            if (!current.empty()) {
-                parts.push_back(current);
-                current.clear();
-            }
-            continue;
-        }
-
-        current += ch;
-    }
-
-    if (!current.empty())
-        parts.push_back(current);
-
-    if (parts.empty())
-        return {};
-
-    std::string expression = "hl.config({";
-    for (std::size_t i = 0; i + 1 < parts.size(); ++i)
-        expression += "[" + luaStringLiteral(parts[i]) + "] = {";
-
-    expression += "[" + luaStringLiteral(parts.back()) + "] = " + value;
-
-    for (std::size_t i = 0; i < parts.size(); ++i)
-        expression += "}";
-
-    expression += ")";
-    return expression;
-}
+ConfigCommandAdapter configCommands;
 
 std::string setConfigKeyword(const std::string& name, const std::string& value) {
-    const auto result = HyprlandAPI::invokeHyprctlCommand("keyword", name + " " + value);
-    if (result == "ok")
-        return {};
-
-    if (result != "keyword can't work with non-legacy parsers. Use eval.")
-        return result;
-
-    const auto expression = luaConfigExpression(name, value);
-    if (expression.empty())
-        return result;
-
-    const auto evalResult = HyprlandAPI::invokeHyprctlCommand("eval", expression);
-    return evalResult == "ok" ? std::string{} : evalResult;
+    return configCommands.set(name, value, [](const std::string& command, const std::string& args) {
+        return HyprlandAPI::invokeHyprctlCommand(command, args);
+    });
 }
 
 std::optional<uint32_t> parseSwitchReleaseKeycode(const std::string& value) {
@@ -854,24 +804,6 @@ bool shouldWrapWorkspaceIds(const WORKSPACEID targetId, const WORKSPACEID curren
     return std::min(targetId, currentId) == lowestID && std::max(targetId, currentId) == highestID;
 }
 
-float animationMovePercent(std::string style) {
-    std::ranges::transform(style, style.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-
-    std::istringstream stream(style);
-    std::string        token;
-    float              movePercent = 100.F;
-    while (stream >> token) {
-        if (!token.empty() && token.back() == '%') {
-            try {
-                movePercent = std::stof(token.substr(0, token.size() - 1));
-            } catch (...) {
-            }
-        }
-    }
-
-    return movePercent;
-}
-
 Vector2D predictedWorkspaceAnimationOffset(HANDLE handle, const PHLMONITOR& monitor, const PHLWORKSPACE& workspace, bool left, bool incoming) {
     if (!monitor || !workspace)
         return {};
@@ -917,7 +849,7 @@ Vector2D predictedWorkspaceAnimationOffset(HANDLE handle, const PHLMONITOR& moni
 }
 
 double clampUnit(double value) {
-    return std::clamp(value, 0.0, 1.0);
+    return finiteConfig(value, 1.0, 0.0, 1.0);
 }
 
 bool hasUsableWindowSize(const Vector2D& size) {
@@ -1184,13 +1116,17 @@ struct FramebufferBlitRect {
 };
 
 std::optional<FramebufferBlitRect> rectToFramebufferBlitRect(const Rect& rect, const Vector2D& framebufferSize) {
-    const GLint framebufferWidth = std::max(1, static_cast<int>(std::lround(framebufferSize.x)));
-    const GLint framebufferHeight = std::max(1, static_cast<int>(std::lround(framebufferSize.y)));
+    if (!std::isfinite(rect.x) || !std::isfinite(rect.y) || !std::isfinite(rect.width) || !std::isfinite(rect.height) ||
+        !std::isfinite(framebufferSize.x) || !std::isfinite(framebufferSize.y) || framebufferSize.x < 1.0 || framebufferSize.y < 1.0 ||
+        framebufferSize.x > std::numeric_limits<GLint>::max() || framebufferSize.y > std::numeric_limits<GLint>::max())
+        return std::nullopt;
+    const GLint framebufferWidth = static_cast<GLint>(framebufferSize.x);
+    const GLint framebufferHeight = static_cast<GLint>(framebufferSize.y);
 
-    const GLint left = std::clamp(static_cast<GLint>(std::floor(rect.x)), 0, framebufferWidth);
-    const GLint right = std::clamp(static_cast<GLint>(std::ceil(rect.x + rect.width)), 0, framebufferWidth);
-    const GLint topFromTop = std::clamp(static_cast<GLint>(std::floor(rect.y)), 0, framebufferHeight);
-    const GLint bottomFromTop = std::clamp(static_cast<GLint>(std::ceil(rect.y + rect.height)), 0, framebufferHeight);
+    const GLint left = static_cast<GLint>(std::clamp(std::floor(rect.x), 0.0, static_cast<double>(framebufferWidth)));
+    const GLint right = static_cast<GLint>(std::clamp(std::ceil(rect.x + rect.width), 0.0, static_cast<double>(framebufferWidth)));
+    const GLint topFromTop = static_cast<GLint>(std::clamp(std::floor(rect.y), 0.0, static_cast<double>(framebufferHeight)));
+    const GLint bottomFromTop = static_cast<GLint>(std::clamp(std::ceil(rect.y + rect.height), 0.0, static_cast<double>(framebufferHeight)));
     const GLint bottom = framebufferHeight - bottomFromTop;
     const GLint top = framebufferHeight - topFromTop;
 
@@ -1295,10 +1231,9 @@ SP<Render::IFramebuffer> normalizeMonitorFramebuffer(const PHLMONITOR& monitor, 
     const int width = std::max(1, static_cast<int>(std::lround(monitor->m_transformedSize.x)));
     const int height = std::max(1, static_cast<int>(std::lround(monitor->m_transformedSize.y)));
     auto normalized = createFramebuffer(name);
-    if (!normalized || !normalized->alloc(width, height))
+    if (!normalized || !allocateSnapshotFramebufferLike(*normalized, *sourceFramebuffer, width, height))
         return nullptr;
 
-    normalized->setImageDescription(monitor->workBufferImageDescription());
     setFramebufferLinearFiltering(*normalized);
     // Hyprland snapshots use the output's physical buffer dimensions. Convert
     // them back to transformed monitor space before logical crops or scaling.
@@ -1550,7 +1485,9 @@ bool buildBlurredProxyFramebuffers(const SP<Render::IFramebuffer>& sourceFramebu
     const int framebufferHeight = static_cast<int>(std::lround(sourceFramebuffer->m_size.y));
     auto      horizontalFramebuffer = createFramebuffer("hymission hidden strip horizontal blur");
     auto      verticalFramebuffer = createFramebuffer("hymission hidden strip vertical blur");
-    if (!horizontalFramebuffer || !verticalFramebuffer || !horizontalFramebuffer->alloc(framebufferWidth, framebufferHeight) || !verticalFramebuffer->alloc(framebufferWidth, framebufferHeight))
+    if (!horizontalFramebuffer || !verticalFramebuffer ||
+        !allocateSnapshotFramebufferLike(*horizontalFramebuffer, *sourceFramebuffer, framebufferWidth, framebufferHeight) ||
+        !allocateSnapshotFramebufferLike(*verticalFramebuffer, *sourceFramebuffer, framebufferWidth, framebufferHeight))
         return false;
     setFramebufferLinearFiltering(*horizontalFramebuffer);
     setFramebufferLinearFiltering(*verticalFramebuffer);
@@ -2420,6 +2357,7 @@ OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
 }
 
 OverviewController::~OverviewController() {
+    cancelAndClearTimer(m_hiddenStripProxyRefreshTimer);
     cancelAndClearTimer(m_stripRefreshTimer);
     stopSearchInput();
     setDamageTrackingOverride(false);
@@ -2605,6 +2543,7 @@ bool OverviewController::initialize() {
             updateHoveredFromPointer(false, false, false, false, "monitor-focused");
     });
     m_configReloadedListener = events.config.reloaded.listen([this] {
+        configCommands.reset();
         warnAboutDeprecatedExpansionConfig();
         warnAboutVimLabels();
         replaceNativeWorkspaceGestures("config-reloaded");
@@ -2941,7 +2880,7 @@ std::string OverviewController::overviewStateJson() const {
     };
 
     if (!isVisible())
-        return root.dump() + "\n";
+        return dumpStateJson(root) + "\n";
 
     std::size_t zIndex = 0;
     for (const auto& managed : m_state.windows) {
@@ -2982,7 +2921,7 @@ std::string OverviewController::overviewStateJson() const {
         root["windows"].push_back(std::move(item));
     }
 
-    return root.dump() + "\n";
+    return dumpStateJson(root) + "\n";
 }
 
 std::string OverviewController::handleRawWindowRenderCommand(const std::string& args) {
@@ -3109,6 +3048,7 @@ void OverviewController::renderStage(eRenderStage stage) {
         flushQueuedRealFocusDuringOverview();
         renderBackdrop();
     } else if (stage == RENDER_POST_WINDOWS) {
+        scheduleHiddenStripLayerProxyRefresh();
         if (m_deactivatePending) {
             if (debugLogsEnabled())
                 debugLog("[hymission] post-windows queue deferred deactivate");
@@ -3613,29 +3553,39 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
         return;
     }
 
+    const xkb_keysym_t keysym = xkb_state_key_get_one_sym(keyboard->m_xkbState, event.keycode + 8);
     if (m_searchActive && m_searchInputFd >= 0) {
-        // A spawned helper is not necessarily mapped or focused yet. Never let
-        // search keystrokes reach the application underneath the overview.
-        if (!ensureSearchInputFocus()) {
-            if (m_searchPendingKeys.size() < 256) {
-                auto* state = keyboard->m_xkbState;
-                m_searchPendingKeys.push_back({event,
-                    xkb_state_serialize_mods(state, XKB_STATE_MODS_DEPRESSED),
-                    xkb_state_serialize_mods(state, XKB_STATE_MODS_LATCHED),
-                    xkb_state_serialize_mods(state, XKB_STATE_MODS_LOCKED),
-                    xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE)});
-            }
-            info.cancelled = true;
-            if (m_searchFocusTimer)
-                wl_event_source_timer_update(m_searchFocusTimer, 8);
+        const bool focused = ensureSearchInputFocus();
+        // ensureSearchInputFocus may stop an expired search. Let this event
+        // continue through normal overview handling in that case.
+        if (m_searchActive) {
+            const auto route = routeSearchKey(
+                searchKeyAction(focused, event.state == WL_KEYBOARD_KEY_STATE_PRESSED && keysym == XKB_KEY_Escape),
+                [this] {
+                    stopSearchInput();
+                    rebuildVisibleState({}, true);
+                },
+                [&] {
+                    if (m_searchPendingKeys.size() < 256) {
+                        auto* state = keyboard->m_xkbState;
+                        m_searchPendingKeys.push_back({event,
+                            xkb_state_serialize_mods(state, XKB_STATE_MODS_DEPRESSED),
+                            xkb_state_serialize_mods(state, XKB_STATE_MODS_LATCHED),
+                            xkb_state_serialize_mods(state, XKB_STATE_MODS_LOCKED),
+                            xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE)});
+                    }
+                    info.cancelled = true;
+                    if (m_searchFocusTimer)
+                        wl_event_source_timer_update(m_searchFocusTimer, SearchFocusWait::RETRY_MS);
+                });
+            if (route == SearchKeyRoute::Helper)
+                return;
+            // Resume normal overview handling, including its cancellation of Escape.
         }
-        return;
     }
 
     if (event.state != WL_KEYBOARD_KEY_STATE_PRESSED)
         return;
-
-    const xkb_keysym_t keysym = xkb_state_key_get_one_sym(keyboard->m_xkbState, event.keycode + 8);
 
     if (!overviewTextInputAllowed(keyboard->getModifiers(), HL_MODIFIER_CTRL | HL_MODIFIER_ALT | HL_MODIFIER_META)) {
         clearPickLabelPrefixState();
@@ -3714,7 +3664,19 @@ bool OverviewController::ensureSearchInputFocus() {
         return false;
     }
 
-    if (!m_searchActive || m_searchInputPid <= 0 || !g_pSeatManager)
+    if (!m_searchActive || m_searchInputPid <= 0)
+        return false;
+
+    const auto now = SearchFocusWait::Clock::now();
+    m_searchFocusWait.begin(now);
+    if (m_searchFocusWait.expired(now)) {
+        stopSearchInput();
+        if (isVisible() && m_state.phase != Phase::Closing && m_state.phase != Phase::ClosingSettle)
+            rebuildVisibleState({}, true);
+        notifySearchFailureOnce("[hymission] search input helper timed out waiting for keyboard focus");
+        return false;
+    }
+    if (!g_pSeatManager)
         return false;
 
     for (const auto& layer : Desktop::viewState()->layers()) {
@@ -3743,6 +3705,7 @@ bool OverviewController::ensureSearchInputFocus() {
             }
         }
         m_searchPendingKeys.clear();
+        m_searchFocusWait.reset();
         return true;
     }
     return false;
@@ -3798,6 +3761,8 @@ bool OverviewController::startSearchInput() {
     m_searchInputFd = sockets[0];
     m_searchInputPid = pid;
     m_searchActive = true;
+    m_searchFocusWait.reset();
+    m_searchFocusWait.begin(SearchFocusWait::Clock::now());
     m_searchPreeditActive = false;
     m_searchQuery.clear();
     m_searchNormalizedQuery.clear();
@@ -3817,18 +3782,19 @@ bool OverviewController::startSearchInput() {
     m_searchFocusTimer = wl_event_loop_add_timer(loop, [](void* data) {
         auto* controller = static_cast<OverviewController*>(data);
         if (controller->m_searchActive && !controller->ensureSearchInputFocus() && controller->m_searchFocusTimer)
-            wl_event_source_timer_update(controller->m_searchFocusTimer, 8);
+            wl_event_source_timer_update(controller->m_searchFocusTimer, SearchFocusWait::RETRY_MS);
         return 0;
     }, this);
     if (!m_searchFocusTimer) {
         stopSearchInput();
         return false;
     }
-    wl_event_source_timer_update(m_searchFocusTimer, 8);
+    wl_event_source_timer_update(m_searchFocusTimer, SearchFocusWait::RETRY_MS);
     return true;
 }
 
 void OverviewController::stopSearchInput(bool clearSearchState) {
+    m_searchFocusWait.reset();
     if (m_searchFocusTimer) {
         wl_event_source_remove(m_searchFocusTimer);
         m_searchFocusTimer = nullptr;
@@ -4435,7 +4401,7 @@ void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, co
     const Rect   shadowRect = inflateRect(previewRect, borderSize + shadowRange, borderSize + shadowRange);
     CBox         shadowBox = toBox(rectToMonitorRenderLocal(shadowRect, monitor)).round();
     const double renderScale = renderScaleForMonitor(monitor);
-    const float  shadowScale = std::clamp(static_cast<float>(*PSHADOWSCALE), 0.0F, 1.0F);
+    const float  shadowScale = static_cast<float>(finiteConfig(*PSHADOWSCALE, 1.0, 0.0, 1.0));
     shadowBox.scaleFromCenter(shadowScale);
     const auto shadowOffset = *PSHADOWOFFSET;
     shadowBox.translate(Vector2D{shadowOffset.x * decorationScale * renderScale, shadowOffset.y * decorationScale * renderScale});
@@ -5145,8 +5111,8 @@ CRegion OverviewController::surfaceVisibleRegionHook(void* surfacePassThisptr, b
 }
 
 LayoutConfig OverviewController::loadLayoutConfig() const {
-    const double outerPadding = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding", 32));
-    return {
+    const double outerPadding = std::clamp(getConfigInt(m_handle, "plugin:hymission:outer_padding", 32), 0L, 4096L);
+    return normalizeLayoutConfig({
         .engine = parseLayoutEngine(getConfigString(m_handle, "plugin:hymission:layout_engine", "grid")),
         .outerPaddingTop = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_top", static_cast<long>(outerPadding))),
         .outerPaddingRight = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_right", static_cast<long>(outerPadding))),
@@ -5154,15 +5120,15 @@ LayoutConfig OverviewController::loadLayoutConfig() const {
         .outerPaddingLeft = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_left", static_cast<long>(outerPadding))),
         .rowSpacing = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:row_spacing", 32)),
         .columnSpacing = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:column_spacing", 32)),
-        .smallWindowBoost = getConfigFloat(m_handle, "plugin:hymission:small_window_boost", 1.35),
-        .maxPreviewScale = getConfigFloat(m_handle, "plugin:hymission:max_preview_scale", 0.95),
+        .smallWindowBoost = getConfigFloat(m_handle, "plugin:hymission:small_window_boost", 1.35, 0.1, 4),
+        .maxPreviewScale = getConfigFloat(m_handle, "plugin:hymission:max_preview_scale", 0.95, 0, 4),
         .minWindowLength = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:min_window_length", 120)),
         .minPreviewShortEdge = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:min_preview_short_edge", 32)),
-        .layoutSpaceWeight = getConfigFloat(m_handle, "plugin:hymission:layout_space_weight", 0.10),
-        .layoutScaleWeight = getConfigFloat(m_handle, "plugin:hymission:layout_scale_weight", 1.0),
-        .minSlotScale = getConfigFloat(m_handle, "plugin:hymission:min_slot_scale", 0.10),
-        .naturalScaleFlex = getConfigFloat(m_handle, "plugin:hymission:natural_scale_flex", 0.22),
-    };
+        .layoutSpaceWeight = getConfigFloat(m_handle, "plugin:hymission:layout_space_weight", 0.10, 0, 100),
+        .layoutScaleWeight = getConfigFloat(m_handle, "plugin:hymission:layout_scale_weight", 1.0, 0, 100),
+        .minSlotScale = getConfigFloat(m_handle, "plugin:hymission:min_slot_scale", 0.10, 0, 4),
+        .naturalScaleFlex = getConfigFloat(m_handle, "plugin:hymission:natural_scale_flex", 0.22, 0, 0.25),
+    });
 }
 
 LayoutConfig OverviewController::layoutConfigForState(const State& state) const {
@@ -5191,7 +5157,7 @@ LayoutConfig OverviewController::layoutConfigForState(const State& state) const 
     }
 
     if (state.collectionPolicy.onlyActiveWorkspace)
-        config.maxPreviewScale = getConfigFloat(m_handle, "plugin:hymission:workspace_overview_max_preview_scale", config.maxPreviewScale);
+        config.maxPreviewScale = getConfigFloat(m_handle, "plugin:hymission:workspace_overview_max_preview_scale", config.maxPreviewScale, 0, 4);
     return config;
 }
 
@@ -5247,7 +5213,7 @@ std::string OverviewController::hoverRelayoutAnimationConfig() const {
 }
 
 double OverviewController::hoverRelayoutDurationMs() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hover_relayout_duration", RELAYOUT_DURATION_MS), 0.0, 2000.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hover_relayout_duration", RELAYOUT_DURATION_MS, 0, 2000), 0.0, 2000.0);
 }
 
 HoverRelayoutCurve OverviewController::hoverRelayoutCurve() const {
@@ -5255,11 +5221,11 @@ HoverRelayoutCurve OverviewController::hoverRelayoutCurve() const {
 }
 
 double OverviewController::selectedExpandScale() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:selected_expand_scale", SELECTED_WINDOW_LAYOUT_EMPHASIS), 1.0, 2.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:selected_expand_scale", SELECTED_WINDOW_LAYOUT_EMPHASIS, 1, 2), 1.0, 2.0);
 }
 
 double OverviewController::hoverExpandScale() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hover_expand_scale", SELECTED_WINDOW_LAYOUT_EMPHASIS), 1.0, 2.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hover_expand_scale", SELECTED_WINDOW_LAYOUT_EMPHASIS, 1, 2), 1.0, 2.0);
 }
 
 bool OverviewController::focusFollowsMouseEnabled() const {
@@ -5343,15 +5309,15 @@ bool OverviewController::hideBarAnimationBlurEnabled() const {
 }
 
 double OverviewController::hideBarAnimationMoveMultiplier() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_move_multiplier", 0.8), 0.0, 2.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_move_multiplier", 0.8, 0, 2), 0.0, 2.0);
 }
 
 double OverviewController::hideBarAnimationScaleDivisor() const {
-    return std::max(1.0, getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_scale_divisor", 1.1));
+    return std::max(1.0, getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_scale_divisor", 1.1, 1, 100));
 }
 
 double OverviewController::hideBarAnimationAlphaEnd() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_alpha_end", 0.0), 0.0, 1.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_alpha_end", 0.0, 0, 1), 0.0, 1.0);
 }
 
 bool OverviewController::barSingleMissionControlEnabled() const {
@@ -5395,11 +5361,11 @@ bool OverviewController::pickLabelsDirectActivateEnabled() const {
 }
 
 double OverviewController::focusHoverThickness() const {
-    return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:focus_hover_thickness", HOVER_THICKNESS));
+    return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:focus_hover_thickness", HOVER_THICKNESS, 0, 128));
 }
 
 double OverviewController::focusSelectedThickness() const {
-    return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:focus_selected_thickness", OUTLINE_THICKNESS));
+    return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:focus_selected_thickness", OUTLINE_THICKNESS, 0, 128));
 }
 
 bool OverviewController::backdropBlurEnabled() const {
@@ -5491,11 +5457,11 @@ bool OverviewController::niriModeEnabled() const {
 }
 
 double OverviewController::niriScrollPixelsPerDelta() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_scroll_pixels_per_delta", 1.0), 0.0, 20.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_scroll_pixels_per_delta", 1.0, 0, 20), 0.0, 20.0);
 }
 
 double OverviewController::niriWorkspaceScale() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_workspace_scale", 1.0), 0.05, 1.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_workspace_scale", 1.0, 0.05, 1), 0.05, 1.0);
 }
 
 double OverviewController::niriScrollingPreviewGap() const {
@@ -5855,7 +5821,7 @@ double OverviewController::workspaceSwipeViewportDistance(const PHLMONITOR& moni
         return 1.0;
 
     const double gaps = static_cast<double>(getConfigInt(m_handle, "general:gaps_workspaces", 0));
-    return (axis == WorkspaceTransitionAxis::Vertical ? static_cast<double>(monitor->m_size.y) : static_cast<double>(monitor->m_size.x)) + gaps;
+    return finiteConfig((axis == WorkspaceTransitionAxis::Vertical ? static_cast<double>(monitor->m_size.y) : static_cast<double>(monitor->m_size.x)) + gaps, 1.0, 1.0, 1000000.0);
 }
 
 int OverviewController::resolveOverviewWorkspaceSwipeStep(eTrackpadGestureDirection direction, double totalDelta, double lastDelta) const {
@@ -5869,7 +5835,7 @@ int OverviewController::resolveOverviewWorkspaceSwipeStep(eTrackpadGestureDirect
         adjustedLast = -adjustedLast;
     }
 
-    const double cancelRatio = std::clamp(getConfigFloat(m_handle, "gestures:workspace_swipe_cancel_ratio", 0.5), 0.0, 1.0);
+    const double cancelRatio = std::clamp(getConfigFloat(m_handle, "gestures:workspace_swipe_cancel_ratio", 0.5, 0, 1), 0.0, 1.0);
     const double distanceThreshold = gestureSwipeDistance() * cancelRatio;
     const double speedThreshold = gestureForceSpeedThreshold();
     const double decisive = std::abs(adjustedLast) >= speedThreshold ? adjustedLast : adjustedTotal;
@@ -6009,7 +5975,7 @@ void OverviewController::clearRegisteredTrackpadGestures() {
 void OverviewController::rememberRegisteredTrackpadGesture(const GestureRegistration& gesture) {
     std::erase_if(m_registeredGestures, [&](const GestureRegistration& existing) {
         return existing.fingerCount == gesture.fingerCount && existing.direction == gesture.direction && existing.modMask == gesture.modMask &&
-            std::abs(existing.deltaScale - gesture.deltaScale) <= 0.0001F && existing.disableInhibit == gesture.disableInhibit;
+            existing.deltaScale == gesture.deltaScale && existing.disableInhibit == gesture.disableInhibit;
     });
     m_registeredGestures.push_back(gesture);
 }
@@ -6061,12 +6027,10 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
     if (tokens.size() < 3)
         return fallbackToHyprlandGesture();
 
-    std::size_t fingerCount = 0;
-    try {
-        fingerCount = static_cast<std::size_t>(std::stoul(tokens[0]));
-    } catch (const std::exception&) {
-        return fallbackToHyprlandGesture();
-    }
+    const auto parsedFingerCount = gestureFingerCount(tokens[0]);
+    if (!parsedFingerCount)
+        return std::string{"invalid gesture finger count: "} + tokens[0];
+    const std::size_t fingerCount = *parsedFingerCount;
 
     const auto direction = g_pTrackpadGestures->dirForString(tokens[1]);
     const bool axisDirection = direction == TRACKPAD_GESTURE_DIR_VERTICAL || direction == TRACKPAD_GESTURE_DIR_HORIZONTAL;
@@ -6086,11 +6050,10 @@ std::optional<std::string> OverviewController::handleGestureConfigHook(const std
         }
 
         if (token.starts_with("scale:")) {
-            try {
-                deltaScale = std::stof(trimCopy(token.substr(6)));
-            } catch (const std::exception&) {
+            const auto parsedScale = gestureScale(trimCopy(token.substr(6)));
+            if (!parsedScale)
                 return std::string{"invalid gesture scale: "} + token;
-            }
+            deltaScale = *parsedScale;
             continue;
         }
 
@@ -7072,7 +7035,7 @@ void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
     if (!m_workspaceTransition.active)
         return;
 
-    const double cancelRatio = std::clamp(getConfigFloat(m_handle, "gestures:workspace_swipe_cancel_ratio", 0.5), 0.0, 1.0);
+    const double cancelRatio = std::clamp(getConfigFloat(m_handle, "gestures:workspace_swipe_cancel_ratio", 0.5, 0, 1), 0.0, 1.0);
     const double gestureDistance = gestureSwipeDistance();
     const double speedThreshold = gestureForceSpeedThreshold();
     const double visualSpeedThreshold = speedThreshold * (m_workspaceTransition.distance / gestureDistance);
@@ -8116,7 +8079,7 @@ bool OverviewController::shouldSyncRealFocusDuringOverview() const {
 }
 
 bool OverviewController::insideRenderLifecycle() const {
-    return m_surfaceRenderDataTransformDepth > 0 || m_stripSnapshotRenderDepth > 0 || (g_pHyprOpenGL && g_pHyprRenderer->m_renderData.pMonitor);
+    return m_surfaceRenderDataTransformDepth > 0 || m_stripSnapshotRenderDepth > 0 || (g_pHyprRenderer && g_pHyprRenderer->m_renderData.pMonitor);
 }
 
 bool OverviewController::ownsMonitor(const PHLMONITOR& monitor) const {
@@ -8387,7 +8350,8 @@ const SpatialPickMap& OverviewController::spatialPickMapForCurrentState() const 
         canvas.height = bottom - canvas.y;
     }
 
-    if (!haveCanvas || canvas.width <= 0.0 || canvas.height <= 0.0)
+    if (!haveCanvas || !std::isfinite(canvas.x) || !std::isfinite(canvas.y) || !std::isfinite(canvas.width) ||
+        !std::isfinite(canvas.height) || canvas.width <= 0.0 || canvas.height <= 0.0)
         canvas = makeRect(0.0, 0.0, 1.0, 1.0);
 
     const auto cacheMatches = [&] {
@@ -8413,9 +8377,13 @@ const SpatialPickMap& OverviewController::spatialPickMapForCurrentState() const 
     std::vector<SpatialPickPoint> centers;
     centers.reserve(m_state.windows.size());
 
+    std::vector<std::size_t> centerIndices;
     for (const auto& managed : m_state.windows) {
         next.windows.emplace_back(managed.window);
         const Rect rect = currentPreviewRect(managed);
+        if (!std::isfinite(rect.centerX()) || !std::isfinite(rect.centerY()))
+            continue;
+        centerIndices.push_back(next.windows.size() - 1);
         centers.push_back({
             .x = std::clamp((rect.centerX() - canvas.x) / canvas.width, 0.0, 1.0),
             .y = std::clamp((rect.centerY() - canvas.y) / canvas.height, 0.0, 1.0),
@@ -8423,6 +8391,12 @@ const SpatialPickMap& OverviewController::spatialPickMapForCurrentState() const 
     }
 
     next.map = computeSpatialPickMap(centers);
+    for (auto& route : next.map.routes)
+        route.windowIndex = centerIndices[route.windowIndex];
+    for (auto& nearest : next.map.nearestWindowByKey) {
+        if (nearest)
+            nearest = centerIndices[*nearest];
+    }
     m_spatialPickCache = std::move(next);
     return m_spatialPickCache->map;
 }
@@ -9015,6 +8989,8 @@ double OverviewController::hiddenStripLayerProgress(const PHLLS& layer, const PH
 }
 
 void OverviewController::clearHiddenStripLayerProxies() {
+    cancelAndClearTimer(m_hiddenStripProxyRefreshTimer);
+    m_hiddenStripProxyRefresh.reset();
     m_hiddenStripLayerProxies.clear();
 }
 
@@ -9031,6 +9007,11 @@ const OverviewController::HiddenStripLayerProxy* OverviewController::hiddenStrip
 }
 
 bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const PHLMONITOR& monitor) {
+    if (insideRenderLifecycle() || (g_pHyprRenderer && g_pHyprRenderer->m_renderData.pMonitor)) {
+        m_hiddenStripProxyRefresh.request();
+        scheduleHiddenStripLayerProxyRefresh();
+        return false;
+    }
     if (!layer || !monitor || !g_pHyprRenderer || !g_pHyprOpenGL || !shouldHideLayerSurface(layer, monitor))
         return false;
 
@@ -9052,6 +9033,9 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
     const int fbWidth = std::max(1, static_cast<int>(std::ceil(proxyRectGlobal.width * renderScaleForMonitor(monitor))));
     const int fbHeight = std::max(1, static_cast<int>(std::ceil(proxyRectGlobal.height * renderScaleForMonitor(monitor))));
 
+    // Snapshot rendering can emit render events; keep our overlay out of it.
+    ++m_stripSnapshotRenderDepth;
+    Hyprutils::Utils::CScopeGuard restoreDepth{[this] { --m_stripSnapshotRenderDepth; }};
     g_pHyprOpenGL->makeEGLCurrent();
     auto sourceFramebuffer = layerFramebufferFor(layer);
     if (!sourceFramebuffer || !sourceFramebuffer->isAllocated() || !sourceFramebuffer->getTexture()) {
@@ -9070,21 +9054,12 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
         return false;
     }
 
-    auto* existing = hiddenStripLayerProxyFor(layer, monitor);
-    if (!existing) {
-        HiddenStripLayerProxy proxy;
-        proxy.layer = layer;
-        proxy.monitor = monitor;
-        proxy.capturedRectGlobal = capturedRectGlobal;
-        proxy.proxyRectGlobal = proxyRectGlobal;
-        proxy.snapshotSize = Vector2D{static_cast<double>(fbWidth), static_cast<double>(fbHeight)};
-        proxy.framebuffer = createFramebuffer("hymission hidden strip layer");
-        for (auto& blurredFramebuffer : proxy.blurredFramebuffers)
-            blurredFramebuffer = createFramebuffer("hymission hidden strip layer blur");
-        m_hiddenStripLayerProxies.push_back(std::move(proxy));
-        existing = &m_hiddenStripLayerProxies.back();
-    }
-
+    // Build into fresh storage. Allocation, cropping, blitting or blur failure
+    // must not destroy the last usable proxy (including its old geometry).
+    HiddenStripLayerProxy candidate;
+    candidate.layer = layer;
+    candidate.monitor = monitor;
+    auto* existing = &candidate;
     existing->capturedRectGlobal = capturedRectGlobal;
     existing->proxyRectGlobal = proxyRectGlobal;
     existing->snapshotSize = Vector2D{static_cast<double>(fbWidth), static_cast<double>(fbHeight)};
@@ -9095,9 +9070,12 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
             blurredFramebuffer = createFramebuffer("hymission hidden strip layer blur");
     }
 
+    if (!existing->framebuffer)
+        return false;
+
     if (!existing->framebuffer->isAllocated() || std::abs(existing->framebuffer->m_size.x - fbWidth) > 0.5 || std::abs(existing->framebuffer->m_size.y - fbHeight) > 0.5) {
         existing->framebuffer->release();
-        if (!existing->framebuffer->alloc(fbWidth, fbHeight)) {
+        if (!allocateSnapshotFramebufferLike(*existing->framebuffer, *sourceFramebuffer, fbWidth, fbHeight)) {
             if (debugLogsEnabled()) {
                 std::ostringstream out;
                 out << "[hymission] strip-bar capture framebuffer alloc failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name
@@ -9110,9 +9088,11 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
     }
 
     for (auto& blurredFramebuffer : existing->blurredFramebuffers) {
+        if (!blurredFramebuffer)
+            return false;
         if (!blurredFramebuffer->isAllocated() || std::abs(blurredFramebuffer->m_size.x - fbWidth) > 0.5 || std::abs(blurredFramebuffer->m_size.y - fbHeight) > 0.5) {
             blurredFramebuffer->release();
-            if (!blurredFramebuffer->alloc(fbWidth, fbHeight)) {
+            if (!allocateSnapshotFramebufferLike(*blurredFramebuffer, *sourceFramebuffer, fbWidth, fbHeight)) {
                 if (debugLogsEnabled()) {
                     std::ostringstream out;
                     out << "[hymission] strip-bar capture blur framebuffer alloc failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name
@@ -9158,7 +9138,7 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
         const int croppedWidth = std::max(1, static_cast<int>(std::lround(capturedRectRenderLocal.width)));
         const int croppedHeight = std::max(1, static_cast<int>(std::lround(capturedRectRenderLocal.height)));
         croppedFramebuffer = createFramebuffer("hymission hidden strip layer crop");
-        if (!croppedFramebuffer || !croppedFramebuffer->alloc(croppedWidth, croppedHeight)) {
+        if (!croppedFramebuffer || !allocateSnapshotFramebufferLike(*croppedFramebuffer, *sourceFramebuffer, croppedWidth, croppedHeight)) {
             if (debugLogsEnabled()) {
                 std::ostringstream out;
                 out << "[hymission] strip-bar capture cropped framebuffer alloc failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name
@@ -9215,10 +9195,34 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
             out << "[hymission] strip-bar capture blur build failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name;
             debugLog(out.str());
         }
-        return true;
+        return false;
     }
 
+    if (auto* previous = hiddenStripLayerProxyFor(layer, monitor))
+        *previous = std::move(candidate);
+    else
+        m_hiddenStripLayerProxies.push_back(std::move(candidate));
     return true;
+}
+
+void OverviewController::scheduleHiddenStripLayerProxyRefresh() {
+    if (!m_hiddenStripProxyRefresh.pending() || m_hiddenStripProxyRefreshTimer || !g_pEventLoopManager)
+        return;
+
+    armOrRescheduleTimer(m_hiddenStripProxyRefreshTimer, std::chrono::milliseconds(1), [this](SP<CEventLoopTimer>, void*) {
+        cancelAndClearTimer(m_hiddenStripProxyRefreshTimer);
+        if (g_controller != this || sessionLocked())
+            return;
+        // A nested event loop may fire this during rendering. Leave it pending;
+        // POST_WINDOWS will queue the next attempt. Never self-reschedule here.
+        if (insideRenderLifecycle() || (g_pHyprRenderer && g_pHyprRenderer->m_renderData.pMonitor))
+            return;
+        if (m_hiddenStripProxyRefresh.pending()) {
+            syncHiddenStripLayerProxies();
+            if (isVisible())
+                damageOwnedMonitors();
+        }
+    });
 }
 
 void OverviewController::syncHiddenStripLayerProxies() {
@@ -9226,6 +9230,13 @@ void OverviewController::syncHiddenStripLayerProxies() {
         clearHiddenStripLayerProxies();
         return;
     }
+
+    m_hiddenStripProxyRefresh.request();
+    if (!m_hiddenStripProxyRefresh.take(insideRenderLifecycle() || (g_pHyprRenderer && g_pHyprRenderer->m_renderData.pMonitor))) {
+        scheduleHiddenStripLayerProxyRefresh();
+        return;
+    }
+    cancelAndClearTimer(m_hiddenStripProxyRefreshTimer);
 
     std::vector<std::pair<PHLLS, PHLMONITOR>> desired;
     for (const auto& layer : Desktop::viewState()->layers()) {
@@ -9240,9 +9251,6 @@ void OverviewController::syncHiddenStripLayerProxies() {
             out << "[hymission] strip-bar sync namespace=" << layer->m_namespace << " monitor="
                 << (monitor ? monitor->m_name : std::string("<null-monitor>")) << " captured=" << (captured ? 1 : 0);
             debugLog(out.str());
-        }
-        if (!captured) {
-            std::erase_if(m_hiddenStripLayerProxies, [&](const HiddenStripLayerProxy& proxy) { return proxy.layer == layer && proxy.monitor == monitor; });
         }
     }
 
@@ -11626,7 +11634,6 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     if (m_state.selectedIndex && *m_state.selectedIndex < m_state.windows.size())
         latchHoverSelectionAnchor(g_pInputManager->getMouseCoordsInternal());
     applyWorkspaceNameOverrides(m_state);
-    clearHiddenStripLayerProxies();
     syncHiddenStripLayerProxies();
     setInputFollowMouseOverride(true);
     setScrollingFollowFocusOverride(true);
@@ -11793,7 +11800,6 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
     m_state.deferredFullscreenWorkspaceClear = false;
     m_state.deferredHiddenFullscreenReapply = false;
     m_deactivatePending = false;
-    clearHiddenStripLayerProxies();
     syncHiddenStripLayerProxies();
 
     if (debugLogsEnabled()) {
@@ -14483,7 +14489,7 @@ void OverviewController::refreshWorkspaceStripSnapshots() {
 }
 
 void OverviewController::armWorkspaceStripRefreshTimer() {
-    const auto interval = getConfigInt(m_handle, "plugin:hymission:workspace_strip_refresh_ms", 500);
+    const auto interval = std::clamp(getConfigInt(m_handle, "plugin:hymission:workspace_strip_refresh_ms", 500), 0L, 60000L);
     if (interval <= 0 || !shouldContinuouslyRefreshWorkspaceStripSnapshots() || m_state.stripEntries.empty())
         return;
 

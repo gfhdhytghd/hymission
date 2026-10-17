@@ -1,5 +1,5 @@
 project('hymission', 'cpp',
-  version: '0.10.2',
+  version: '0.11.0',
   default_options: ['buildtype=release'],
 )
 
@@ -93,7 +93,7 @@ overview_logic_test = executable('hymission-overview-logic-test',
   install: false,
 )
 
-test('hymission-overview-logic-test', overview_logic_test)
+test('hymission-overview-logic-test', overview_logic_test, timeout: 10)
 
 search_child_process_test = executable('hymission-search-child-process-test',
   'tools/search_child_process_test.cpp',
@@ -116,3 +116,31 @@ input_guard_test = executable('hymission-input-guard-test',
   install: false,
 )
 test('hymission-input-guard-test', input_guard_test)
+
+config_command_test = executable('hymission-config-command-test',
+  'tools/config_command_test.cpp',
+  include_directories: include_directories('src'),
+  install: false,
+)
+test('hymission-config-command-test', config_command_test)
+
+deferred_snapshot_test = executable('hymission-deferred-snapshot-test',
+  'tools/deferred_snapshot_test.cpp',
+  include_directories: include_directories('src'),
+  install: false,
+)
+test('hymission-deferred-snapshot-test', deferred_snapshot_test)
+
+search_focus_test = executable('hymission-search-focus-test',
+  'tools/search_focus_test.cpp',
+  include_directories: include_directories('src'),
+  install: false,
+)
+test('hymission-search-focus-test', search_focus_test, timeout: 5)
+
+state_json_test = executable('hymission-state-json-test',
+  'tools/state_json_test.cpp',
+  include_directories: include_directories('src'),
+  install: false,
+)
+test('hymission-state-json-test', state_json_test)
