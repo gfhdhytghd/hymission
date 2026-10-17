@@ -301,8 +301,17 @@ struct TilesController::Impl {
     }
     static void scrollRecalculate(Layout::Tiled::SScrollingData* data,bool force) {
         const auto algorithm=data->algorithm;
-        LayoutScope scope{algorithm?AlgoAccess::workspace(algorithm):nullptr};
+        const auto ws=algorithm?AlgoAccess::workspace(algorithm):nullptr;
+        LayoutScope scope{ws};
         reinterpret_cast<decltype(&scrollRecalculate)>(scrollRecalculateHook->m_original)(data,force);
+        // This layout overrides the generic fullscreen geometry setters with
+        // no-ops; its camera can place a column after the fullscreen request.
+        if (ws && self->active(ws->m_monitor.lock())) {
+            const auto handler=algorithm->getFSHandler();
+            if (handler) for (const auto& window:Desktop::windowState()->windows())
+                if (window->mapped() && window->m_workspace==ws && !pinned(window) && Fullscreen::controller()->layoutManagedFS(window))
+                    clampFullscreen(handler.get(),window->layoutTarget());
+        }
     }
     static void scrollFocus(Layout::Tiled::CScrollingAlgorithm* algorithm,SP<Layout::ITarget> target,Layout::Tiled::CScrollingAlgorithm::eInputMode input) {
         LayoutScope scope{target?target->workspace():nullptr};
@@ -311,7 +320,9 @@ struct TilesController::Impl {
     using ScrollFS=Fullscreen::ScrollingFullscreenHandler::CScrollingFullscreenHandler;
     static Fullscreen::eFullscreenRequestResult scrollRequest(ScrollFS* handler,const Fullscreen::SFullscreenRequest& request) {
         LayoutScope scope{request.target?request.target->workspace():nullptr};
-        return reinterpret_cast<decltype(&scrollRequest)>(scrollRequestHook->m_original)(handler,request);
+        const auto result=reinterpret_cast<decltype(&scrollRequest)>(scrollRequestHook->m_original)(handler,request);
+        if (request.target && self->active(request.target->workspace()?request.target->workspace()->m_monitor.lock():nullptr)) clampFullscreen(handler,request.target);
+        return result;
     }
     static float scrollColumn(const ScrollFS* handler) {
         const auto space=HandlerAccess::space(handler);
@@ -477,13 +488,19 @@ struct TilesController::Impl {
         return ws;
     }
     static bool fsHas(Fullscreen::CFullscreenController* c,PHLWORKSPACE ws,std::optional<bool> covering) {
-        return reinterpret_cast<decltype(&fsHas)>(fsHasHook->m_original)(c,pointerTarget(ws),covering);
+        ws=pointerTarget(ws);
+        LayoutScope scope{ws && self->active(ws->m_monitor.lock())?ws:nullptr};
+        return reinterpret_cast<decltype(&fsHas)>(fsHasHook->m_original)(c,ws,covering);
     }
     static Fullscreen::SFullscreenMode fsModes(Fullscreen::CFullscreenController* c,PHLWORKSPACE ws,std::optional<bool> covering) {
-        return reinterpret_cast<decltype(&fsModes)>(fsModesHook->m_original)(c,pointerTarget(ws),covering);
+        ws=pointerTarget(ws);
+        LayoutScope scope{ws && self->active(ws->m_monitor.lock())?ws:nullptr};
+        return reinterpret_cast<decltype(&fsModes)>(fsModesHook->m_original)(c,ws,covering);
     }
     static PHLWINDOW fsWindow(Fullscreen::CFullscreenController* c,PHLWORKSPACE ws,std::optional<bool> covering) {
-        return reinterpret_cast<decltype(&fsWindow)>(fsWindowHook->m_original)(c,pointerTarget(ws),covering);
+        ws=pointerTarget(ws);
+        LayoutScope scope{ws && self->active(ws->m_monitor.lock())?ws:nullptr};
+        return reinterpret_cast<decltype(&fsWindow)>(fsWindowHook->m_original)(c,ws,covering);
     }
     static void pointerInput(CInputManager* input,uint32_t time,bool refocus,bool mouse,std::optional<Vector2D> position,bool pointerOnly) {
         const auto previous=self->pointerWorkspace;
@@ -507,6 +524,7 @@ struct TilesController::Impl {
         }
     }
     static bool covered(PHLWORKSPACE ws) {
+        LayoutScope scope{ws && self->active(ws->m_monitor.lock())?ws:nullptr};
         return ws && reinterpret_cast<decltype(&fsModes)>(fsModesHook->m_original)(Fullscreen::controller().get(),ws,true).internal==Fullscreen::FSMODE_FULLSCREEN;
     }
     static void layer(Render::IHyprRenderer* r,Render::CRenderContext& ctx,PHLLS ls,PHLMONITOR mon,const Time::steady_tp& now,bool popups,bool lockscreen) {
