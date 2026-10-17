@@ -34,9 +34,15 @@ src = [
   'src/stage_logic.cpp',
   'src/stage_controller.cpp',
   'src/stage_edge_effect.cpp',
+  'src/tiles_logic.cpp',
 ]
 
 glib_dep = dependency('glib-2.0')
+
+tiles_logic_test = executable('hymission-tiles-logic-test',
+  ['tools/tiles_logic_test.cpp', 'src/tiles_logic.cpp'],
+  include_directories: include_directories('src'), install: false)
+test('hymission-tiles-logic-test', tiles_logic_test)
 
 shared_module(meson.project_name(), src,
   dependencies: [

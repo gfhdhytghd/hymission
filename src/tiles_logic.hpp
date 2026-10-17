@@ -1,0 +1,61 @@
+#pragma once
+
+#include <cstdint>
+#include <expected>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace hymission::tiles {
+using Workspace = int64_t;
+using Id = uint64_t;
+constexpr size_t maxTiles = 3;
+struct Box {
+    double x = 0, y = 0, width = 0, height = 0;
+    bool contains(double px, double py) const;
+    bool operator==(const Box&) const = default;
+};
+struct Tile {
+    Id id = 0;
+    Workspace workspace = 0;
+    double width = 0;
+    std::vector<Workspace> history;
+    bool operator==(const Tile&) const = default;
+};
+struct State {
+    Box output;
+    double minimum = 240;
+    std::vector<Tile> tiles;
+    Id focused = 0, nextId = 1;
+    uint64_t generation = 0;
+    bool operator==(const State&) const = default;
+};
+enum class Activation { Focus, Swap };
+using Result = std::expected<void, std::string>;
+
+// One physical output. All mutations validate a draft and publish it once.
+// Workspace identity belongs to the adapter; display names never participate.
+class Model {
+  public:
+    explicit Model(Box output, Workspace initial, double minimum = 240);
+    const State& state() const { return m_state; }
+    Result add(Workspace workspace, std::optional<double> width = {});
+    Result resize(double width, int neighbor = 0);
+    Result remove();
+    Result focus(int step);
+    Result activate(Workspace workspace, Activation policy = Activation::Focus);
+    Result geometry(Box output, double minimum);
+    Result restore(const State& snapshot, uint64_t expectedGeneration);
+    std::optional<size_t> index(Id id) const;
+    std::optional<size_t> presented(Workspace workspace) const;
+    std::optional<size_t> at(double x, double y) const;
+    Box box(size_t index) const;
+    std::vector<int> pixelEdges(double scale) const;
+    std::optional<Workspace> previous() const;
+    static bool valid(const State& state);
+  private:
+    State m_state;
+    Result publish(State draft);
+};
+std::expected<double, std::string> length(const std::string& value, double total, bool delta = false);
+} // namespace hymission::tiles

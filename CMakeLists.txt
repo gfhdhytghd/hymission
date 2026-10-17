@@ -42,6 +42,7 @@ add_library(hymission SHARED
   src/stage_logic.cpp
   src/stage_controller.cpp
   src/stage_edge_effect.cpp
+  src/tiles_logic.cpp
 )
 
 target_include_directories(hymission PRIVATE ${HYPR_DEPS_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS} ${GLIB_INCLUDE_DIRS})
@@ -69,6 +70,9 @@ add_executable(hymission-layout-demo
 target_include_directories(hymission-layout-demo PRIVATE src)
 
 if(BUILD_TESTING)
+  add_executable(hymission-tiles-logic-test tools/tiles_logic_test.cpp src/tiles_logic.cpp)
+  target_include_directories(hymission-tiles-logic-test PRIVATE src)
+  add_test(NAME hymission-tiles-logic-test COMMAND hymission-tiles-logic-test)
   add_executable(hymission-config-command-test tools/config_command_test.cpp)
   target_include_directories(hymission-config-command-test PRIVATE src)
   add_test(NAME hymission-config-command-test COMMAND hymission-config-command-test)
