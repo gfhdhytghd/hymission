@@ -1372,6 +1372,7 @@ void StageController::Impl::initialize() {
     listeners.emplace_back(events.config.props_refreshed.listen([this](bool) { request(); }));
     listeners.emplace_back(events.monitor.layoutChanged.listen([this] { request(); }));
     listeners.emplace_back(events.monitor.added.listen([this](PHLMONITOR) { request(); }));
+    listeners.emplace_back(events.monitor.preRemoved.listen([this](PHLMONITOR) { StageController::cancelTileTransfer(); }));
     listeners.emplace_back(events.monitor.removed.listen([this](PHLMONITOR) { request(); }));
     listeners.emplace_back(events.workspace.active.listen([this](PHLWORKSPACE) { request(); }));
     listeners.emplace_back(events.workspace.created.listen([this](PHLWORKSPACEREF) { request(); }));
@@ -1379,7 +1380,10 @@ void StageController::Impl::initialize() {
     listeners.emplace_back(events.workspace.moveToMonitor.listen([this](PHLWORKSPACE, PHLMONITOR) { request(); }));
     listeners.emplace_back(events.workspace.specialActive.listen([this](PHLWORKSPACE, PHLMONITOR) { request(); }));
     listeners.emplace_back(events.window.open.listen([this](PHLWINDOW) { request(); }));
-    listeners.emplace_back(events.window.close.listen([this](PHLWINDOW) { request(); }));
+    listeners.emplace_back(events.window.close.listen([this](PHLWINDOW window) {
+        if (auto* tiles=TilesController::get();tiles && tiles->transferMember(window)) StageController::cancelTileTransfer();
+        request();
+    }));
     listeners.emplace_back(events.window.floating.listen([this](PHLWINDOW) { request(); }));
     listeners.emplace_back(events.window.fullscreen.listen([this](PHLWINDOW) { request(); }));
     listeners.emplace_back(events.window.title.listen([this](PHLWINDOW) { request(); }));
@@ -1403,8 +1407,6 @@ void StageController::Impl::initialize() {
         }
     }));
     listeners.emplace_back(events.input.mouse.button.listen([this](const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
-        if (sessionLocked())
-            return;
         const auto copy = event;
         button(copy, info);
     }));
@@ -2233,14 +2235,7 @@ void StageController::Impl::updateDragHover() {
 }
 
 void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
-    if (sessionLocked())
-        return;
-
-    if (event.state == WL_POINTER_BUTTON_STATE_PRESSED)
-        silentDropWindow.reset();
-    if (rendering || (inputSuppressed && inputSuppressed()))
-        return;
-    if (auto* tiles=TilesController::get();tiles && tiles->handleDivider(event,info)) return;
+    const bool suppressed=sessionLocked() || rendering || (inputSuppressed && inputSuppressed());
     if (tileDragPending && event.button==BTN_LEFT && event.state==WL_POINTER_BUTTON_STATE_RELEASED) {
         auto* tiles=TilesController::get();
         const bool owned=tiles && tiles->owner()==TilesController::Owner::StageDrag;
@@ -2251,8 +2246,8 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
         swallowedButtons.erase(event.button); pressed.reset(); pressedSyntheticId=0; reorderArmed=false;
         info.cancelled=true;
         if (tiles) {
-            tiles->finishTransfer(dragged && !cancelDrop);
-            if (owned && !dragged && workspace && mon) {
+            tiles->finishTransfer(dragged && !cancelDrop && !suppressed);
+            if (owned && !dragged && !suppressed && workspace && mon) {
                 tiles->activate(mon,id,workspace);
                 if (clicked && clicked->mapped()) Desktop::focusState()->fullWindowFocus(clicked,Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_HARD);
             }
@@ -2260,6 +2255,14 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
         request();
         return;
     }
+    if (suppressed) {
+        StageController::cancelTileTransfer();
+        if (event.state==WL_POINTER_BUTTON_STATE_RELEASED && swallowedButtons.erase(event.button)) info.cancelled=true;
+        return;
+    }
+    if (event.state == WL_POINTER_BUTTON_STATE_PRESSED)
+        silentDropWindow.reset();
+    if (auto* tiles=TilesController::get();tiles && tiles->handleDivider(event,info)) return;
     if (thumbnailDrag && event.button == BTN_LEFT && event.state == WL_POINTER_BUTTON_STATE_RELEASED) {
         swallowedButtons.erase(event.button);
         pressed.reset();
@@ -4268,6 +4271,17 @@ void StageController::setOverviewRendering(bool active) {
             break;
         }
     }
+}
+
+void StageController::cancelTileTransfer() {
+    auto* self=Impl::instance;
+    if (!self || !self->tileDragPending) return;
+    if (auto* tiles=TilesController::get()) tiles->finishTransfer(false);
+    self->tileDragPending=false;
+    self->tileDragWorkspace.reset(); self->tileDragClicked.reset(); self->tileDragMonitor.reset();
+    self->pressed.reset(); self->pressedSyntheticId=0; self->reorderArmed=false;
+    // Retain the consumed press until its release, including while overview owns input.
+    self->request();
 }
 
 } // namespace hymission

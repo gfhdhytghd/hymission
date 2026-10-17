@@ -11615,6 +11615,8 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     if (sessionLocked())
         return;
 
+    StageController::cancelTileTransfer();
+
     setAnimationsEnabledOverride(false);
     clearToggleSwitchSession();
 

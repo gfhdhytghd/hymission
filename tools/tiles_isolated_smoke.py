@@ -252,6 +252,16 @@ def main():
                 pointer("release",x,y)
             sc,c,w=source_preview(stage)
             before=tiles_state()
+            sx=w["x"]+w["width"]/2; sy=w["y"]+w["height"]/2
+            pointer("press",sx,sy); pointer("move",expected_width*0.8,300)
+            assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]!=0
+            evaluate('hl.plugin.hymission.open("forceall")')
+            wait_json("j/hymission-tiles-state",lambda s:s["interaction_owner"]==0,"overview-cancels-stage-drag")
+            pointer("release",expected_width*0.8,300)
+            assert tiles_state()==before
+            evaluate('hl.plugin.hymission.close()')
+            wait_json("j/hymission-overview-state",lambda s:not s["active"],"close-after-stage-drag")
+            stage=stage_ready(1); sc,c,w=source_preview(stage)
             drag_from(sc,c,w,expected_width*0.8,300,True)
             assert tiles_state()==before
             stage=stage_ready(1); sc,c,w=source_preview(stage)

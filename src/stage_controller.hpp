@@ -42,6 +42,7 @@ class StageController {
     static void updateTrackpadWorkspaceSwipe(double delta);
     static void endTrackpadWorkspaceSwipe(bool cancelled);
     static void setOverviewRendering(bool active);
+    static void cancelTileTransfer();
     // Overview owns the shared hooks while Stage draws its sliding previews.
     static bool renderingPreview();
     // An engaged null workspace means sidebar chrome or an empty card: consume
