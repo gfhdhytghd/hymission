@@ -21,6 +21,7 @@ def main():
     ap.add_argument("--hyprland", default=str(Path.home() / ".local/lib/hyprland-hdr/Hyprland"))
     ap.add_argument("--debugger", action="store_true")
     ap.add_argument("--gbm-backend", default="nvidia-drm", help="GBM backend for the isolated parent/child only")
+    ap.add_argument("--fixture")
     ap.add_argument("--plugin", required=True)
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
@@ -38,6 +39,9 @@ def main():
     config.write_text('hl.monitor({output="",mode="1920x1080@60",position="auto",scale="1"})\n'
                       'hl.config({misc={disable_hyprland_logo=true,disable_splash_rendering=true},animations={enabled=false},xwayland={enabled=false}})\n'
                       f'hl.plugin.load({json.dumps(str(Path(args.plugin).resolve()))})\n')
+    if args.fixture:
+        with config.open("a") as output:
+            output.write(f"hl.plugin.load({json.dumps(str(Path(args.fixture).resolve()))})\n")
     processes = []
     handles = []
     try:
@@ -139,6 +143,33 @@ def main():
         assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[2,1,3]
         evaluate('hl.plugin.hymission.tile_focus("right")')
         evaluate('hl.plugin.hymission.tile_focus("right")')
+        if args.fixture:
+            evaluate('hl.config({gestures={workspace_swipe_distance=300,workspace_swipe_min_speed_to_force=0}})')
+            prior=tiles_state()
+            evaluate('hl.plugin.hymission_tiles_test.swipe("begin")')
+            evaluate('hl.plugin.hymission_tiles_test.swipe("update",100)')
+            progress=tiles_state()
+            assert progress[0]["renderOffset"]==[0,0] and progress[1]["renderOffset"]==[0,0]
+            assert progress[2]["renderOffset"][0]<0
+            assert abs(progress[2]["renderOffset"][0]+prior[2]["width"]/3)<0.01
+            evaluate('hl.plugin.hymission_tiles_test.swipe("cancel")')
+            assert [t["activeWorkspace"] for t in tiles_state()]==[t["activeWorkspace"] for t in prior]
+            assert all(t["renderOffset"]==[0,0] for t in tiles_state())
+            evaluate('hl.plugin.hymission_tiles_test.swipe("begin")')
+            evaluate('hl.plugin.hymission_tiles_test.swipe("update",300)')
+            evaluate('hl.plugin.hymission_tiles_test.swipe("end")')
+            assert [t["activeWorkspace"] for t in tiles_state()][:2]==[t["activeWorkspace"] for t in prior][:2]
+            assert tiles_state()[2]["activeWorkspace"]!=prior[2]["activeWorkspace"]
+            before_drag=tiles_state()
+            boundary=before_drag[1]["x"]
+            y=before_drag[0]["y"]+before_drag[0]["height"]*0.5
+            evaluate(f'assert(hl.plugin.hymission_tiles_test.pointer("press",{boundary},{y}))')
+            evaluate('assert(not hl.plugin.hymission_tiles_test.swipe("try_begin"))')
+            evaluate(f'hl.plugin.hymission_tiles_test.pointer("move",{boundary+30},{y})')
+            assert abs(tiles_state()[0]["width"]-before_drag[0]["width"]-30)<0.01
+            evaluate('assert(hl.plugin.hymission_tiles_test.pointer("escape"))')
+            evaluate(f'assert(hl.plugin.hymission_tiles_test.pointer("release",{boundary+30},{y}))')
+            assert [t["width"] for t in tiles_state()]==[t["width"] for t in before_drag]
         state=json.loads(request("j/hymission-tiles-state"))
         before = state["tiles"]
         result = request("/eval hl.plugin.hymission.tile_add()")

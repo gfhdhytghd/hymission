@@ -72,6 +72,11 @@ add_executable(hymission-layout-demo
 target_include_directories(hymission-layout-demo PRIVATE src)
 
 if(BUILD_TESTING)
+  add_library(hymission-tiles-test MODULE tools/tiles_native_test_plugin.cpp)
+  get_target_property(TILES_TEST_INCLUDES hymission INCLUDE_DIRECTORIES)
+  target_include_directories(hymission-tiles-test PRIVATE ${TILES_TEST_INCLUDES})
+  target_link_directories(hymission-tiles-test PRIVATE ${HYPR_DEPS_LIBRARY_DIRS} ${LUA_LIBRARY_DIRS})
+  target_link_libraries(hymission-tiles-test PRIVATE ${HYPR_DEPS_LIBRARIES} ${LUA_LIBRARIES})
   add_executable(hymission-hook-broker-test tools/hook_broker_test.cpp)
   target_include_directories(hymission-hook-broker-test PRIVATE src)
   add_test(NAME hymission-hook-broker-test COMMAND hymission-hook-broker-test)

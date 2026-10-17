@@ -41,6 +41,7 @@ class Model {
     const State& state() const { return m_state; }
     Result add(Workspace workspace, std::optional<double> width = {});
     Result resize(double width, int neighbor = 0);
+    Result resizePair(size_t left, double leftWidth);
     Result remove();
     Result focus(int step);
     Result activate(Workspace workspace, Activation policy = Activation::Focus);
@@ -56,6 +57,18 @@ class Model {
   private:
     State m_state;
     Result publish(State draft);
+};
+class DividerDrag {
+  public:
+    static std::expected<DividerDrag, std::string> begin(const Model&, size_t left, double pointerX);
+    Result update(Model&, double pointerX);
+    Result cancel(Model&);
+    uint64_t generation() const { return m_generation; }
+  private:
+    State m_initial;
+    size_t m_left = 0;
+    double m_x = 0;
+    uint64_t m_generation = 0;
 };
 std::expected<double, std::string> length(const std::string& value, double total, bool delta = false);
 } // namespace hymission::tiles

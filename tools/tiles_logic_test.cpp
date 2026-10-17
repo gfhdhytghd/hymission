@@ -35,6 +35,19 @@ int main() {
     check(!m.remove());
     check(*length("50%", 1000) == 500 && *length("+80px", 1000, true) == 80);
     check(!length("nan", 1000) && !length("40garbage", 1000) && !length("1e999", 1000) && !length("-4", 1000));
+    Model divider({0,0,1800,1000},10,100);
+    check(divider.add(20).has_value());
+    auto initial=divider.state();
+    auto drag=DividerDrag::begin(divider,0,900);
+    check(drag.has_value() && drag->update(divider,1000).has_value());
+    check(divider.state().tiles[0].width==1000 && divider.state().tiles[1].width==800);
+    check(divider.state().focused==initial.focused && divider.state().tiles[0].workspace==10);
+    check(drag->update(divider,100000).has_value() && divider.state().tiles[1].width==100);
+    check(drag->cancel(divider).has_value() && divider.state().tiles==initial.tiles);
+    drag=DividerDrag::begin(divider,0,900);
+    check(divider.activate(30).has_value());
+    const auto changed=divider.state();
+    check(!drag->cancel(divider) && !drag->update(divider,1100) && divider.state()==changed);
     std::mt19937_64 rng(0x74696c6573);
     Model random({0, 0, 3840, 2160}, 1, 100);
     for (int round = 0; round < 40000; ++round) {

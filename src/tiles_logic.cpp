@@ -84,6 +84,15 @@ Result Model::remove() {
     s.tiles.erase(s.tiles.begin() + i);
     return publish(std::move(s));
 }
+Result Model::resizePair(size_t left, double width) {
+    if (left + 1 >= m_state.tiles.size() || left >= m_state.tiles.size()) return std::unexpected("invalid divider");
+    auto s=m_state;
+    const double total=s.tiles[left].width+s.tiles[left+1].width;
+    if (!std::isfinite(width) || width<s.minimum || total-width<s.minimum) return std::unexpected("tile minimum width exceeded");
+    s.tiles[left].width=width;
+    s.tiles[left+1].width=total-width;
+    return publish(std::move(s));
+}
 Result Model::focus(int step) {
     if (step != -1 && step != 1) return std::unexpected("direction must be left or right");
     const auto i = static_cast<int>(*index(m_state.focused)) + step;
@@ -178,5 +187,24 @@ std::expected<double, std::string> length(const std::string& s, double total, bo
     const auto result = percent ? n * total / 100 : n;
     if (!std::isfinite(result)) return std::unexpected("length overflow");
     return result;
+}
+std::expected<DividerDrag, std::string> DividerDrag::begin(const Model& model, size_t left, double pointerX) {
+    if (left>=model.state().tiles.size() || left+1>=model.state().tiles.size() || !std::isfinite(pointerX)) return std::unexpected("invalid divider start");
+    DividerDrag d;
+    d.m_initial=model.state(); d.m_generation=d.m_initial.generation; d.m_left=left; d.m_x=pointerX;
+    return d;
+}
+Result DividerDrag::update(Model& model, double pointerX) {
+    if (model.state().generation!=m_generation || !std::isfinite(pointerX)) return std::unexpected("stale divider interaction");
+    const auto& a=m_initial.tiles[m_left]; const auto& b=m_initial.tiles[m_left+1];
+    const auto width=std::clamp(a.width+pointerX-m_x,m_initial.minimum,a.width+b.width-m_initial.minimum);
+    auto r=model.resizePair(m_left,width);
+    if (r) m_generation=model.state().generation;
+    return r;
+}
+Result DividerDrag::cancel(Model& model) {
+    auto r=model.restore(m_initial,m_generation);
+    if (r) m_generation=model.state().generation;
+    return r;
 }
 } // namespace hymission::tiles

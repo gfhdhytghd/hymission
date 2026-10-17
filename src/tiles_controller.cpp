@@ -29,6 +29,7 @@
 #include <hyprland/src/pointer/PointerManager.hpp>
 #include <hyprland/src/pointer/PointerController.hpp>
 #include <hyprland/src/render/scene/SceneSelection.hpp>
+#include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/state/workspace/PlacementController.hpp>
 #include <hyprutils/utils/ScopeGuard.hpp>
@@ -36,6 +37,7 @@
 #include <cmath>
 #include <map>
 #include <sstream>
+#include <linux/input-event-codes.h>
 #define private public
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
@@ -82,6 +84,10 @@ struct TilesController::Impl {
         CUnifiedWorkspaceSwipeGesture* native = nullptr;
     };
     std::optional<Swipe> swipe;
+    struct Resize { PHLMONITORREF monitor; tiles::DividerDrag drag; double pointerX = 0; };
+    std::optional<Resize> resize;
+    UP<SEventLoopDoLaterLock> resizeDeferred;
+    bool resizeReleasePending = false;
     Impl(HANDLE h, std::function<bool()> o) : handle(h), overview(std::move(o)) {}
     Output* output(PHLMONITOR mon) const {
         for (auto& o : outputs) if (o->monitor == mon) return o.get();
@@ -109,6 +115,62 @@ struct TilesController::Impl {
     void apply(Output& o, bool focusWindow = false, bool warp = false);
     void collapse();
     void cancelSwipe();
+    void flushResize() {
+        resizeDeferred.reset();
+        if (!resize) return;
+        auto* o=output(resize->monitor.lock());
+        if (!o || !resize->drag.update(o->model,resize->pointerX)) { resize.reset(); interaction=Owner::None; return; }
+        apply(*o);
+    }
+    void endResize(bool cancel) {
+        if (!resize) return;
+        resizeDeferred.reset();
+        auto r=std::move(*resize); resize.reset();
+        if (auto* o=output(r.monitor.lock()); cancel && o && r.drag.cancel(o->model)) apply(*o);
+        interaction=Owner::None;
+    }
+    void pointer(const Vector2D& pos, Event::SCallbackInfo& info) {
+        if (!resize) return;
+        info.cancelled=true;
+        resize->pointerX=pos.x;
+        if (!resizeDeferred) resizeDeferred=g_pEventLoopManager->doLaterLock([this] { flushResize(); });
+    }
+    bool dividerButton(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
+        if (event.button!=BTN_LEFT) return false;
+        if (event.state==WL_POINTER_BUTTON_STATE_RELEASED && resizeReleasePending) {
+            flushResize(); endResize(false); resizeReleasePending=false; info.cancelled=true; return true;
+        }
+        if (info.cancelled || locked() || event.state!=WL_POINTER_BUTTON_STATE_PRESSED || interaction!=Owner::None || (overview && overview()) ||
+            g_pInputManager->pointerConstraints().nativeActive() || g_pInputManager->pointerConstraints().blocksAbsoluteMotion()) return false;
+        const auto pos=g_pInputManager->getMouseCoordsInternal();
+        auto mon=State::monitorState()->query().vec(pos).run();
+        if (!active(mon) || mon->m_activeSpecialWorkspace || !mon->logicalBoxMinusReserved().containsPoint(pos)) return false;
+        auto* o=output(mon);
+        const auto slop=std::clamp(static_cast<double>(integer("tile_divider_hit_width",8)),1.0,o->model.state().minimum/2)/2;
+        for (size_t i=0;i+1<o->model.state().tiles.size();++i) {
+            const auto b=o->model.box(i);
+            if (std::abs(pos.x-b.x-b.width)>slop) continue;
+            auto d=tiles::DividerDrag::begin(o->model,i,pos.x);
+            if (!d) return false;
+            resize=Resize{mon,*d,pos.x}; resizeReleasePending=true; interaction=Owner::Resize;
+            g_pSeatManager->setPointerFocus(nullptr,{});
+            info.cancelled=true; return true;
+        }
+        return false;
+    }
+    void chrome(Event::SRenderStageEvent event) {
+        if (!event.context || event.stage!=RENDER_POST_WINDOWS || !active(event.monitor) || locked()) return;
+        auto mon=event.monitor;
+        auto& ctx=event.context->get();
+        const auto* o=output(mon);
+        for (size_t i=0;i+1<o->model.state().tiles.size();++i) {
+            const auto b=o->model.box(i);
+            CRectPassElement::SRectData data;
+            data.box=CBox{b.x+b.width-mon->m_position.x-0.5,b.y-mon->m_position.y,1.0,b.height}.scale(mon->m_scale);
+            data.color=CHyprColor(0.42,0.64,0.95,interaction==Owner::Resize?0.95:0.4);
+            g_pHyprRenderer->addPassElement(ctx,makeUnique<CRectPassElement>(data));
+        }
+    }
     void notify(Output& o, PHLWORKSPACE old);
     PHLWORKSPACE fresh(PHLMONITOR mon) {
         WorkspaceKey key = 1;
@@ -236,6 +298,7 @@ struct TilesController::Impl {
             const auto fn = reinterpret_cast<Action (*)(PHLWORKSPACE)>((current ? typedCurrentHook : typedHook)->m_original);
             return fn(std::move(ws));
         }
+        if (resize) endResize(true);
         if (interaction != Owner::None) cancelSwipe();
         for (auto& other : outputs) if (const auto i = other->model.presented(workspaceKey(ws))) {
             if (other->monitor != mon && current) {
@@ -504,6 +567,7 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp) {
     notify(o, old);
 }
 void TilesController::Impl::collapse() {
+    endResize(true);
     cancelSwipe();
     for (auto& o : outputs) if (auto mon = o->monitor.lock()) {
         auto keep = mon->m_activeWorkspace;
@@ -554,7 +618,7 @@ void TilesController::Impl::reconcile() {
 }
 
 TilesController::TilesController(HANDLE h, std::function<bool()> o) : m(std::make_unique<Impl>(h, std::move(o))) { instance = this; Impl::self = m.get(); }
-TilesController::~TilesController() { m->stopping = true; m->deferred.reset(); m->listeners.clear(); if (m->ready) m->collapse(); m->resetHooks(); Impl::self = nullptr; instance = nullptr; }
+TilesController::~TilesController() { m->stopping = true; m->deferred.reset(); m->resizeDeferred.reset(); m->listeners.clear(); if (m->ready) m->collapse(); m->resetHooks(); Impl::self = nullptr; instance = nullptr; }
 TilesController* TilesController::get() { return instance; }
 void TilesController::initialize() {
     auto& e = Event::bus()->m_events;
@@ -564,12 +628,19 @@ void TilesController::initialize() {
     m->listeners.emplace_back(e.workspace.removed.listen([this](PHLWORKSPACEREF) { m->request(); }));
     m->listeners.emplace_back(e.workspace.moveToMonitor.listen([this](PHLWORKSPACE, PHLMONITOR) { m->request(); }));
     m->listeners.emplace_back(e.render.preChecks.listen([this](PHLMONITOR mon) { if (m->active(mon)) mon->m_solitaryClient.reset(); }));
-    m->listeners.emplace_back(e.input.mouse.button.listen([this](const IPointer::SButtonEvent& event, Event::SCallbackInfo&) {
+    m->listeners.emplace_back(e.render.stage.listen([this](Event::SRenderStageEvent event) { m->chrome(event); }));
+    m->listeners.emplace_back(e.input.mouse.move.listen([this](const Vector2D& pos, Event::SCallbackInfo& info) { m->pointer(pos,info); }));
+    m->listeners.emplace_back(e.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) {
+        if (m->resize && event.keycode==KEY_ESC && event.state==WL_KEYBOARD_KEY_STATE_PRESSED) { m->endResize(true); info.cancelled=true; }
+    }));
+    m->listeners.emplace_back(e.input.mouse.button.listen([this](const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
+        if (m->dividerButton(event,info) || info.cancelled) return;
         if (locked() || event.state != WL_POINTER_BUTTON_STATE_PRESSED || m->interaction != Owner::None || (m->overview && m->overview())) return;
         const auto pos = g_pInputManager->getMouseCoordsInternal();
         auto mon = State::monitorState()->query().vec(pos).run();
         if (m->active(mon) && !mon->m_activeSpecialWorkspace) { const auto i = m->output(mon)->model.at(pos.x, pos.y); if (i) focus(mon, m->output(mon)->model.state().tiles[*i].id); }
     }));
+    if (g_pSessionLockManager) m->listeners.emplace_back(g_pSessionLockManager->m_events.lock.listen([this] { m->endResize(true); m->cancelSwipe(); }));
     m->request();
 }
 std::vector<TilesController::View> TilesController::views(const PHLMONITOR& mon) const {
@@ -682,7 +753,7 @@ std::string TilesController::stateJson() const {
         for (size_t i=0;i<o->model.state().tiles.size();++i) {
             const auto& t=o->model.state().tiles[i]; const auto b=o->model.box(i); const auto ws=workspaceForKey(t.workspace);
             auto entry=nlohmann::json{{"id",t.id},{"name",mon->m_name+"/tile-"+std::to_string(t.id)},{"monitor",mon->m_name},{"x",b.x},{"y",b.y},{"width",b.width},{"height",b.height},
-                {"focused", t.id==o->model.state().focused && Desktop::focusState()->monitor()==mon}, {"activeWorkspace",{{"id",t.workspace},{"name",ws?ws->displayName():""},{"address",ws?ws->addressableName():""}}},{"history",t.history}};
+                {"focused", t.id==o->model.state().focused && Desktop::focusState()->monitor()==mon}, {"activeWorkspace",{{"id",t.workspace},{"name",ws?ws->displayName():""},{"address",ws?ws->addressableName():""}}},{"history",t.history},{"renderOffset",ws?nlohmann::json::array({ws->m_renderOffset->value().x,ws->m_renderOffset->value().y}):nlohmann::json::array({0,0})}};
             entries.push_back(entry); tiles.push_back(entry);
         }
         monitors.push_back({{"name",mon->m_name},{"generation",o->model.state().generation},{"tiles",entries}});
