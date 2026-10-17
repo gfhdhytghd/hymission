@@ -1595,7 +1595,8 @@ std::vector<StageController::Impl::Card> StageController::Impl::cardsForWorkspac
         if (auto* tiles=TilesController::get();tiles && tiles->available()) {
             const auto home=tiles->preferredTile(activeWorkspace,monitor);
             if (tiles->preferredTile(workspace,monitor)!=home) continue;
-        } else if (setting("stage_show_active", 0) == 0 && workspace == activeWorkspace)
+        }
+        if (setting("stage_show_active", 0) == 0 && workspace == activeWorkspace)
             continue;
         if (!showEmpty && workspace->getWindowCount(std::nullopt, false) == 0)
             continue;
@@ -1815,14 +1816,15 @@ void StageController::Impl::sync() {
             screenSettings.paddingRight=std::min(screenSettings.paddingRight,column*.2);
             screenSettings.minWidth=screenSettings.maxWidth=std::max(8.0,column-screenSettings.padding-screenSettings.paddingRight);
         }
-        screen->geometry = stage::layout(views.size()>1?baseArea(monitor).w:base.w, base.h, targets.size(), screenSettings, screen->frozenWidth, screen->tile?base.w:monitor->m_size.x);
+        screen->geometry = stage::layout(views.size()>1?baseArea(monitor).w:base.w, base.h, views.size()>1?std::max(size_t{1},targets.size()):targets.size(), screenSettings, screen->frozenWidth, screen->tile?base.w:monitor->m_size.x);
         if (views.size()>1 && screen->geometry.enabled()) {
             const auto canvas=stage::scaleDesktopRect(rect(CBox{monitor->m_position,monitor->m_size}),rect(baseArea(monitor)),
                 views.size()*screen->geometry.bandWidth+screenSettings.desktopGap,1);
             screen->geometry.desktopWidth=canvas.width;
             screen->geometry.cardHeight=screen->geometry.cardWidth*monitor->m_size.y/monitor->m_size.x;
             auto& g=screen->geometry;
-            g.maxScroll=std::max(0.0,g.count*g.cardHeight+(g.count-1)*g.cardGap+g.paddingTop+g.paddingBottom-base.h);
+            g.count=targets.size();
+            g.maxScroll=g.count?std::max(0.0,g.count*g.cardHeight+(g.count-1)*g.cardGap+g.paddingTop+g.paddingBottom-base.h):0;
         }
         ensureBackground(*screen, monitor);
         const bool changedGeometry = changedSide || changedOutput || oldGeometry.reservation != screen->geometry.reservation || oldGeometry.cardHeight != screen->geometry.cardHeight ||
@@ -2089,7 +2091,14 @@ void StageController::Impl::pointer() {
     if (!enabled || rendering || (inputSuppressed && inputSuppressed()))
         return;
     const auto point = g_pInputManager->getMouseCoordsInternal();
-    const auto [hoveredScreen, index] = hit(point);
+    auto [hoveredScreen, index] = hit(point);
+    // An empty column still represents its tile's active desktop for transfer
+    // drops, even when stage_show_active hides the active workspace card.
+    if (!hoveredScreen && (tileDragCandidate || tileDragPending) && visibility>0 && !blocked())
+        for (auto& column:screens) if (clustered(column) && !column.covered && !column.suspended && sidebar(column).containsPoint(point)) {
+            hoveredScreen=&column;
+            break;
+        }
     if (tileDragCandidate && !tileDragPending && !thumbnailDrag &&
         !(g_pInputManager->getModsFromAllKBs() & Input::HL_MODIFIER_META) && point.distanceSq(tileDragPress)>64) {
         auto* tiles=TilesController::get();
@@ -4153,13 +4162,14 @@ void StageController::prepareOverviewExit(const std::vector<PHLMONITOR>& monitor
             settings.paddingRight=source->geometry.bandWidth-source->geometry.padding-source->geometry.cardWidth;
             settings.minWidth=settings.maxWidth=source->geometry.cardWidth;
         }
-        destination.geometry = stage::layout(self->clustered(destination)?baseArea(monitor).w:destination.base.w, destination.base.h, destination.cards.size(),
+        destination.geometry = stage::layout(self->clustered(destination)?baseArea(monitor).w:destination.base.w, destination.base.h, self->clustered(destination)?std::max(size_t{1},destination.cards.size()):destination.cards.size(),
             settings, std::nullopt, destination.tile?destination.base.w:monitor->m_size.x);
         if (self->clustered(destination)) {
             auto& g=destination.geometry;
             g.desktopWidth=self->desktopCanvas(*source).w;
             g.cardHeight=g.cardWidth*monitor->m_size.y/monitor->m_size.x;
-            g.maxScroll=std::max(0.0,g.count*g.cardHeight+(g.count-1)*g.cardGap+g.paddingTop+g.paddingBottom-destination.base.h);
+            g.count=destination.cards.size();
+            g.maxScroll=g.count?std::max(0.0,g.count*g.cardHeight+(g.count-1)*g.cardGap+g.paddingTop+g.paddingBottom-destination.base.h):0;
         }
         destination.scroll = destination.geometry.clampScroll(source->scroll);
         destination.flights.clear();

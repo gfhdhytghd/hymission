@@ -313,7 +313,7 @@ def main():
                 client_log=open(root / f"client-{_}.log","w"); handles.append(client_log)
                 processes.append(subprocess.Popen(["weston-simple-shm"],env=client_env,stdout=client_log,stderr=subprocess.STDOUT))
                 wait_json("j/clients",lambda clients:len(clients)==_+1,"clients")
-            evaluate('hl.config({plugin={hymission={stage_enabled=1,stage_transition_ms=0,stage_refresh_ms=16,workspace_strip_force_show=1,workspace_strip_empty_mode="always"}}})')
+            evaluate('hl.config({plugin={hymission={stage_enabled=1,stage_show_active=1,stage_transition_ms=0,stage_refresh_ms=16,workspace_strip_force_show=1,workspace_strip_empty_mode="always"}}})')
             evaluate('hl.plugin.hymission.stage_open()')
             def stage_ready(count):
                 return wait_json("j/hymission-stage-state",lambda s:s["enabled"] and s["hooks_ready"] and s["visibility_progress"]==1 and len(s["screens"])==count and any(c.get("windows") for sc in s["screens"] for c in sc["cards"]),"stage-ready")

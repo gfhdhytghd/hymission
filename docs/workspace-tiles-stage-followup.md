@@ -59,3 +59,12 @@ python -B tools/tiles_isolated_smoke.py \
   构建 PASS：`feedback4-final-nix.log`。Nix 内 14 PASS、2 GL 因 EGL 不可用跳过；
   这两个 GL 测试已在上述本地完整 CTest 中通过。
 - 所有最终隔离测试 configerrors 为空，`git diff --check` 通过。
+
+
+## Stage active 卡片配置补修
+
+恢复 stage_show_active=0 在每个 tile 下的含义，已在桌面呈现的 workspace 不重复出卡片。
+空列仍保留共同的 band/card 几何和水平位置，count=0、maxScroll=0，允许从另一列拖入
+该 tile 的 active workspace。需要 active 卡片参与拖出分屏的集成 fixture 显式设
+stage_show_active=1。性能专项同时覆盖隐藏 active 卡片与空列拖放，完整 smoke 保留
+显式显示 active 卡片时的既有交互。
