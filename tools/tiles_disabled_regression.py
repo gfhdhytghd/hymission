@@ -30,7 +30,8 @@ def run(request,root,env,runtime,processes,handles):
     observations=[]
     for reserved in (False,True):
         if reserved:
-            evaluate('hl.monitor({output="",mode="1920x1080@60",position="auto",scale="1",reserved={0,70,0,240}}); hl.plugin.hymission_tiles_test.refresh()')
+            evaluate('hl.monitor({output="",mode="1920x1080@60",position="auto",scale="1",reserved={top=0,right=70,bottom=0,left=240}}); hl.plugin.hymission_tiles_test.refresh()')
+            wait('j/monitors',lambda ms:ms and sum(ms[0]['reserved'])>=310,'reserved areas applied')
         state=wait('j/hymission-stage-state',lambda s:s['enabled'] and s['hooks_ready'] and s['visibility_progress']==1 and s['captureWindows'] and s['screens'][0]['cards'],'Stage ready')
         # Wait for output configuration and preview geometry to settle.
         time.sleep(.15)
