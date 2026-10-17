@@ -26,6 +26,7 @@
 #include <hyprland/src/ipc/s2/S2.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
+#include <hyprland/src/layout/supplementary/DragController.hpp>
 #include <hyprland/src/layout/supplementary/WorkspaceAlgoMatcher.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
@@ -89,7 +90,7 @@ struct TilesController::Impl {
     UP<SEventLoopDoLaterLock> deferred;
     bool ready = false, applying = false, frameFanout = false, stopping = false;
     std::string initError, edgeFailure;
-    bool softEdgeDrawn=false;
+    bool softEdgeDrawn=false, nativeDropCancelled=false;
     std::map<WorkspaceKey,std::pair<PHLMONITORREF,tiles::Id>> homes;
     Owner interaction = Owner::None;
     struct Swipe {
@@ -265,12 +266,12 @@ struct TilesController::Impl {
         }
         return nullptr;
     }
-    template<class Fn> bool attach(const char* key, Fn fn, hooks::Lease*& lease) {
+    template<class Fn> bool attach(const char* key, Fn fn, hooks::Lease*& lease, int priority=0) {
         const auto sig = tiles::symbols::lookup(key);
         const auto source=hooks::findSymbol(HyprlandAPI::findFunctionsByName(handle, std::string(sig.substr(0, sig.find('('))).substr(std::string(sig.substr(0, sig.find('('))).rfind("::") + 2)),sig,true);
         if (!source) { initError = std::string("tiles disabled: expected one exact symbol: ") + std::string(sig); return false; }
         lease = hooks::create(handle, source, hooks::target(fn));
-        if (lease) leases.push_back(lease);
+        if (lease) { lease->priority=priority; leases.push_back(lease); }
         if (!lease || !lease->hook()) { initError = std::string("tiles disabled: hook attach failed: ") + std::string(sig); return false; }
         return true;
     }
@@ -279,7 +280,7 @@ struct TilesController::Impl {
     inline static hooks::Lease *typedHook, *typedCurrentHook, *stringHook, *stringCurrentHook, *resolverHook, *previousHook, *previousMonitorHook,
         *directionHook, *moveHook, *placementHook, *swapHook, *swipeBeginHook, *swipeUpdateHook, *swipeEndHook, *swipeCancelHook;
     inline static hooks::Lease *pointerHook, *fsHasHook, *fsModesHook, *fsWindowHook, *fsFadeHook, *layerHook, *layerHitHook;
-    inline static hooks::Lease *logicalBoxHook, *scrollRecalculateHook, *scrollFocusHook, *scrollRequestHook, *scrollColumnHook;
+    inline static hooks::Lease *dragEndHook, *logicalBoxHook, *scrollRecalculateHook, *scrollFocusHook, *scrollRequestHook, *scrollColumnHook;
 
     struct LayoutScope {
         PHLWORKSPACE previous;
@@ -405,7 +406,9 @@ struct TilesController::Impl {
         if (!v && overview && w && w->m_workspace) if (const auto id=instance->preferredTile(w->m_workspace,mon)) {
             for (const auto& candidate:instance->views(mon)) if (candidate.id==id) { v=candidate; v->workspace=w->m_workspace; break; }
         }
-        if ((!self->active(mon) && !overview) || !v || v->monitor != mon || pinned(w) || ignore || standalone || ctx.m_renderingSnapshot || StageController::renderingPreview()) {
+        const auto* drag=g_layoutManager->dragController().get();
+        const bool nativeDrag=!overview && drag && drag->mode()==MBIND_MOVE && drag->target() && drag->target()->window()==w;
+        if (nativeDrag || (!self->active(mon) && !overview) || !v || v->monitor != mon || pinned(w) || ignore || standalone || ctx.m_renderingSnapshot || StageController::renderingPreview()) {
             original(r, ctx, std::move(w), std::move(mon), p, now, decorate, mode, ignore, standalone); return;
         }
         RenderContextScope scope{ctx};
@@ -535,6 +538,42 @@ struct TilesController::Impl {
         ws=pointerTarget(ws);
         LayoutScope scope{ws && self->active(ws->m_monitor.lock())?ws:nullptr};
         return reinterpret_cast<decltype(&fsWindow)>(fsWindowHook->m_original)(c,ws,covering);
+    }
+    static bool dragEnd(Layout::Supplementary::CDragStateController* drag) {
+        const auto original=reinterpret_cast<decltype(&dragEnd)>(dragEndHook->m_original);
+        PHLWINDOW window;
+        PHLWORKSPACE source,destination;
+        PHLMONITOR monitor;
+        tiles::Id tile=0;
+        const auto point=g_pInputManager->getMouseCoordsInternal();
+        static auto threshold=CConfigValue<Config::INTEGER>("binds:drag_threshold");
+        if (!locked() && !self->nativeDropCancelled && self->interaction==Owner::None &&
+            !(self->overview && self->overview()) && drag->mode()==MBIND_MOVE &&
+            (*threshold<=0 || drag->dragThresholdReached()) && drag->target()) {
+            window=drag->target()->window();
+            monitor=State::monitorState()->query().vec(point).run();
+            if (window && window->mapped() && !pinned(window) && !window->onSpecialWorkspace() &&
+                self->active(monitor) && !monitor->m_activeSpecialWorkspace) {
+                if (auto* o=self->output(monitor)) if (const auto i=self->at(*o,point)) {
+                    const auto& target=o->model.state().tiles[*i];
+                    tile=target.id;
+                    destination=workspaceForKey(target.workspace);
+                    source=window->m_workspace;
+                }
+            }
+        }
+        self->nativeDropCancelled=false;
+        // Keep the native drag as the sole motion owner. It restores tiling,
+        // handles grouping and lets Stage consume sidebar drops before we
+        // commit a desktop transfer through the regular activation transaction.
+        const bool ended=original(drag);
+        if (ended && window && window->mapped() && source && source!=destination && window->m_workspace==source) {
+            const auto* o=self->output(monitor);
+            const auto i=o?o->model.index(tile):std::nullopt;
+            if (i && workspaceForKey(o->model.state().tiles[*i].workspace)==destination)
+                instance->moveWindow(window,monitor,tile);
+        }
+        return ended;
     }
     static void pointerInput(CInputManager* input,uint32_t time,bool refocus,bool mouse,std::optional<Vector2D> position,bool pointerOnly) {
         const auto previous=self->pointerWorkspace;
@@ -890,7 +929,7 @@ struct TilesController::Impl {
 };
 
 bool TilesController::Impl::install() {
-    return attach("logicalBox", &logicalBox, logicalBoxHook) && attach("scrollRecalculate", &scrollRecalculate, scrollRecalculateHook) &&
+    return attach("dragEnd", &dragEnd, dragEndHook,20) && attach("logicalBox", &logicalBox, logicalBoxHook) && attach("scrollRecalculate", &scrollRecalculate, scrollRecalculateHook) &&
         attach("scrollFocus", &scrollFocus, scrollFocusHook) && attach("scrollFullscreenRequest", &scrollRequest, scrollRequestHook) && attach("scrollFullscreenColumn", &scrollColumn, scrollColumnHook) &&
         attach("mouseMoveUnified", &pointerInput, pointerHook) && attach("hasFullscreenWorkspace", &fsHas, fsHasHook) &&
         attach("fullscreenModesWorkspace", &fsModes, fsModesHook) && attach("fullscreenWindowWorkspace", &fsWindow, fsWindowHook) &&
@@ -1117,6 +1156,9 @@ void TilesController::initialize() {
     m->listeners.emplace_back(e.render.stage.listen([this](Event::SRenderStageEvent event) { m->chrome(event); }));
     m->listeners.emplace_back(e.input.mouse.move.listen([this](const Vector2D& pos, Event::SCallbackInfo& info) { m->pointer(pos,info); }));
     m->listeners.emplace_back(e.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) {
+        const auto* drag=g_layoutManager->dragController().get();
+        if (m->ready && event.keycode==KEY_ESC && event.state==WL_KEYBOARD_KEY_STATE_PRESSED && drag && drag->mode()==MBIND_MOVE && drag->target())
+            m->nativeDropCancelled=true;
         if (m->resize && event.keycode==KEY_ESC && event.state==WL_KEYBOARD_KEY_STATE_PRESSED) { m->endResize(true); info.cancelled=true; }
     }));
     m->listeners.emplace_back(e.input.mouse.button.listen([this](const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {

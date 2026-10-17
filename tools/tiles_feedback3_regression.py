@@ -126,4 +126,62 @@ def run(case,request,root,env,runtime,processes,handles):
         (root/'stage-hidpi-scrolling.json').write_text(json.dumps(s,indent=2))
         print('PASS: scale=2 scrolling workspaces centered inside monitor-aspect Stage cards with complete vertical content')
         return
+    if case=='drag':
+        evaluate('hl.config({binds={drag_threshold=0},general={layout="dwindle"}})')
+        a=spawn(501)
+        evaluate('hl.plugin.hymission.tile_add({workspace="503"}); hl.plugin.hymission.tile_focus("left")')
+        def native_drag(address,x,y,dx,dy):
+            evaluate('hl.plugin.hymission_tiles_test.drag("begin",'+json.dumps(address)+f',{x},{y})')
+            evaluate(f'hl.plugin.hymission_tiles_test.drag("move",{dx},{dy})')
+            time.sleep(.1)
+        for stage in (0,1):
+            evaluate('hl.config({plugin={hymission={stage_enabled='+str(stage)+'}}}); hl.plugin.hymission.stage_'+('open' if stage else 'close')+'()')
+            time.sleep(.2)
+            for floating in (False,True):
+                evaluate('hl.plugin.hymission_tiles_test.window("'+("float" if floating else "tile")+'",'+json.dumps(a["address"])+')')
+                for side in (1,0):
+                    c=next(c for c in read('j/clients') if c['address']==a['address'])
+                    tile=tiles()[side];b=tile
+                    if stage:
+                        b=next(sc['desktop_geometry'] for sc in read('j/hymission-stage-state')['screens'] if sc['tile_id']==tile['id'])
+                    dx=b['x']+b['width']/2;dy=b['y']+b['height']/2
+                    native_drag(a['address'],c['at'][0]+c['size'][0]/2,c['at'][1]+c['size'][1]/2,dx,dy)
+                    image=capture(f'drag-stage-{stage}-float-{int(floating)}-side-{side}')
+                    (root/f'drag-state-{stage}-{int(floating)}-{side}.json').write_text(json.dumps({'clients':read('j/clients'),'tiles':read('j/hymission-tiles-state'),'stage':read('j/hymission-stage-state')},indent=2))
+                    pixel=image.getpixel((int(dx+25),int(dy+25)))
+                    assert pixel[1]>180 and pixel[0]<80,('dragged window clipped at its source tile',stage,floating,side,pixel)
+                    assert read('j/hymission-tiles-state')['interaction_owner']==0,('native drag acquired another animation owner',tiles())
+                    evaluate('hl.plugin.hymission_tiles_test.drag("end")')
+                    cs=read('j/clients');c=next(c for c in cs if c['address']==a['address'])
+                    assert c['workspace']['id']==tile['activeWorkspace']['id'],('native drag did not transfer tile workspace',stage,floating,side,c,tiles())
+                    assert c['floating']==floating,('native drag changed tiling state',c)
+                    assert [t['activeWorkspace']['id'] for t in tiles()]==[501,503],tiles()
+        # Cancellation must not publish a cross-tile workspace transaction.
+        c=next(c for c in read('j/clients') if c['address']==a['address'])
+        right=next(sc['desktop_geometry'] for sc in read('j/hymission-stage-state')['screens'] if sc['tile_id']==tiles()[1]['id'])
+        native_drag(a['address'],c['at'][0]+c['size'][0]/2,c['at'][1]+c['size'][1]/2,right['x']+right['width']/2,right['y']+right['height']/2)
+        pointer('escape');evaluate('hl.plugin.hymission_tiles_test.drag("end")')
+        assert next(c for c in read('j/clients') if c['address']==a['address'])['workspace']['id']==501
+        # A desktop target must also work in ws overview when it is empty and
+        # therefore has no thumbnail hit region.
+        evaluate('hl.plugin.hymission.stage_close(); hl.config({plugin={hymission={stage_enabled=0}}})')
+        for side in (1,0):
+            evaluate('hl.plugin.hymission.open("onlycurrentworkspace")')
+            ov=wait('j/hymission-overview-state',lambda s:s['phase']=='active' and not s['relayout_active'] and s['windows'])
+            w=next(w for w in ov['windows'] if w['address']==a['address']);b=w['contentGeometry']
+            x=b['x']+b['width']/2;y=b['y']+b['height']/2
+            tile=tiles()[side];dx=tile['x']+tile['width']/2;dy=tile['y']+tile['height']/2
+            pointer('press',x,y);pointer('move',x+40,y+30);pointer('move',dx,dy)
+            time.sleep(.12);capture(f'overview-drag-to-empty-{side}')
+            pointer('release',dx,dy)
+            wait('j/clients',lambda cs:next(c for c in cs if c['address']==a['address'])['workspace']['id']==tile['activeWorkspace']['id'])
+            evaluate('hl.plugin.hymission.close()');wait('j/hymission-overview-state',lambda s:not s['active'])
+        # An occupied destination uses the same native drag completion path.
+        spawn(503);evaluate('hl.plugin.hymission.tile_focus("left")')
+        c=next(c for c in read('j/clients') if c['address']==a['address'])
+        native_drag(a['address'],c['at'][0]+c['size'][0]/2,c['at'][1]+c['size'][1]/2,1440,540)
+        evaluate('hl.plugin.hymission_tiles_test.drag("end")')
+        assert next(c for c in read('j/clients') if c['address']==a['address'])['workspace']['id']==503
+        print('PASS: native tiled/floating drags both ways, Stage off/on, Esc cancellation, occupied destination and ws overview empty-tile drops')
+        return
     raise AssertionError('unimplemented '+case)

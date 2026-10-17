@@ -806,10 +806,11 @@ struct StageController::Impl {
             return;
         const auto original = reinterpret_cast<RenderWindowFn>(self->renderWindowHook->m_original);
         const auto* drag = g_layoutManager->dragController().get();
-        const bool tiledDrag = drag && drag->mode() == MBIND_MOVE && drag->draggingTiled() && drag->target() && drag->target()->window() == window;
-        // Pinned floats and temporarily floated tiled drags stay above Stage,
+        const bool unclippedDrag = drag && drag->mode() == MBIND_MOVE && drag->target() && drag->target()->window() == window &&
+            (drag->draggingTiled() || (TilesController::get() && TilesController::get()->enabled(monitor)));
+        // Pinned floats and native cross-tile move drags stay above Stage,
         // including their decorations. Never redraw their native content.
-        if (window && ((static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED) && window->isFloating()) || tiledDrag) && !standalone && !ignorePosition &&
+        if (window && ((static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED) && window->isFloating()) || unclippedDrag) && !standalone && !ignorePosition &&
             !self->rendering && !self->capturingWindowPasses && !renderContext().m_renderingSnapshot)
             self->renderStage(RENDER_POST_WINDOWS);
         if (overviewRendering && !standalone && !self->rendering && !self->capturingWindowPasses && !renderContext().m_renderingSnapshot && self->overviewFrame) {
@@ -822,7 +823,7 @@ struct StageController::Impl {
         }
         if (!standalone && !ignorePosition && !self->rendering && !self->capturingWindowPasses && !renderContext().m_renderingSnapshot &&
             self->enabled && !self->blocked() && screen && screen->geometry.enabled() && !screen->covered && !screen->suspended &&
-            !monitor->m_activeSpecialWorkspace && window && !tiledDrag && stage::desktopEdgeApplies(static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED), window->isFloating(),
+            !monitor->m_activeSpecialWorkspace && window && !unclippedDrag && stage::desktopEdgeApplies(static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED), window->isFloating(),
                 scrollingWorkspace(window->m_workspace), window->onSpecialWorkspace(), Fullscreen::controller()->isFullscreen(window))) {
             const CBox bounds{window->positionAnimation()->value() + window->m_workspace->m_renderOffset->value() + window->presentation().floatingOffset(), window->sizeAnimation()->value()};
             const auto viewport = stage::edgeViewportForWindow(self->desktopViewport(*screen), rect(bounds));

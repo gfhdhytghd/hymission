@@ -371,6 +371,14 @@ bool isWindowFadingOut(const PHLWINDOW&) {
     return false;
 }
 
+std::optional<TilesController::View> tileDesktopDropTarget(const PHLWINDOW& window, const PHLMONITOR& monitor, const Vector2D& pointer) {
+    auto* tiles=TilesController::get();
+    if (!window || !tiles || !tiles->enabled(monitor)) return {};
+    for (const auto& view:tiles->views(monitor))
+        if (view.workspace!=window->m_workspace && view.allocation.containsPoint(pointer)) return view;
+    return {};
+}
+
 void moveWindowToWorkspaceForThumbnailDrop(const PHLWINDOW& window, const PHLWORKSPACE& workspace, uint64_t targetTile=0) {
     if (!window || !workspace || !window->m_workspace || !workspace->space() || !window->layoutTarget())
         return;
@@ -3360,6 +3368,11 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
                 const auto targetGroup = m_state.windows[*thumbnailDropIndex].slot.rowGroup;
                 if (targetGroup < m_state.managedWorkspaces.size())
                     targetWorkspace = m_state.managedWorkspaces[targetGroup];
+            } else if (window && workspaceScoped() && !hoveredStripIndex) {
+                if (const auto target=tileDesktopDropTarget(window,dropMonitor,pointerBeforeUpdate)) {
+                    targetTile=target->id;
+                    targetWorkspace=target->workspace;
+                }
             }
 
             if (groupDrag && m_groupDragSession && window) {
@@ -9798,8 +9811,19 @@ std::optional<OverviewController::DragPreviewTarget> OverviewController::dragged
     }
 
     const auto targetIndex = hitTestThumbnailDropTarget(pointer.x, pointer.y, *m_draggedWindowIndex);
-    if (!targetIndex || *targetIndex >= m_state.windows.size())
+    if (!targetIndex || *targetIndex >= m_state.windows.size()) {
+        // Empty tiles have no thumbnail hit target. Keep the overview drag
+        // owner and offer the destination desktop as a workspace drop target.
+        if (workspaceScoped() && !m_state.hoveredStripIndex)
+            if (const auto target=tileDesktopDropTarget(window,monitor,pointer)) {
+                const auto& area=target->allocation;
+                const double scale=std::min(area.w/monitor->m_size.x,area.h/monitor->m_size.y);
+                const Rect predicted=makeRect(pointer.x-actual.width*scale/2,pointer.y-actual.height*scale/2,
+                    actual.width*scale,actual.height*scale);
+                return previewForArea({area.x,area.y,area.w,area.h},predicted);
+            }
         return std::nullopt;
+    }
 
     const auto targetGroup = m_state.windows[*targetIndex].slot.rowGroup;
     if (targetGroup >= m_state.managedWorkspaces.size() || m_state.managedWorkspaces[targetGroup] == window->m_workspace)

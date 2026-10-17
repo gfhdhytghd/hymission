@@ -36,3 +36,19 @@ niri_mode=0。旧实现把整屏 canvas 用作每张卡片的窗口投影原点�
 位置/高度、红色 CSD 顶部与绿色内容实际像素、两侧桌面窗口缩放范围均通过。
 截帧：build-tiles/feedback3-stage/stage-hidpi-scrolling.png。
 ws overview 的全部 8 种退出组合在 Stage 修复后再次通过。
+
+## 5. 原生窗口与 overview 跨 tile 拖放
+
+原生 drag controller 只认识物理 monitor，松手不把窗口迁往另一个 tile 的 workspace，
+源 tile/Stage clip 还会裁掉跨边界的窗口。现在由同一个原生 controller 完成跟手移动、
+分组与平铺恢复，move 拖动期间放开 tile/Stage 桌面边界。dragEnd broker 外层在原生及
+Stage sidebar 落点处理后验证目标绑定，通过现有 moveWindow/publish activation
+事务迁往落点 tile；被 Stage 消费的卡片落点不重复提交。Esc、pinned、special、
+overview owner、resize 和默认关闭路径不提交此迁移。
+
+ws-only overview 的空 tile 没有 thumbnail hit 区域，现增加 tile desktop fallback，
+预览、窗口/组移动和 settlement 继续复用 OverviewDrag owner 与原事务。
+`--feedback3-regression drag` 使用原生 dragBegin/mouseMove/dragEnd，验证平铺/浮动、
+双向、Stage 开关、Esc 取消、已有窗口的目标及 ws overview 双向空 tile drop，全部通过；
+原生拖动中截帧验证窗口在对面 tile 实际可见且未取得第二个 tiles 交互 owner。
+旧实现负对照在松手 workspace 归属断言失败。

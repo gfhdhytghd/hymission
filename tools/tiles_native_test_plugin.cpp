@@ -20,6 +20,8 @@
 #include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/desktop/view/window/WindowPresentation.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
+#include <hyprland/src/layout/LayoutManager.hpp>
+#include <hyprland/src/layout/supplementary/DragController.hpp>
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
@@ -131,11 +133,36 @@ int window(lua_State* L) {
     else if (action=="fullscreen" || action=="maximize" || action=="normal") {
         const auto mode=action=="fullscreen"?Fullscreen::FSMODE_FULLSCREEN:action=="maximize"?Fullscreen::FSMODE_MAXIMIZED:Fullscreen::FSMODE_NONE;
         Fullscreen::controller()->setFullscreenMode(window,mode,mode,false);
+    } else if (action=="float" || action=="tile") {
+        auto result=Config::Actions::floatWindow(action=="float"?Config::Actions::TOGGLE_ACTION_ENABLE:Config::Actions::TOGGLE_ACTION_DISABLE,window);
+        if (!result) return luaL_error(L,"native float operation failed");
     } else if (action=="pin" || action=="unpin") {
         auto result=Config::Actions::floatWindow(Config::Actions::TOGGLE_ACTION_ENABLE,window);
         if (result) result=Config::Actions::pinWindow(action=="pin"?Config::Actions::TOGGLE_ACTION_ENABLE:Config::Actions::TOGGLE_ACTION_DISABLE,window);
         if (!result) return luaL_error(L,"native pin operation failed");
     } else return luaL_error(L,"unknown test window action");
+    return 0;
+}
+// Private native drag controller entry, the same owner used by mouse binds.
+int drag(lua_State* L) {
+    const std::string action=luaL_checkstring(L,1);
+    auto* drag=g_layoutManager->dragController().get();
+    if (action=="begin") {
+        const std::string address=luaL_checkstring(L,2);
+        PHLWINDOW window;
+        for (const auto& w:Desktop::windowState()->windows())
+            if (std::format("0x{:x}",reinterpret_cast<uintptr_t>(w.get()))==address) window=w;
+        if (!window) return luaL_error(L,"drag test window not found");
+        const Vector2D point{luaL_checknumber(L,3),luaL_checknumber(L,4)};
+        Pointer::pointerController()->warpTo(point);
+        drag->dragBegin(window->layoutTarget(),MBIND_MOVE);
+        if (!drag->target()) return luaL_error(L,"native drag did not begin");
+    } else if (action=="move") {
+        const Vector2D point{luaL_checknumber(L,2),luaL_checknumber(L,3)};
+        Pointer::pointerController()->warpTo(point);
+        drag->mouseMove(point);
+    } else if (action=="end") drag->dragEnd();
+    else return luaL_error(L,"unknown native drag action");
     return 0;
 }
 // Emit device-level swipe events on the private nested compositor pointer.
@@ -189,6 +216,7 @@ APICALL EXPORT std::string PLUGIN_API_VERSION() { return HYPRLAND_API_VERSION; }
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     fixtureHandle=handle;
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","trackpad",trackpad);
+    HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","drag",drag);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","animation_report",animationReport);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","symbol_report",symbolReport);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","change_workspace",workspaceChange);
