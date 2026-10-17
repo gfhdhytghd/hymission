@@ -1,4 +1,6 @@
 #include "overview_logic.hpp"
+#include "numeric_config.hpp"
+#include <sstream>
 
 #include <algorithm>
 #include <cctype>
@@ -11,6 +13,29 @@
 #include <glib.h>
 
 namespace hymission {
+
+float animationMovePercent(std::string style) {
+    std::ranges::transform(style, style.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+    std::istringstream stream(style);
+    std::string        token;
+    float              movePercent = 100.F;
+    while (stream >> token) {
+        if (!token.empty() && token.back() == '%') {
+            try {
+                const std::string number = token.substr(0, token.size() - 1);
+                std::size_t consumed = 0;
+                const float parsed = std::stof(number, &consumed);
+                if (consumed == number.size())
+                    movePercent = static_cast<float>(finiteConfig(parsed, 100.0, 0.0, 1000.0));
+            } catch (...) {
+            }
+        }
+    }
+
+    return movePercent;
+}
+
 
 Rect scaleBarProxyRect(const Rect& proxy, const Rect& layer, std::optional<Direction> edge, double exclusive, double scale) {
     Rect bar = layer;
@@ -34,7 +59,7 @@ Rect scaleBarProxyRect(const Rect& proxy, const Rect& layer, std::optional<Direc
 namespace {
 
 double clampUnit(double value) {
-    return std::clamp(value, 0.0, 1.0);
+    return finiteConfig(value, 1.0, 0.0, 1.0);
 }
 
 Rect clampRectSize(const Rect& rect) {
@@ -92,6 +117,10 @@ std::vector<std::size_t> minimumCostAssignment(const std::vector<std::vector<dou
 
     const std::size_t rows = costs.size();
     const std::size_t cols = costs.front().size();
+    for (const auto& row : costs) {
+        if (row.size() != cols || !std::ranges::all_of(row, [](double value) { return std::isfinite(value); }))
+            return {};
+    }
     std::vector<double>     u(rows + 1);
     std::vector<double>     v(cols + 1);
     std::vector<std::size_t> p(cols + 1);
@@ -103,7 +132,10 @@ std::vector<std::size_t> minimumCostAssignment(const std::vector<std::vector<dou
         std::vector<double> minValue(cols + 1, std::numeric_limits<double>::infinity());
         std::vector<bool>   used(cols + 1, false);
 
+        std::size_t iterations = 0;
         do {
+            if (++iterations > cols)
+                return {};
             used[currentColumn] = true;
             const std::size_t currentRow = p[currentColumn];
             double            delta = std::numeric_limits<double>::infinity();
@@ -114,6 +146,8 @@ std::vector<std::size_t> minimumCostAssignment(const std::vector<std::vector<dou
                     continue;
 
                 const double current = costs[currentRow - 1][column - 1] - u[currentRow] - v[column];
+                if (!std::isfinite(current))
+                    return {};
                 if (current < minValue[column]) {
                     minValue[column] = current;
                     way[column] = currentColumn;
@@ -124,6 +158,9 @@ std::vector<std::size_t> minimumCostAssignment(const std::vector<std::vector<dou
                     nextColumn = column;
                 }
             }
+
+            if (nextColumn == 0 || !std::isfinite(delta))
+                return {};
 
             for (std::size_t column = 0; column <= cols; ++column) {
                 if (used[column]) {
@@ -137,7 +174,10 @@ std::vector<std::size_t> minimumCostAssignment(const std::vector<std::vector<dou
             currentColumn = nextColumn;
         } while (p[currentColumn] != 0);
 
+        iterations = 0;
         do {
+            if (++iterations > cols)
+                return {};
             const std::size_t previousColumn = way[currentColumn];
             p[currentColumn] = p[previousColumn];
             currentColumn = previousColumn;
@@ -548,6 +588,24 @@ std::optional<SpatialPickDirection> spatialPickDirectionForKeys(std::size_t prim
 }
 
 SpatialPickMap computeSpatialPickMap(const std::vector<SpatialPickPoint>& windowCenters) {
+    std::vector<SpatialPickPoint> finiteCenters;
+    std::vector<std::size_t> indices;
+    for (std::size_t i = 0; i < windowCenters.size(); ++i) {
+        if (std::isfinite(windowCenters[i].x) && std::isfinite(windowCenters[i].y)) {
+            finiteCenters.push_back(windowCenters[i]);
+            indices.push_back(i);
+        }
+    }
+    if (finiteCenters.size() != windowCenters.size()) {
+        auto result = computeSpatialPickMap(finiteCenters);
+        for (auto& route : result.routes)
+            route.windowIndex = indices[route.windowIndex];
+        for (auto& nearest : result.nearestWindowByKey) {
+            if (nearest)
+                nearest = indices[*nearest];
+        }
+        return result;
+    }
     SpatialPickMap result;
     const auto&    keys = spatialPickKeys();
     result.nearestWindowByKey.resize(keys.size());
@@ -555,7 +613,7 @@ SpatialPickMap computeSpatialPickMap(const std::vector<SpatialPickPoint>& window
         return result;
 
     for (std::size_t keyIndex = 0; keyIndex < keys.size(); ++keyIndex) {
-        std::size_t nearest = 0;
+        std::optional<std::size_t> nearest;
         double      nearestDistance = std::numeric_limits<double>::infinity();
         for (std::size_t windowIndex = 0; windowIndex < windowCenters.size(); ++windowIndex) {
             const double dx = windowCenters[windowIndex].x - keys[keyIndex].x;

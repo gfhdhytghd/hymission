@@ -1,4 +1,5 @@
 #include "mission_layout.hpp"
+#include "numeric_config.hpp"
 
 #include <algorithm>
 #include <array>
@@ -675,8 +676,8 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
         const auto&  window = prepared[order];
         const double scale = std::clamp(baseScale * window.weightScale, 0.0, std::min(normalizedMaxPreviewScale(config), naturalFitScaleForWindow(window, area)));
         const auto [previewWidth, previewHeight] = previewSizeWithShortEdgeFloor(window, scale, area, config);
-        const double cellWidth = std::max({1.0, window.layoutWidth * scale, previewWidth});
-        const double cellHeight = std::max({1.0, window.layoutHeight * scale, previewHeight});
+        const double cellWidth = std::min(area.width, std::max({1.0, window.layoutWidth * scale, previewWidth}));
+        const double cellHeight = std::min(area.height, std::max({1.0, window.layoutHeight * scale, previewHeight}));
 
         double anchorX = areaCenterX + (window.input.natural.centerX() - anchorMap.sourceCenterX) * anchorSpread * anchorMap.scale;
         double anchorY = areaCenterY + (window.input.natural.centerY() - anchorMap.sourceCenterY) * anchorSpread * anchorMap.scale;
@@ -1749,7 +1750,23 @@ std::optional<std::vector<WindowSlot>> computeThumbnailLayout(const std::vector<
 
 } // namespace
 
-std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowInput>& windows, const Rect& area, const LayoutConfig& config) const {
+LayoutConfig normalizeLayoutConfig(LayoutConfig config) {
+    const LayoutConfig defaults;
+    for (auto field : {&LayoutConfig::outerPaddingTop, &LayoutConfig::outerPaddingRight, &LayoutConfig::outerPaddingBottom,
+                       &LayoutConfig::outerPaddingLeft, &LayoutConfig::rowSpacing, &LayoutConfig::columnSpacing,
+                       &LayoutConfig::minWindowLength, &LayoutConfig::minPreviewShortEdge})
+        config.*field = finiteConfig(config.*field, defaults.*field, 0.0, 4096.0);
+    config.smallWindowBoost = finiteConfig(config.smallWindowBoost, defaults.smallWindowBoost, 0.1, 4.0);
+    config.maxPreviewScale = finiteConfig(config.maxPreviewScale, defaults.maxPreviewScale, 0.0, 4.0);
+    config.minSlotScale = finiteConfig(config.minSlotScale, defaults.minSlotScale, 0.0, config.maxPreviewScale);
+    config.naturalScaleFlex = finiteConfig(config.naturalScaleFlex, defaults.naturalScaleFlex, 0.0, 0.25);
+    config.layoutSpaceWeight = finiteConfig(config.layoutSpaceWeight, defaults.layoutSpaceWeight, 0.0, 100.0);
+    config.layoutScaleWeight = finiteConfig(config.layoutScaleWeight, defaults.layoutScaleWeight, 0.0, 100.0);
+    return config;
+}
+
+std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowInput>& windows, const Rect& area, const LayoutConfig& rawConfig) const {
+    const auto config = normalizeLayoutConfig(rawConfig);
     if (windows.empty())
         return {};
 
