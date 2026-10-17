@@ -1,3 +1,6 @@
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include "hook_broker.hpp"
 #include "hook_attempt.hpp"
 #include "hook_symbols.hpp"
