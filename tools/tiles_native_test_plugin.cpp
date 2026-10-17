@@ -1,3 +1,6 @@
+#include "../src/hook_symbols.hpp"
+#include <fstream>
+#include "../src/state_json.hpp"
 // Isolated-test fixture only. Not installed and never loaded in the host session.
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/event/EventBus.hpp>
@@ -36,11 +39,8 @@ void releaseButtons(CInputManager* input) {
 }
 int workspaceChange(lua_State* L) {
     if (!releaseHook) {
-        for (const auto& symbol:HyprlandAPI::findFunctionsByName(fixtureHandle,"releaseAllMouseButtons"))
-            if (symbol.demangled=="CInputManager::releaseAllMouseButtons()") {
-                releaseHook=HyprlandAPI::createFunctionHook(fixtureHandle,symbol.address,reinterpret_cast<void*>(&releaseButtons));
-                break;
-            }
+        const auto source=hymission::hooks::findSymbol(HyprlandAPI::findFunctionsByName(fixtureHandle,"releaseAllMouseButtons"),"CInputManager::releaseAllMouseButtons()",true);
+        if (source) releaseHook=HyprlandAPI::createFunctionHook(fixtureHandle,source,reinterpret_cast<void*>(&releaseButtons));
         if (!releaseHook || !releaseHook->hook()) return luaL_error(L,"test release spy unavailable");
     }
     const auto mon=Desktop::focusState()->monitor();
@@ -51,6 +51,16 @@ int workspaceChange(lua_State* L) {
     mon->changeWorkspace(ws,lua_toboolean(L,2),true);
     lua_pushinteger(L,mouseReleases-before);
     return 1;
+}
+int symbolReport(lua_State* L) {
+    const std::string query=luaL_checkstring(L,1);
+    nlohmann::json report=nlohmann::json::array();
+    for (const auto& symbol:HyprlandAPI::findFunctionsByName(fixtureHandle,query))
+        report.push_back({{"signature",symbol.signature},{"api_demangled",symbol.demangled},{"canonical",hymission::hooks::canonicalSymbol(symbol.signature)},{"address",std::format("0x{:x}",reinterpret_cast<uintptr_t>(symbol.address))}});
+    std::ofstream output(luaL_checkstring(L,2));
+    output<<report.dump(2)<<"\n";
+    if (!output) return luaL_error(L,"cannot write private symbol report");
+    return 0;
 }
 int meta(lua_State* L) {
     const auto keyboard=g_pSeatManager->m_keyboard.lock();
@@ -148,6 +158,7 @@ int pointer(lua_State* L) {
 APICALL EXPORT std::string PLUGIN_API_VERSION() { return HYPRLAND_API_VERSION; }
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     fixtureHandle=handle;
+    HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","symbol_report",symbolReport);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","change_workspace",workspaceChange);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","meta",meta);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","workspace_animation",workspaceAnimation);

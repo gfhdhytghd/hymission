@@ -1,5 +1,9 @@
 #pragma once
 #include <cctype>
+#include <cstdlib>
+#include <cxxabi.h>
+#include <memory>
+#include <vector>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -12,15 +16,30 @@ inline std::string normalizedSignature(std::string_view input) {
     return result;
 }
 
+// SFunctionMatch::demangled is paired by an external nm line counter in
+// Hyprland. Failed dlsym entries can shift it onto an unrelated symbol. Decode
+// the actual lookup key instead: it is the name that produced match.address.
+inline std::string canonicalSymbol(const std::string& mangled) {
+    if (!mangled.starts_with("_Z")) return mangled; // unmangled C symbol
+    int status=0;
+    const std::unique_ptr<char,decltype(&std::free)> name{abi::__cxa_demangle(mangled.c_str(),nullptr,nullptr,&status),&std::free};
+    return status==0 && name?std::string{name.get()}:std::string{};
+}
+
 // Aliases at the same address are one symbol. Existing controllers may retain
 // their historical substring lookup; new Tiles hooks require full signatures.
 template<class Matches> void* findSymbol(const Matches& matches,std::string_view signature,bool strict=false) {
     const auto needle=normalizedSignature(signature);
+    std::vector<std::pair<void*,std::string>> candidates;
+    for (const auto& match:matches) if (match.address) {
+        auto name=normalizedSignature(canonicalSymbol(match.signature));
+        if (!name.empty()) candidates.emplace_back(match.address,std::move(name));
+    }
     auto select=[&](auto predicate) -> std::pair<void*,bool> {
         void* address=nullptr;
-        for (const auto& match:matches) if (match.address && predicate(normalizedSignature(match.demangled))) {
-            if (address && address!=match.address) return {nullptr,true};
-            address=match.address;
+        for (const auto& [candidate,name]:candidates) if (predicate(name)) {
+            if (address && address!=candidate) return {nullptr,true};
+            address=candidate;
         }
         return {address,false};
     };

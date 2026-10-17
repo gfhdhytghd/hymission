@@ -39,14 +39,25 @@ void* nativeOriginal(void* p) { return static_cast<Native*>(p)->original; }
 void nativeRemove(void*, void* p) { delete static_cast<Native*>(p); --allocations; }
 }
 int main() {
-    struct Symbol { std::string demangled; void* address; };
+    struct Symbol { std::string signature,demangled; void* address; };
     void* p=reinterpret_cast<void*>(&original);
-    std::vector<Symbol> aliases{{"A::f( std::optional<X<Y>> )",p},{"A::f(std::optional<X<Y> >)",p}};
+    std::vector<Symbol> aliases{{"_ZN1A1fESt8optionalI1XI1YEE","unrelated API name",p},{"_ZN1A1fESt8optionalI1XI1YEE","another shifted API name",p}};
+    assert(h::normalizedSignature("A::f( std::optional<X<Y>> )")==h::normalizedSignature("A::f(std::optional<X<Y> >)"));
     assert(h::findSymbol(aliases,"A::f(std::optional<X<Y> >)",true)==p);
     assert(h::findSymbol(aliases,"A::f(OldType)")==p); // historical qualified prefix
     assert(!h::findSymbol(aliases,"A::f(OldType)",true));
-    aliases.push_back({"A::f(int)",reinterpret_cast<void*>(&first)});
+    aliases.push_back({"_ZN1A1fEi","mispaired",reinterpret_cast<void*>(&first)});
     assert(!h::findSymbol(aliases,"A::f(OldType)")); // distinct overloads remain ambiguous
+    std::vector<Symbol> shifted{
+        {"_ZN29CUnifiedWorkspaceSwipeGesture6updateEd","unrelated preceding function",p},
+        {"_ZN1A1fEi","CUnifiedWorkspaceSwipeGesture::update(double)",reinterpret_cast<void*>(&first)},
+        {"_Zinvalid","CUnifiedWorkspaceSwipeGesture::update(double)",reinterpret_cast<void*>(&second)}};
+    assert(h::findSymbol(shifted,"CUnifiedWorkspaceSwipeGesture::update(double)",true)==p);
+    shifted.erase(shifted.begin());
+    assert(!h::findSymbol(shifted,"CUnifiedWorkspaceSwipeGesture::update(double)",true));
+    assert(!h::findSymbol(shifted,"CUnifiedWorkspaceSwipeGesture::update(double)"));
+    assert(h::canonicalSymbol("_Zinvalid").empty());
+    assert(h::canonicalSymbol("plain_c_symbol")=="plain_c_symbol");
     h::AttemptCache optionalHook;
     int probes=0;
     for (int frame=0;frame<10000;++frame) assert(!optionalHook.run([&] { ++probes; return false; }));

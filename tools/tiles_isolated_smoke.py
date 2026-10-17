@@ -21,6 +21,7 @@ def main():
     ap.add_argument("--hyprland", default=str(Path.home() / ".local/lib/hyprland-hdr/Hyprland"))
     ap.add_argument("--debugger", action="store_true")
     ap.add_argument("--asan", action="store_true")
+    ap.add_argument("--symbol-lookup-failure", action="store_true", help="private child only: force an earlier failed dlsym in update lookup")
     ap.add_argument("--gbm-backend", default="nvidia-drm", help="GBM backend for the isolated parent/child only")
     ap.add_argument("--fixture")
     ap.add_argument("--integration", action="store_true")
@@ -68,8 +69,12 @@ def main():
         flags = subprocess.check_output(["pkg-config", "--cflags", "wayland-client"], text=True).split()
         subprocess.run(["cc", "-shared", "-fPIC", str(Path(__file__).with_name("tiles_wayland_test_shim.c")), *flags, "-ldl", "-o", str(shim)], check=True)
         env["LD_PRELOAD"] = str(shim)
+        if args.symbol_lookup_failure:
+            lookup_shim=root/"symbol-lookup-test-shim.so"
+            subprocess.run(["cc","-O2","-shared","-fPIC",str(Path(__file__).with_name("tiles_symbol_lookup_test_shim.c")),"-ldl","-o",str(lookup_shim)],check=True)
+            env["LD_PRELOAD"]=str(lookup_shim)+":"+env["LD_PRELOAD"]
         if args.asan:
-            env["LD_PRELOAD"]=subprocess.check_output(["gcc","-print-file-name=libasan.so"],text=True).strip()+":"+str(shim)
+            env["LD_PRELOAD"]=subprocess.check_output(["gcc","-print-file-name=libasan.so"],text=True).strip()+":"+env["LD_PRELOAD"]
             env["ASAN_OPTIONS"]="detect_leaks=0:abort_on_error=1:log_path="+str(root/"asan")
         log = open(root / "hyprland.log", "w")
         handles.append(log)
@@ -128,6 +133,10 @@ def main():
             from tiles_disabled_regression import run
             run(request,root,env,runtime,processes,handles)
             return
+        if args.fixture:
+            report=root/"update-symbols.json"
+            result=request('/eval hl.plugin.hymission_tiles_test.symbol_report("update",'+json.dumps(str(report))+')')
+            assert result.strip()=="ok",result
         assert not state["enabled"], state
         result = request("/eval hl.config({plugin={hymission={tiles_enabled=1,tile_min_width=120}}})")
         assert result.strip() == "ok", result
@@ -138,7 +147,10 @@ def main():
             for _ in range(100):
                 if json.loads(request("j/hymission-tiles-state"))["enabled"]: break
                 time.sleep(0.03)
-            else: raise AssertionError("single-tile capability did not enable")
+            else:
+                failed=json.loads(request("j/hymission-tiles-state"))
+                (root/"tiles-enable-failure.json").write_text(json.dumps(failed,indent=2))
+                raise AssertionError(("single-tile capability did not enable",failed))
             code='hl.config({animations={enabled=true}}); hl.dispatch(hl.dsp.focus({workspace=99})); local a=hl.plugin.hymission_tiles_test.workspace_animation("99"); assert(a.animated and math.abs(a.x)>1)'
             assert request('/eval '+code).strip()=="ok"
             time.sleep(0.03)

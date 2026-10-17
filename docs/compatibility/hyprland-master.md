@@ -26,14 +26,14 @@ nix --extra-experimental-features 'nix-command flakes' \
 ```
 
 The tested plugin output is
-`/nix/store/2j4ai5dz3pfsvhvvcwywc6r192pn94sk-hymission-0.10.2` in that local
-store. Review-fix build log: `build-tiles/rereview-nix-final-build.log` (ignored artifact).
+`/nix/store/03jjz8fs0r29lql3qxr0qxlfk7w7xbly-hymission-0.10.2` in that local
+store. Review-fix build log: `build-tiles/symbol-nix-final-build.log` (ignored artifact).
 The updated lock is committed with the implementation.
 
 No upstream HEAD runtime acceptance is claimed. A separate private nested
 compositor at local revision `e5a03b6a5ce64ec4c85954649bad4df083627574` passed
 the latest tiles integration suite. The ASan-instrumented plugin result covers
-the preceding review implementation; this six-item follow-up did not rerun ASan. See
+the preceding review implementation; the latest follow-ups did not rerun ASan. See
 [the validation record](../workspace-tiles-validation.md). Host plugins were
 never loaded/unloaded/reloaded and `hyprpm update` was not run.
 The [review-fix record](../workspace-tiles-review-fixes.md) adds an exact
@@ -58,3 +58,7 @@ The branch workflow updates the upstream input before each build and uploads
 resolved input metadata even when compilation fails. Push/PR checks become active
 after publication. The daily schedule also requires the workflow on GitHub's
 default branch. No workflow execution or remote publication occurred in this run.
+
+The latest [Release symbol lookup follow-up](../workspace-tiles-symbol-lookup.md)
+validates canonical mangled-name decoding with both normal and deliberately
+mispaired API metadata in the same e5a03b6 Release compositor.

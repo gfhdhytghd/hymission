@@ -186,3 +186,10 @@ overview 窗口拖动中按 Esc 会关闭 overview，并保持所有窗口的 wo
 本地完整 CTest 中这两项通过。最终产物为
 `/nix/store/2j4ai5dz3pfsvhvvcwywc6r192pn94sk-hymission-0.10.2`，日志
 `build-tiles/rereview-nix-final-build.log`。仍未进行该上游 revision 的 runtime 验收。
+
+## Release 符号查询的后续修复
+
+使用本机 Release e5a03b6 运行完整隔离验收，并通过实际 failed-dlsym 分支的受控
+负对照复现 update 符号报错。统一 matcher 已改为自行解码原始 mangled 名，覆盖
+全部严格查找和既有宽松查找。根因、自然复现边界、原始查询记录及完整测试结果见
+[Release 符号查找修复](workspace-tiles-symbol-lookup.md)。
