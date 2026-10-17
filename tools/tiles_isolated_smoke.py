@@ -28,6 +28,7 @@ def main():
     ap.add_argument("--default-off-regression", action="store_true")
     ap.add_argument("--top-clip-regression", action="store_true")
     ap.add_argument("--animation-regression", action="store_true")
+    ap.add_argument("--gesture-lifecycle-regression", action="store_true")
     ap.add_argument("--feedback3-regression",choices=("hover","workspace","stage","stage-multi","stage-perf","drag"))
     ap.add_argument("--feedback2-regression",choices=("panel","gesture","overview","stage"))
     ap.add_argument("--plugin", required=True)
@@ -133,6 +134,12 @@ def main():
         else:
             raise RuntimeError("nested output did not appear")
         expected_width = monitors[0]["width"] / monitors[0].get("scale", 1)
+        if args.gesture_lifecycle_regression:
+            from tiles_gesture_lifecycle_regression import run
+            run(request,root)
+            assert child.poll() is None, "compositor exited during gesture regression"
+            (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
         if args.feedback3_regression:
             from tiles_feedback3_regression import run
             run(args.feedback3_regression,request,root,env,runtime,processes,handles)

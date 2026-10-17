@@ -174,7 +174,7 @@ int trackpad(lua_State* L) {
     const auto pointer=g_pInputManager->m_pointers.empty()?nullptr:g_pInputManager->m_pointers.front();
     if (!pointer) return luaL_error(L,"private compositor pointer unavailable");
     if (action=="begin") pointer->m_pointerEvents.swipeBegin.emit({.timeMs=time++,.fingers=4});
-    else if (action=="update") pointer->m_pointerEvents.swipeUpdate.emit({.timeMs=time++,.fingers=4,.delta={0.0,luaL_checknumber(L,2)}});
+    else if (action=="update") pointer->m_pointerEvents.swipeUpdate.emit({.timeMs=time++,.fingers=4,.delta={luaL_optnumber(L,3,0.0),luaL_checknumber(L,2)}});
     else if (action=="end" || action=="cancel") pointer->m_pointerEvents.swipeEnd.emit({.timeMs=time++,.cancelled=action=="cancel"});
     else return luaL_error(L,"unknown trackpad event");
     return 0;
