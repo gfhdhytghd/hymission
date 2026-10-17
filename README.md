@@ -695,7 +695,8 @@ pinned windows retain monitor-wide behavior.
 `tile_add({ workspace = "name:dev", width = "40%" })` can use a hidden workspace
 already on that monitor. The new width comes from the focused tile. Resize accepts
 either `width` or `delta`, with an optional `neighbor = "left"` or `"right"`;
-percentages refer to the physical monitor's logical width. Drag a divider to
+percentages refer to the physical monitor's logical width. Tile boundaries have
+no persistent divider line. Drag a boundary to
 resize its adjacent pair; Esc restores the starting widths. Removing a tile
 hides its workspace without merging or closing its windows. Disabling tiles
 keeps the focused workspace and restores the full output area.

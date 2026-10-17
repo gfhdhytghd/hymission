@@ -237,7 +237,7 @@ Stage 缩略图可以跨列左右拖入另一 tile 的 active workspace，也可
 
 单 tile 时从 Stage sidebar 拖出缩略图到桌面左/右半区，可预览原地 Split View：在落点侧新建 tile，源桌面保留另一侧；两个 tile 时同样在目标 tile 的左/右半拆出第三个，三个时不再提供 split 落点。桌面落点规则为：单 tile 的两半、来源 tile 的两半，或其他 tile 的外侧 20% 区域提供 split；其他 tile 的中部以及 sidebar 列提供移动落点。预览明确展示最终动作。新增宽度受 tile_min_width 限制；预览不满足条件时显示无效落点，不能松手后偷偷改变其他 tile。若目的仅为向已有 tile 移动，预览明确为该 tile 的桌面 drop，不创建额外 tile。
 
-拖动时绘制半透明目标区域与分割线，反馈最终新/旧 tile 的几何。松手前 Esc、拖回原 sidebar 缩略图、锁屏、源窗口消失、断屏或拓扑 generation 变化均取消。取消不创建 workspace，不改变 binding/窗口/历史。drop 先验证完整计划和源成员，再调用与 tile_add / 窗口移动相同的事务；失败回滚新 workspace、几何和焦点。
+平时不绘制 tile 边界线，边界命中区仍支持拖动调整宽度。拖动缩略图时绘制半透明目标区域与分割线，反馈最终新/旧 tile 的几何。松手前 Esc、拖回原 sidebar 缩略图、锁屏、源窗口消失、断屏或拓扑 generation 变化均取消。取消不创建 workspace，不改变 binding/窗口/历史。drop 先验证完整计划和源成员，再调用与 tile_add / 窗口移动相同的事务；失败回滚新 workspace、几何和焦点。
 
 Tiles/Stage/overview 共用一个交互 owner（类型区分 resize、workspace swipe、overview drag、Stage transfer/split）。一个 drag 从按下到 release/cancel 固定 source ID、generation 和窗口引用，只有 owner 能消费按钮/驱动 flight；不同时触发原生 drag 和 overview ghost。预览、commit、settle 之间移交 owner，确保每个窗口每帧只被一个 controller 绘制一次。
 

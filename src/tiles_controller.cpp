@@ -223,14 +223,6 @@ struct TilesController::Impl {
         if (!event.context || event.stage!=RENDER_POST_WINDOWS || (!active(event.monitor) && !(transfer && transfer->dragging && transfer->targetMonitor==event.monitor)) || locked()) return;
         auto mon=event.monitor;
         auto& ctx=event.context->get();
-        const auto* o=output(mon);
-        for (size_t i=0;i+1<o->model.state().tiles.size();++i) {
-            const auto b=o->model.box(i);
-            CRectPassElement::SRectData data;
-            data.box=CBox{b.x+b.width-mon->m_position.x-0.5,b.y-mon->m_position.y,1.0,b.height}.scale(mon->m_scale);
-            data.color=CHyprColor(0.42,0.64,0.95,interaction==Owner::Resize?0.95:0.4);
-            g_pHyprRenderer->addPassElement(ctx,makeUnique<CRectPassElement>(data));
-        }
         if (transfer && transfer->dragging && transfer->targetMonitor==mon && transfer->drop.kind!=tiles::DropKind::Cancel) {
             CRectPassElement::SRectData data;
             data.box=box(transfer->drop.preview).translate(-mon->m_position).scale(mon->m_scale);
