@@ -364,6 +364,11 @@ struct StageController::Impl {
     bool stagePassQueued = false;
     Screen* drawingScreen = nullptr;
     bool tileDragPending = false;
+    bool tileDragCandidate=false;
+    bool legacyTileOwner=false;
+    std::vector<PHLWINDOWREF> tileDragMembers;
+    CBox tileDragOrigin;
+    Vector2D tileDragPress;
     PHLWORKSPACEREF tileDragWorkspace;
     PHLWINDOWREF tileDragClicked;
     PHLMONITORREF tileDragMonitor;
@@ -1381,7 +1386,7 @@ void StageController::Impl::initialize() {
     listeners.emplace_back(events.workspace.specialActive.listen([this](PHLWORKSPACE, PHLMONITOR) { request(); }));
     listeners.emplace_back(events.window.open.listen([this](PHLWINDOW) { request(); }));
     listeners.emplace_back(events.window.close.listen([this](PHLWINDOW window) {
-        if (auto* tiles=TilesController::get();tiles && tiles->transferMember(window)) StageController::cancelTileTransfer();
+        if ((TilesController::get() && TilesController::get()->transferMember(window)) || std::ranges::find(tileDragMembers,window)!=tileDragMembers.end()) StageController::cancelTileTransfer();
         request();
     }));
     listeners.emplace_back(events.window.floating.listen([this](PHLWINDOW) { request(); }));
@@ -1429,9 +1434,8 @@ void StageController::Impl::initialize() {
     listeners.emplace_back(events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) {
         if (sessionLocked())
             return;
-        if (event.keycode==KEY_ESC && event.state==WL_KEYBOARD_KEY_STATE_PRESSED && tileDragPending) {
-            if (auto* tiles=TilesController::get()) tiles->finishTransfer(false);
-            tileDragPending=false; tileDragWorkspace.reset(); tileDragClicked.reset(); info.cancelled=true;
+        if (event.keycode==KEY_ESC && event.state==WL_KEYBOARD_KEY_STATE_PRESSED && (tileDragPending || tileDragCandidate || legacyTileOwner)) {
+            StageController::cancelTileTransfer(); info.cancelled=true;
         }
         if (event.state == WL_KEYBOARD_KEY_STATE_PRESSED)
             silentDropWindow.reset();
@@ -1471,6 +1475,7 @@ void StageController::Impl::initialize() {
 }
 
 void StageController::Impl::cancelInput() {
+    StageController::cancelTileTransfer();
     if (auto* tiles=TilesController::get(); tileDragPending && tiles) tiles->finishTransfer(false);
     tileDragPending=false; tileDragWorkspace.reset(); tileDragClicked.reset();
     deferred.reset();
@@ -2054,6 +2059,22 @@ void StageController::Impl::pointer() {
         return;
     const auto point = g_pInputManager->getMouseCoordsInternal();
     const auto [hoveredScreen, index] = hit(point);
+    if (tileDragCandidate && !tileDragPending && point.distanceSq(tileDragPress)>64) {
+        auto* tiles=TilesController::get();
+        const auto columnMonitor=hoveredScreen?hoveredScreen->monitor.lock():nullptr;
+        const auto column=hoveredScreen?hoveredScreen->tile:0;
+        if (tiles && tiles->transferDestination(tileDragMonitor.lock(),tileDragSource,point,columnMonitor,column)) {
+            if (legacyTileOwner) { tiles->release(TilesController::Owner::StageDrag); legacyTileOwner=false; }
+            std::vector<PHLWINDOW> members;
+            for (const auto& ref:tileDragMembers) if (auto w=ref.lock();w && w->m_workspace==tileDragWorkspace) members.push_back(w);
+            if (members.size()==tileDragMembers.size() && tiles->beginTransfer(members,tileDragMonitor.lock(),tileDragSource,tileDragOrigin,tileDragPress)) {
+                tileDragPending=true;
+                pressed.reset(); pressedSyntheticId=0; reorderArmed=false; cancelDrop=false;
+                thumbnailDrag.reset(); clearDragHover();
+                g_pSeatManager->setPointerFocus(nullptr,{});
+            }
+        }
+    }
     if (tileDragPending) {
         auto* tiles=TilesController::get();
         if (!tiles || !tiles->updateTransfer(point,hoveredScreen?hoveredScreen->monitor.lock():nullptr,hoveredScreen?hoveredScreen->tile:0,
@@ -2066,8 +2087,14 @@ void StageController::Impl::pointer() {
         return;
     }
     // Reorder gesture: pressed on a card and moved onto a different one.
-    if ((pressed.lock() || pressedSyntheticId > 0) && pressMonitor.lock() && (point.distanceSq(pressPoint) > 100.0 || reorderArmed))
+    if ((pressed.lock() || pressedSyntheticId > 0) && pressMonitor.lock() && (point.distanceSq(pressPoint) > 100.0 || reorderArmed)) {
+        if (tileDragCandidate && !legacyTileOwner) {
+            auto* tiles=TilesController::get();
+            if (!tiles || !tiles->acquire(TilesController::Owner::StageDrag)) return;
+            legacyTileOwner=true;
+        }
         reorderArmed = true;
+    }
     for (auto& screen : screens) {
         const auto hovered = &screen == hoveredScreen ? index : std::nullopt;
         if (screen.hovered != hovered) {
@@ -2202,7 +2229,7 @@ void StageController::Impl::updateDragHover() {
         clearDragHover();
         return;
     }
-    const PHLWORKSPACEREF workspace = onDesktop ? monitor->m_activeWorkspace : inGap ? PHLWORKSPACEREF{} : screen->cards[*index].workspace;
+    const PHLWORKSPACEREF workspace = onDesktop ? screenWorkspace(*screen) : inGap ? PHLWORKSPACEREF{} : screen->cards[*index].workspace;
     const WorkspaceKey syntheticId = !onDesktop && !inGap ? screen->cards[*index].syntheticId : 0;
     const CBox native = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() :
         CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
@@ -2236,6 +2263,14 @@ void StageController::Impl::updateDragHover() {
 
 void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
     const bool suppressed=sessionLocked() || rendering || (inputSuppressed && inputSuppressed());
+    if (event.button==BTN_LEFT && event.state==WL_POINTER_BUTTON_STATE_RELEASED) {
+        if (legacyTileOwner) {
+            if (auto* tiles=TilesController::get()) tiles->release(TilesController::Owner::StageDrag);
+            legacyTileOwner=false;
+        }
+        tileDragCandidate=false;
+        tileDragMembers.clear();
+    }
     if (tileDragPending && event.button==BTN_LEFT && event.state==WL_POINTER_BUTTON_STATE_RELEASED) {
         auto* tiles=TilesController::get();
         const bool owned=tiles && tiles->owner()==TilesController::Owner::StageDrag;
@@ -2289,7 +2324,7 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
             if (reorderArmed && pressMonitor.lock() == screen->monitor.lock() && pressCard != *index) {
                 // Rearrange: swap the contents of the pressed and hovered cards.
                 const auto monitor = screen->monitor.lock();
-                auto dragged = pressed.lock();
+                auto dragged = screen->tile?workspace:pressed.lock();
                 if (!dragged && pressedSynthetic > 0)
                     dragged = ensureWorkspace(monitor, pressedSynthetic);
                 auto destination = card.workspace.lock();
@@ -2297,6 +2332,8 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
                     destination = ensureWorkspace(monitor, card.syntheticId);
                 if (dragged && destination && dragged != destination)
                     swapWorkspaces(dragged, destination);
+                dropTrace.clear();
+                dropTrace.push_back({{"event","column_reorder"},{"source",dragged?workspaceKey(dragged):0},{"destination",destination?workspaceKey(destination):0}});
             } else if (workspace && card.workspace == workspace) {
                 // Resolve the topmost visible preview before activating: switching
                 // workspaces rebuilds cards and can invalidate this reference.
@@ -2373,12 +2410,11 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
             } else if (workspace) {
                 for (const auto& w:Desktop::windowState()->windows()) if (w->mapped() && w->m_workspace==workspace && !static_cast<bool>(w->m_state & Desktop::View::WINDOW_STATE_PINNED)) members.push_back(w);
             }
-            if (tiles->beginTransfer(members,screen->monitor.lock(),screen->tile,cardBox,g_pInputManager->getMouseCoordsInternal())) {
-                tileDragPending=true; tileDragWorkspace=workspace; tileDragClicked=clicked; tileDragMonitor=screen->monitor; tileDragSource=screen->tile;
-                pressed.reset(); pressedSyntheticId=0; reorderArmed=false; cancelDrop=false;
-                g_pSeatManager->setPointerFocus(nullptr,{});
-                return;
-            }
+            tileDragCandidate=!members.empty();
+            tileDragMembers.clear();
+            for (const auto& w:members) tileDragMembers.push_back(w);
+            tileDragOrigin=cardBox; tileDragPress=g_pInputManager->getMouseCoordsInternal();
+            tileDragWorkspace=workspace; tileDragClicked=clicked; tileDragMonitor=screen->monitor; tileDragSource=screen->tile;
         }
         if (index && cardHit(*screen, g_pInputManager->getMouseCoordsInternal()) == index && (g_pInputManager->getModsFromAllKBs() & Input::HL_MODIFIER_META)) {
             const auto& card = screen->cards[*index];
@@ -2389,6 +2425,10 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
                 if (!window || !window->mapped() || window->isHidden() || static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED) || !box.containsPoint(g_pInputManager->getMouseCoordsInternal()))
                     continue;
                 thumbnailDrag = window;
+                if (auto* tiles=TilesController::get();tiles && tiles->available()) {
+                    if (!tiles->acquire(TilesController::Owner::StageDrag)) { thumbnailDrag.reset(); return; }
+                    legacyTileOwner=true;
+                }
                 pressed.reset();
                 pressedSyntheticId = 0;
                 cancelDrop = false;
@@ -3691,6 +3731,7 @@ std::string StageController::Impl::stateJson() const {
         {"scrolling_edge_blur_hook", blurFramebufferHook != nullptr}, {"scrolling_edge_error", edgeEffect.error()},
         {"drag_hover_active", dragHover.has_value()},
         {"thumbnail_drag_active", !!thumbnailDrag},
+        {"tile_transfer_active",tileDragPending},{"tile_transfer_candidate",tileDragCandidate},{"reorder_armed",reorderArmed},
         {"last_drop_trace", dropTrace},
         {"captureVersion", 1}, {"captureWindows", nlohmann::json::array()},
         {"screens", nlohmann::json::array()}};
@@ -3799,6 +3840,7 @@ bool StageController::toggleVisibility() {
 
 bool StageController::setVisibility(bool visible) {
     auto& self = *m_impl;
+    if (!visible) cancelTileTransfer();
     if (self.blocked() || self.swipe || self.visibilityGesture)
         return false;
     const bool previous = self.runtimeVisible.value_or(setting("stage_enabled", 0) != 0);
@@ -4278,11 +4320,14 @@ void StageController::setOverviewRendering(bool active) {
 
 void StageController::cancelTileTransfer() {
     auto* self=Impl::instance;
-    if (!self || !self->tileDragPending) return;
-    if (auto* tiles=TilesController::get()) tiles->finishTransfer(false);
+    if (!self || (!self->tileDragPending && !self->tileDragCandidate && !self->legacyTileOwner)) return;
+    if (auto* tiles=TilesController::get()) { tiles->finishTransfer(false); tiles->release(TilesController::Owner::StageDrag); }
+    self->legacyTileOwner=false;
     self->tileDragPending=false;
+    self->tileDragCandidate=false; self->tileDragMembers.clear();
     self->tileDragWorkspace.reset(); self->tileDragClicked.reset(); self->tileDragMonitor.reset();
     self->pressed.reset(); self->pressedSyntheticId=0; self->reorderArmed=false;
+    self->thumbnailDrag.reset(); self->clearDragHover();
     // Retain the consumed press until its release, including while overview owns input.
     self->request();
 }

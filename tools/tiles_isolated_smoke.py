@@ -269,6 +269,37 @@ def main():
             def source_preview(state,address=None):
                 return next((sc,c,w) for sc in state["screens"] for c in sc["cards"] for w in c.get("windows",[]) if (address is None or w["address"]==address))
             stage=stage_ready(1)
+            # Same-column actions retain their original Stage paths. Keep an
+            # empty active card beside a populated hidden stage for reordering.
+            original_ws=tiles_state()[0]["activeWorkspace"]["id"]
+            evaluate(f'hl.workspace_rule({{workspace="{original_ws}",persistent=true}}); hl.dispatch(hl.dsp.focus({{workspace=77}})); hl.plugin.hymission_tiles_test.refresh()')
+            stage=wait_json("j/hymission-stage-state",lambda s:len(s["screens"])==1 and len(s["screens"][0]["cards"])>=2 and any(c.get("windows") for c in s["screens"][0]["cards"]),"same-column-cards")
+            time.sleep(.15)
+            stage=json.loads(request("j/hymission-stage-state"))
+            (root/"same-column-before.json").write_text(json.dumps(stage,indent=2))
+            sc,c,w=source_preview(stage)
+            destination=next(card for card in sc["cards"] if card["workspace"]==77)
+            source_members=[v["address"] for v in c["windows"]]
+            pointer("press",c["x"]+0.5,c["y"]+0.5)
+            assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]==0
+            pointer("move",destination["x"]+0.5,destination["y"]+destination["height"]/2)
+            reorder=json.loads(request("j/hymission-stage-state"))
+            assert reorder["reorder_armed"] and not reorder["tile_transfer_active"]
+            pointer("release",destination["x"]+0.5,destination["y"]+destination["height"]/2)
+            (root/"same-column-after.json").write_text(request("j/hymission-stage-state"))
+            wait_json("j/clients",lambda cs:all(any(v["address"]==address and v["workspace"]["id"]==77 for v in cs) for address in source_members),"same-column-reorder")
+            stage=stage_ready(1); sc,c,w=source_preview(stage)
+            before_meta=tiles_state()
+            evaluate('hl.plugin.hymission_tiles_test.meta(true)')
+            sx=w["x"]+w["width"]/2; sy=w["y"]+w["height"]/2
+            pointer("press",sx,sy)
+            meta_state=json.loads(request("j/hymission-stage-state"))
+            assert meta_state["thumbnail_drag_active"] and not meta_state["tile_transfer_active"]
+            pointer("release",sx,sy)
+            evaluate('hl.plugin.hymission_tiles_test.meta(false)')
+            assert tiles_state()==before_meta
+            assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]==0
+            stage=stage_ready(1)
             (root / "stage-single.json").write_text(json.dumps(stage,indent=2))
             capture("stage-single")
             def drag_from(sc,c,w,x,y,cancel=False):

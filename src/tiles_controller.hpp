@@ -46,6 +46,7 @@ class TilesController {
     void edgeError(std::string error);
     void edgeActive();
     bool beginTransfer(const std::vector<PHLWINDOW>&, const PHLMONITOR&, tiles::Id, const CBox&, const Vector2D&);
+    bool transferDestination(const PHLMONITOR& source, tiles::Id, const Vector2D&, const PHLMONITOR& columnMonitor, tiles::Id column) const;
     bool updateTransfer(const Vector2D&, const PHLMONITOR& columnMonitor = {}, tiles::Id column = 0, const PHLWORKSPACE& target = {});
     bool finishTransfer(bool commit);
     bool transferDragging() const;

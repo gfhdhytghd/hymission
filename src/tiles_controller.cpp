@@ -48,10 +48,10 @@
 #include <linux/input-event-codes.h>
 #define private public
 #include <hyprland/src/layout/space/Space.hpp>
-#include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
-#include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingFullscreenHandler.hpp>
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
 #undef private
+#include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
+#include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingFullscreenHandler.hpp>
 #include <hyprland/src/managers/fullscreen/handler/FullscreenHandler.hpp>
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
 #include <hyprland/src/layout/algorithm/TiledAlgorithm.hpp>
@@ -870,7 +870,8 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp) {
             o.outgoing.push_back({mon,exiting,t.id,allocation,false});
             g_pInputManager->releaseAllMouseButtons();
             for (const auto& [w,type]:{std::pair{exiting,Animation::Workspace::ANIMATION_TYPE_OUT},std::pair{ws,Animation::Workspace::ANIMATION_TYPE_IN}}) {
-                const bool instant=!integer("animations:enabled",1);
+                static auto animations=CConfigValue<Config::INTEGER>("animations:enabled");
+                const bool instant=!*animations;
                 Animation::Workspace::startAnimation(w,type,left,instant,ws->m_animationStyle);
                 // Preserve native style/config/callbacks and scale only the
                 // horizontal displacement into this workspace's viewport.
@@ -1084,6 +1085,15 @@ bool TilesController::beginTransfer(const std::vector<PHLWINDOW>& windows,const 
     }
     m->transfer=std::move(transfer);
     return true;
+}
+bool TilesController::transferDestination(const PHLMONITOR& source,tiles::Id tile,const Vector2D& point,const PHLMONITOR& columnMonitor,tiles::Id column) const {
+    const auto mon=columnMonitor?columnMonitor:State::monitorState()->query().vec(point).run();
+    const auto* o=m->output(mon);
+    if (!m->ready || !o || !mon || mon->m_activeSpecialWorkspace || locked()) return false;
+    if (column) return mon!=source || column!=tile;
+    const auto target=tiles::dropTarget(o->model,mon==source?tile:0,point.x,point.y,false);
+    return target.kind==tiles::DropKind::SplitLeft || target.kind==tiles::DropKind::SplitRight ||
+        (target.kind==tiles::DropKind::Move && (mon!=source || target.target!=tile));
 }
 bool TilesController::updateTransfer(const Vector2D& point,const PHLMONITOR& columnMonitor,tiles::Id column,const PHLWORKSPACE& target) {
     if (!m->transfer) return false;

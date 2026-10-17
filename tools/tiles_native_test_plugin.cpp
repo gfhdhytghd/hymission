@@ -19,6 +19,7 @@
 #include <hyprland/src/layout/target/Target.hpp>
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 extern "C" {
@@ -26,6 +27,17 @@ extern "C" {
 #include <lauxlib.h>
 }
 namespace {
+int meta(lua_State* L) {
+    const auto keyboard=g_pSeatManager->m_keyboard.lock();
+    if (!keyboard || !keyboard->m_xkbKeymap || !keyboard->m_xkbState) return luaL_error(L,"isolated keyboard unavailable");
+    const auto index=xkb_keymap_mod_get_index(keyboard->m_xkbKeymap,XKB_MOD_NAME_LOGO);
+    if (index==XKB_MOD_INVALID) return luaL_error(L,"isolated Meta modifier unavailable");
+    const auto mask=lua_toboolean(L,1)?1u<<index:0;
+    keyboard->m_modifiersState.depressed=mask;
+    xkb_state_update_mask(keyboard->m_xkbState,mask,0,0,0,0,0);
+    g_pInputManager->onKeyboardMod(keyboard);
+    return 0;
+}
 int workspaceAnimation(lua_State* L) {
     const auto target=State::Workspace::resolver()->getWorkspaceTargetFromString(luaL_checkstring(L,1),Desktop::focusState()->monitor());
     const auto ws=State::workspaceState()->find(target);
@@ -110,6 +122,7 @@ int pointer(lua_State* L) {
 }
 APICALL EXPORT std::string PLUGIN_API_VERSION() { return HYPRLAND_API_VERSION; }
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+    HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","meta",meta);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","workspace_animation",workspaceAnimation);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","refresh",refresh);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","window",window);
