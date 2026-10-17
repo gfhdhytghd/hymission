@@ -3536,8 +3536,12 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
         clearStripWindowDragState();
         m_primaryButtonPressed=false;
         damageOwnedMonitors();
-        info.cancelled=true;
-        return;
+        if (auto* tiles=TilesController::get();tiles && tiles->available()) {
+            info.cancelled=true;
+            return;
+        }
+        // With tiles off, continue native Escape handling after cancelling the
+        // drag (close overview, or let an active search consume Escape).
     }
 
     const auto keyboard = inputKeyboardWithState();

@@ -73,6 +73,30 @@ def run(request,root,env,runtime,processes,handles):
         observations.append({'reserved':reserved,'geometry':geometry,'card_click':active,'edge_click':edge_target,
                              'overview_windows':window_geometries,'overview_exit_workspace':exit_ws,'opening_observed':opening!='inactive','closing_observed':closing in ('closing','closing-settle'),
                              'stage_restored':True})
+    # A Stage press whose release arrives during capture input suppression must be
+    # left alone. Once suppression ends, Stage still owns its original release.
+    stage=wait('j/hymission-stage-state',lambda s:s['captureWindows'],'suppressed-release-ready')
+    r=stage['captureWindows'][0]['selectionGeometry']; px=r['x']+r['width']/2; py=r['y']+r['height']/2
+    evaluate(f'assert(hl.plugin.hymission_tiles_test.pointer("press",{px},{py}))')
+    assert request('/hymission-capture-input begin tiles-review').strip()=='ok'
+    evaluate(f'assert(not hl.plugin.hymission_tiles_test.pointer("release",{px},{py}))')
+    assert request('/hymission-capture-input end tiles-review').strip()=='ok'
+    evaluate(f'assert(hl.plugin.hymission_tiles_test.pointer("release",{px},{py}))')
+    assert request('/hymission-capture-input begin tiles-review').strip()=='ok'
+    evaluate(f'assert(not hl.plugin.hymission_tiles_test.pointer("press",{px},{py}))')
+    assert request('/hymission-capture-input end tiles-review').strip()=='ok'
+    evaluate(f'assert(not hl.plugin.hymission_tiles_test.pointer("release",{px},{py}))')
+    # A press while suppressed must not leave stale release ownership either.
+    evaluate('hl.plugin.hymission.open("forceall")')
+    overview=wait('j/hymission-overview-state',lambda s:s['active'] and s['phase']=='active' and s['windows'],'escape-drag-overview')
+    before={w['address']:w['workspace']['id'] for w in json.loads(request('j/clients'))}
+    r=overview['windows'][0]['contentGeometry']; px=r['x']+r['width']/2; py=r['y']+r['height']/2
+    pointer('press',px,py); pointer('move',px+35,py+35)
+    evaluate('assert(hl.plugin.hymission_tiles_test.pointer("escape"))')
+    wait('j/hymission-overview-state',lambda s:not s['active'],'escape-drag-closes-overview')
+    pointer('release',px+35,py+35)
+    assert before=={w['address']:w['workspace']['id'] for w in json.loads(request('j/clients'))}
+    observations.append({'suppressed_release_retained':True,'overview_drag_escape_closes':True,'escape_keeps_workspaces':True})
     (root/'default-off-observations.json').write_text(json.dumps(observations,indent=2))
     (root/'configerrors.txt').write_text(request('/configerrors'))
     print('PASS: tiles-disabled Stage dimensions, card/monitor-edge clicks, overview entry/exit and Stage restoration')

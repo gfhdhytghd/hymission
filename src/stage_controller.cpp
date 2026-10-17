@@ -2270,7 +2270,15 @@ void StageController::Impl::updateDragHover() {
 }
 
 void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
-    const bool suppressed=sessionLocked() || rendering || (inputSuppressed && inputSuppressed());
+    const auto* tiles=TilesController::get();
+    const bool tileMode=tiles && tiles->available();
+    const bool locked=sessionLocked();
+    if (!tileMode && locked) return;
+    if (event.state==WL_POINTER_BUTTON_STATE_PRESSED) silentDropWindow.reset();
+    const bool suppressed=locked || rendering || (inputSuppressed && inputSuppressed());
+    // Preserve native Stage's suppressed-event passthrough, including its
+    // retained swallowed release, when the tiles capability is disabled.
+    if (!tileMode && suppressed) return;
     if (event.button==BTN_LEFT && event.state==WL_POINTER_BUTTON_STATE_RELEASED) {
         if (legacyTileOwner) {
             if (auto* tiles=TilesController::get()) tiles->release(TilesController::Owner::StageDrag);
@@ -2303,8 +2311,6 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
         if (event.state==WL_POINTER_BUTTON_STATE_RELEASED && swallowedButtons.erase(event.button)) info.cancelled=true;
         return;
     }
-    if (event.state == WL_POINTER_BUTTON_STATE_PRESSED)
-        silentDropWindow.reset();
     if (auto* tiles=TilesController::get();tiles && tiles->handleDivider(event,info)) return;
     if (thumbnailDrag && event.button == BTN_LEFT && event.state == WL_POINTER_BUTTON_STATE_RELEASED) {
         swallowedButtons.erase(event.button);
