@@ -307,8 +307,18 @@ def main():
             pointer("press",sx,sy)
             meta_state=json.loads(request("j/hymission-stage-state"))
             assert meta_state["thumbnail_drag_active"] and not meta_state["tile_transfer_active"]
-            pointer("release",sx,sy)
+            # Keep Meta thumbnail dragging native even across a split target,
+            # including after Meta is released while the thumbnail is held.
+            pointer("move",expected_width*.8,300)
+            meta_state=json.loads(request("j/hymission-stage-state"))
+            assert meta_state["thumbnail_drag_active"] and not meta_state["tile_transfer_active"]
             evaluate('hl.plugin.hymission_tiles_test.meta(false)')
+            pointer("move",expected_width*.85,320)
+            meta_state=json.loads(request("j/hymission-stage-state"))
+            assert meta_state["thumbnail_drag_active"] and not meta_state["tile_transfer_active"]
+            pointer("release",expected_width*.85,320)
+            target_ws=before_meta[0]["activeWorkspace"]["id"]
+            wait_json("j/clients",lambda cs:any(v["address"]==w["address"] and v["workspace"]["id"]==target_ws for v in cs),"meta-native-desktop-drop")
             assert tiles_state()==before_meta
             assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]==0
             stage=stage_ready(1)

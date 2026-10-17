@@ -2066,7 +2066,8 @@ void StageController::Impl::pointer() {
         return;
     const auto point = g_pInputManager->getMouseCoordsInternal();
     const auto [hoveredScreen, index] = hit(point);
-    if (tileDragCandidate && !tileDragPending && point.distanceSq(tileDragPress)>64) {
+    if (tileDragCandidate && !tileDragPending && !thumbnailDrag &&
+        !(g_pInputManager->getModsFromAllKBs() & Input::HL_MODIFIER_META) && point.distanceSq(tileDragPress)>64) {
         auto* tiles=TilesController::get();
         const auto columnMonitor=hoveredScreen?hoveredScreen->monitor.lock():nullptr;
         const auto column=hoveredScreen?hoveredScreen->tile:0;
@@ -2403,7 +2404,8 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
     info.cancelled = true;
     swallowedButtons.insert(event.button);
     if (event.button == BTN_LEFT && event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
-        if (auto* tiles=TilesController::get(); tiles && tiles->available() && index && screen->tile) {
+        if (auto* tiles=TilesController::get(); tiles && tiles->available() && index && screen->tile && !thumbnailDrag &&
+            !(g_pInputManager->getModsFromAllKBs() & Input::HL_MODIFIER_META)) {
             const auto& card=screen->cards[*index];
             auto workspace=card.workspace.lock();
             const Vector2D origin{sidebar(*screen).x+screen->geometry.padding,screen->base.y+cardTop(*screen,*index)};
