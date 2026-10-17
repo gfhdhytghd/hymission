@@ -244,6 +244,12 @@ def main():
             child_displays=[p for p in runtime.glob("wayland-*") if not p.name.endswith(".lock") and p.is_socket()]
             assert len(child_displays)==1, child_displays
             client_env["WAYLAND_DISPLAY"]=child_displays[0].name
+            xml=Path(subprocess.check_output(["pkg-config","--variable=pkgdatadir","wayland-protocols"],text=True).strip())/"staging/ext-workspace/ext-workspace-v1.xml"
+            subprocess.run(["wayland-scanner","client-header",str(xml),str(root/"ext-workspace-client.h")],check=True)
+            subprocess.run(["wayland-scanner","private-code",str(xml),str(root/"ext-workspace-protocol.c")],check=True)
+            flags=subprocess.check_output(["pkg-config","--cflags","--libs","wayland-client"],text=True).split()
+            ext_client=root/"ext-workspace-client"
+            subprocess.run(["cc",str(Path(__file__).with_name("tiles_ext_workspace_client.c")),str(root/"ext-workspace-protocol.c"),"-I"+str(root),*flags,"-o",str(ext_client)],check=True)
             def capture(name):
                 try:
                     result=subprocess.run(["grim","-o",monitors[0]["name"],str(root/(name+".png"))],env=client_env,capture_output=True,text=True,timeout=8)
@@ -354,6 +360,13 @@ def main():
             new_client=next(v for v in clients if v["pid"]==processes[-1].pid)
             assert new_client["workspace"]["id"]==expected_ws,(new_client,tiles_state())
             address=new_client["address"]
+            # A real ext-workspace protocol client reaches the same monitor
+            # change boundary as native actions, including nonfocused tiles.
+            before_protocol=tiles_state()
+            target=next(t for t in before_protocol if not t["focused"])
+            subprocess.run([str(ext_client),target["activeWorkspace"]["name"]],env=client_env,check=True,timeout=5)
+            assert next(t["id"] for t in tiles_state() if t["focused"])==target["id"]
+            assert [t["activeWorkspace"] for t in tiles_state()]==[t["activeWorkspace"] for t in before_protocol]
             def operation(action): evaluate(f'hl.plugin.hymission_tiles_test.window("{action}","{address}")')
             operation("focus")
             native_bindings=[t["activeWorkspace"] for t in tiles_state()]
