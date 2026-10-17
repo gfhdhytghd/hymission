@@ -142,3 +142,47 @@ CTest **16/16 PASS，无跳过**，日志 `build-tiles/handoff-ctest.log`。
 三次私有 compositor 的 `configerrors.txt` 均为空。对应脚本日志为
 `build-tiles/handoff-disabled-reference.log`、`build-tiles/handoff-disabled-current.log`、
 `build-tiles/handoff-smoke.log`。这一轮没有改变插件实现；最后只补录本文验收结果。
+
+## 合入前复审修复（2026-10-17）
+
+六项各自提交，未合入其他分支、未 push、未操作宿主插件：
+
+| 复审项 | 本地提交及处理 |
+| --- | --- |
+| 1. 单 tile Stage 卡片激活 | `b38136c`：activate 仅在目标 monitor 有多个 tile 时调用 tiles activation；单 tile 使用原生 changeWorkspace。该次卡片激活不让 Stage animation hook 强制 instant，也不建立第二套飞行动画；同步刷新直接读取原生 active workspace，避免 deferred model reconcile 后再次建立 Stage 动画。 |
+| 2. Meta thumbnail drag | `20f0650`：Meta 按下或已有 thumbnailDrag 时，均不建立/升级 split transfer；松开 Meta 后正在进行的 thumbnail drag 仍保留桌面拖放路径。 |
+| 3. internal 切换 | `451a510`：把 monitor changeWorkspace 的 internal 参数传入 apply，只有非 internal 调用才 releaseAllMouseButtons，与原生 Monitor.cpp 一致。 |
+| 4. outgoing workspace 引用 | `cfbed82`：降到一个 tile 时在 apply/reconcile 清空 outgoing；禁用时即使当前锁屏也清理 outgoing，collapse 再显式清理。状态新增每个 monitor 的 outgoing_workspace_count，便于回归检查动画租约。 |
+| 5. 默认关闭行为 | `e4e145f`：关闭 tiles 时，Stage 的 suppressed release 直接放行，保留原 swallowed button；pressed 在 suppression 检查前重置 silentDropWindow。overview Esc 先清拖拽状态，再继续原有 search/Esc/close 逻辑；开启 tiles 时保留仅取消拖拽的行为。 |
+| 6. broker 错误返回 | `098f7b0`：失效 continuation 对 expected/ActionResult 返回带错误的 unexpected，对 success/error 结构返回 success=false 和说明；detach 后仍走有效原生入口，remove 后不再默认返回成功。 |
+
+最终本地 Debug 构建及完整 **CTest 16/16 PASS，无跳过**。
+新增隔离断言覆盖单 tile 卡片点击时以及延迟 reconcile 后的原生动画，Stage 飞行窗口数
+为零；Meta 拖入拆分区域、途中松开 Meta 后继续拖到桌面，不产生 tile；真实 native
+releaseAllMouseButtons spy 验证 internal 调用为 0 次、external 为 1 次；动画仍在运行时
+移除 tile 和禁用 capability 都释放 outgoing。broker 单测覆盖失效 bridge 和 continuation
+的失败结果及错误文本，并保留 detach 后原生成功调用的检查。
+
+`tiles_disabled_regression` 对参考版本和最终版本分别运行；两份观测 JSON 完全相等。
+新增场景使用实际 `hymission-capture-input begin/end`：suppressed release 放行，结束
+suppression 后仍消费原按键的 release；suppressed press 不留下额外 release ownership。
+overview 窗口拖动中按 Esc 会关闭 overview，并保持所有窗口的 workspace 不变。
+原有无预留区/实际左右预留区两组对照继续通过。
+
+完整 `tiles_isolated_smoke --integration` **PASS**，三次私有 compositor 的配置错误
+均为空。日志和产物为：
+
+- `build-tiles/rereview-ctest.log`
+- `build-tiles/rereview-disabled-reference.log` 及 `build-tiles/rereview-disabled-reference/`
+- `build-tiles/rereview-disabled-current.log` 及 `build-tiles/rereview-disabled-current/`
+- `build-tiles/rereview-smoke.log` 及 `build-tiles/rereview-smoke/`
+
+本轮未复跑 ASan；前节 ASan 结果对应前一轮实现。物理输入、锁屏协议、HDR 与设备
+视觉验收仍为 PENDING，未将本轮私有 compositor 的合成输入当作设备验收。
+
+本轮再次更新 Hyprland flake input，revision 仍为
+`8010b4e5c66f97aa82cd5b3332b4ec613779b9a7`，lock 未变。
+最终实现的 Nix 构建 **PASS**，14 项通过、两项 GL 测试因 EGL/GLES 不可用跳过；
+本地完整 CTest 中这两项通过。最终产物为
+`/nix/store/2j4ai5dz3pfsvhvvcwywc6r192pn94sk-hymission-0.10.2`，日志
+`build-tiles/rereview-nix-final-build.log`。仍未进行该上游 revision 的 runtime 验收。
