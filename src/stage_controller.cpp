@@ -1749,7 +1749,7 @@ void StageController::Impl::sync() {
         const auto oldGeometry = screen->geometry;
         const bool switching = screen->active != WORKSPACE_INVALID && activeWorkspace && screen->active != workspaceKey(activeWorkspace);
         const bool changedOutput = !sameBox(base, screen->base) || screen->scale != monitor->m_scale || screen->transform != static_cast<int>(monitor->m_transform);
-        if (!nativeCardActivation && visibility == 1 && !visibilityGesture && !finishingOverview && switching && !changedOutput && !changedPolicy && !reconfigure && !blocked() && !screen->covered && !screen->suspended) {
+        if (!nativeCardActivation && !clustered(*screen) && visibility == 1 && !visibilityGesture && !finishingOverview && switching && !changedOutput && !changedPolicy && !reconfigure && !blocked() && !screen->covered && !screen->suspended) {
             pendingFlights.push_back({monitor, view.id, screen->active, screen->cards, oldGeometry, screen->scroll, screen->right, {}});
             for (const auto& window : Desktop::windowState()->windows()) {
                 if (window->m_monitor == monitor && (!view.id || window->m_workspace==activeWorkspace || workspaceKey(window->m_workspace)==screen->active) && window->mapped() && !window->isHidden() && !static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED))

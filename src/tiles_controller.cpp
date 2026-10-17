@@ -99,6 +99,8 @@ struct TilesController::Impl {
         Vector2D sourceOffset, targetOffset, sourcePreview, targetPreview;
         Vector2D sourceGoal;
         bool sourceAnimated=false;
+        float sourceAlpha=1,sourceAlphaGoal=1,targetAlpha=1,targetAlphaGoal=1;
+        bool sourceAlphaAnimated=false,targetAlphaAnimated=false;
         bool targetForced = false, vertical = false;
         double delta = 0, speed = 0;
         int direction = 0, initialDirection=0;
@@ -745,6 +747,7 @@ struct TilesController::Impl {
         s.monitor=mon; s.tile=o->model.state().focused; s.generation=o->model.state().generation;
         s.source=mon->m_activeWorkspace; s.sourceOffset=s.source->m_renderOffset->value(); s.native=gesture;
         s.sourceGoal=s.source->m_renderOffset->goal(); s.sourceAnimated=s.source->m_renderOffset->isBeingAnimated();
+        s.sourceAlpha=s.source->m_alpha->value(); s.sourceAlphaGoal=s.source->m_alpha->goal(); s.sourceAlphaAnimated=s.source->m_alpha->isBeingAnimated();
         const auto style=s.source->m_renderOffset->getStyle();
         s.vertical=style=="slidevert" || style.starts_with("slidefadevert");
         return true;
@@ -764,16 +767,27 @@ struct TilesController::Impl {
         }
         const int direction=delta>=0?1:-1;
         if (s.direction!=direction) {
-            if (s.target) { s.target->m_renderOffset->setValueAndWarp(s.targetOffset); s.target->m_forceRendering=s.targetForced; }
+            if (s.target) {
+                s.target->m_renderOffset->setValueAndWarp(s.targetOffset); s.target->m_forceRendering=s.targetForced;
+                s.target->m_alpha->setValueAndWarp(s.targetAlpha);
+                if (s.targetAlphaAnimated) *s.target->m_alpha=s.targetAlphaGoal;
+            }
             s.direction=direction; s.target=self->swipeTarget(*o,direction);
-            if (s.target) { s.targetOffset=s.target->m_renderOffset->value(); s.targetForced=s.target->m_forceRendering; s.target->m_forceRendering=true; s.target->space()->recalculate(); }
+            if (s.target) {
+                s.targetOffset=s.target->m_renderOffset->value(); s.targetForced=s.target->m_forceRendering;
+                s.targetAlpha=s.target->m_alpha->value(); s.targetAlphaGoal=s.target->m_alpha->goal(); s.targetAlphaAnimated=s.target->m_alpha->isBeingAnimated();
+                s.target->m_forceRendering=true; s.target->space()->recalculate();
+            }
         }
         static auto distance=CConfigValue<Config::INTEGER>("gestures:workspace_swipe_distance");
         delta=std::clamp(delta,-std::max(1.0,static_cast<double>(*distance)),std::max(1.0,static_cast<double>(*distance)));
         s.delta=delta; gesture->m_delta=delta;
         const double progress=s.target?std::clamp(std::abs(delta)/std::max(1.0,static_cast<double>(*distance)),0.0,1.0):0;
         const auto b=o->model.box(*o->model.index(s.tile));
-        const double travel=s.vertical?b.height:b.width;
+        static auto gap=CConfigValue<Config::INTEGER>("general:gaps_workspaces");
+        const double travel=(s.vertical?b.height:b.width)+*gap;
+        s.source->m_alpha->setValueAndWarp(1.F);
+        if (s.target) s.target->m_alpha->setValueAndWarp(1.F);
         s.sourcePreview=s.vertical?Vector2D{0.0,-direction*progress*travel}:Vector2D{-direction*progress*travel,0.0};
         s.source->m_renderOffset->setValueAndWarp(s.sourcePreview);
         if (s.target) { s.targetPreview=s.vertical?Vector2D{0.0,direction*(1-progress)*travel}:Vector2D{direction*(1-progress)*travel,0.0}; s.target->m_renderOffset->setValueAndWarp(s.targetPreview); }
@@ -795,8 +809,28 @@ struct TilesController::Impl {
         auto target=self->swipe->target; auto mon=self->swipe->monitor.lock();
         static auto force=CConfigValue<Config::INTEGER>("gestures:workspace_swipe_min_speed_to_force");
         const bool commit=target && std::abs(self->swipe->delta)>=2 && (std::abs(self->swipe->delta)>=std::max(1.0,static_cast<double>(*distance))*std::clamp(static_cast<double>(*ratio),0.0,1.0) || (*force>0 && self->swipe->speed>=*force));
+        const auto session=*self->swipe;
         self->cancelSwipe();
-        if (commit) if (auto* o=self->output(mon)) { auto draft=o->model; if (draft.activate(workspaceKey(target))) self->publish(*o,std::move(draft)); }
+        auto* o=self->output(mon);
+        if (!o || !target || std::abs(session.delta)<2) return;
+        if (commit) {
+            auto draft=o->model;
+            if (!draft.activate(workspaceKey(target)) || !self->publish(*o,std::move(draft))) return;
+        }
+        const auto allocation=box(o->model.box(*o->model.index(session.tile)));
+        static auto gap=CConfigValue<Config::INTEGER>("general:gaps_workspaces");
+        const double travel=(session.vertical?allocation.h:allocation.w)+*gap;
+        const auto end=session.vertical?Vector2D{0.0,session.direction*travel}:Vector2D{session.direction*travel,0.0};
+        session.source->m_renderOffset->setValue(session.sourcePreview);
+        target->m_renderOffset->setValue(session.targetPreview);
+        *session.source->m_renderOffset=commit?-end:Vector2D{};
+        *target->m_renderOffset=commit?Vector2D{}:end;
+        session.source->m_alpha->setValueAndWarp(1.F); target->m_alpha->setValueAndWarp(1.F);
+        if (!commit) {
+            std::erase_if(o->outgoing,[&](const auto& v) { return v.workspace==target; });
+            o->outgoing.push_back({mon,target,session.tile,allocation,false});
+        } else g_pInputManager->unconstrainMouse();
+        g_pHyprRenderer->damageMonitor(mon);
     }
     static void swipeCancel(CUnifiedWorkspaceSwipeGesture* gesture) {
         if (self->swipe && self->swipe->native==gesture) self->cancelSwipe();
@@ -828,6 +862,14 @@ void TilesController::Impl::cancelSwipe() {
     if (session.target) {
         if (session.target->m_renderOffset->value()==session.targetPreview) session.target->m_renderOffset->setValueAndWarp(session.targetOffset);
         session.target->m_forceRendering=session.targetForced;
+    }
+    if (session.source) {
+        session.source->m_alpha->setValueAndWarp(session.sourceAlpha);
+        if (session.sourceAlphaAnimated) *session.source->m_alpha=session.sourceAlphaGoal;
+    }
+    if (session.target) {
+        session.target->m_alpha->setValueAndWarp(session.targetAlpha);
+        if (session.targetAlphaAnimated) *session.target->m_alpha=session.targetAlphaGoal;
     }
     interaction=Owner::None;
     if (session.native) reinterpret_cast<decltype(&swipeCancel)>(hooks::nativeOriginal(swipeCancelHook->group->native))(session.native);
@@ -877,9 +919,22 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp, bool i
         o.bindings[t.id]=ws;
         o.held.push_back(ws); ws->setVisible(true);
         const auto prior=previous.find(t.id);
-        if (active(mon) && prior!=previous.end() && prior->second!=ws && !o.model.presented(workspaceKey(prior->second)) && !(overview && overview())) {
+        if (active(mon) && prior==previous.end()) {
+            ws->m_renderOffset->setValueAndWarp(Vector2D{});
+            ws->m_alpha->setValueAndWarp(1.F);
+        }
+        if (!internal && active(mon) && prior!=previous.end() && prior->second!=ws && !o.model.presented(workspaceKey(prior->second)) && !(overview && overview())) {
             const auto exiting=prior->second;
-            const bool left=ws->numberedID() && exiting->numberedID() && *ws->numberedID()>*exiting->numberedID();
+            bool left=false;
+            if (ws->numberedID() && exiting->numberedID()) {
+                static auto wrap=CConfigValue<Config::INTEGER>("animations:workspace_wraparound");
+                auto low=workspaceKey(ws),high=low;
+                for (const auto& candidate:State::workspaceState()->workspacesCopy()) if (candidate->numberedID()) {
+                    low=std::min(low,workspaceKey(candidate)); high=std::max(high,workspaceKey(candidate));
+                }
+                const bool wraps=*wrap && std::min(workspaceKey(ws),workspaceKey(exiting))==low && std::max(workspaceKey(ws),workspaceKey(exiting))==high;
+                left=wraps ^ (*ws->numberedID()>*exiting->numberedID());
+            }
             const auto allocation=box(o.model.box(*o.model.index(t.id)));
             std::erase_if(o.outgoing,[&](const auto& v) { return v.workspace==exiting; });
             o.outgoing.push_back({mon,exiting,t.id,allocation,false});
@@ -891,9 +946,13 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp, bool i
                 // Preserve native style/config/callbacks and scale only the
                 // horizontal displacement into this workspace's viewport.
                 const auto value=w->m_renderOffset->value(),goal=w->m_renderOffset->goal();
-                const double scale=allocation.w/std::max(1.0,mon->m_size.x);
-                w->m_renderOffset->setValue({value.x*scale,value.y});
-                *w->m_renderOffset=Vector2D{goal.x*scale,goal.y};
+                static auto workspaceGap=CConfigValue<Config::INTEGER>("general:gaps_workspaces");
+                const auto style=ws->m_animationStyle.value_or(w->m_renderOffset->getStyle());
+                const double gap=style.starts_with("slidefade")?0.0:static_cast<double>(*workspaceGap);
+                const double sx=(allocation.w+gap)/std::max(1.0,mon->m_size.x+gap);
+                const double sy=(allocation.h+gap)/std::max(1.0,mon->m_size.y+gap);
+                w->m_renderOffset->setValue({value.x*sx,value.y*sy});
+                *w->m_renderOffset=Vector2D{goal.x*sx,goal.y*sy};
                 if (instant) w->m_renderOffset->warp();
             }
         }

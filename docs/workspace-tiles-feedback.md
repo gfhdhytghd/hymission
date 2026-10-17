@@ -28,3 +28,21 @@ overview 的 reserved-aware 布局继续保留。几何回归覆盖非零 monito
 新增真实 Wayland 测试客户端，红色 CSD 头部与绿色主体可在截图中区分。私有
 compositor 设置顶部 80、底部 24 的实际 reserved area，分别检查 tiles 关闭/开启时
 native、Stage 桌面、Stage 卡片、all 和 ws overview 的红色顶部。无 push/reload。
+
+## 3. 原生 workspace 动画与 swipe 中间帧
+
+受控负对照在启用 Stage 的多 tile 场景中复现了 offset/alpha 被瞬间清零：Tiles 已启动
+原生动画，Stage 的 deferred sync 又启动自己的 flights 并 warp 相关 workspace。
+多 tile 现在只保留原生 workspace 动画，不建立 Stage flights；新加入的隐藏 workspace
+先恢复可见 alpha/offset，避免沿用它上一次 native OUT 的透明/整屏位移。
+
+继续调用 native startAnimation 取得 In/Out 时长、曲线、style 和回调；缩放行程时保留
+原生 gaps_workspaces 的逻辑距离与百分比 style，方向包含 workspace_wraparound。
+internal change 不自行启动动画。swipe 预览恢复 source/target 可见 alpha；commit 和
+不足阈值的 revert 从松手时的当前 offset 收尾，取消会还原原有动画/alpha。邻区不参与。
+
+私有 release compositor 状态采样：与 capability 关闭时的原生基准比较 slide、
+slidevert、slidefade 百分比和 fade；另测反向与 wraparound。记录每 20ms 的
+value/begun/goal、percent/curve_value、曲线名和 speed，验证中间帧、邻区 alpha/offset
+及 Stage 无重复 flights。对 swipe end 前后在同一 Lua 调用内采样，验证 commit/revert
+的首帧连续性，随后采集收尾过程。

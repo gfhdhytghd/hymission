@@ -73,6 +73,22 @@ int meta(lua_State* L) {
     g_pInputManager->onKeyboardMod(keyboard);
     return 0;
 }
+int animationReport(lua_State* L) {
+    nlohmann::json report=nlohmann::json::object();
+    for (const auto& ws:State::workspaceState()->workspacesCopy()) {
+        const auto& offset=ws->m_renderOffset;
+        const auto cfg=offset->getConfig().lock();
+        const auto values=cfg?cfg->pValues.lock():nullptr;
+        report[ws->addressableName()]={{"value",{offset->value().x,offset->value().y}},{"goal",{offset->goal().x,offset->goal().y}},
+            {"begun",{offset->begun().x,offset->begun().y}},{"alpha",ws->m_alpha->value()},{"alpha_goal",ws->m_alpha->goal()},
+            {"percent",offset->getPercent()},{"curve_value",offset->getCurveValue()},{"curve",offset->getBezierName()},
+            {"speed",values?values->internalSpeed:0},{"style",offset->getStyle()},
+            {"animated",offset->isBeingAnimated() || ws->m_alpha->isBeingAnimated()}};
+    }
+    std::ofstream output(luaL_checkstring(L,1)); output<<report.dump(2)<<"\n";
+    if (!output) return luaL_error(L,"cannot write private animation report");
+    return 0;
+}
 int workspaceAnimation(lua_State* L) {
     const auto target=State::Workspace::resolver()->getWorkspaceTargetFromString(luaL_checkstring(L,1),Desktop::focusState()->monitor());
     const auto ws=State::workspaceState()->find(target);
@@ -158,6 +174,7 @@ int pointer(lua_State* L) {
 APICALL EXPORT std::string PLUGIN_API_VERSION() { return HYPRLAND_API_VERSION; }
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     fixtureHandle=handle;
+    HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","animation_report",animationReport);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","symbol_report",symbolReport);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","change_workspace",workspaceChange);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","meta",meta);
