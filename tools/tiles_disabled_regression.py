@@ -57,16 +57,30 @@ def run(request,root,env,runtime,processes,handles):
         opening=wait('j/hymission-overview-state',lambda s:s['active'],'overview opening')['phase']
         overview=wait('j/hymission-overview-state',lambda s:s['active'] and s['phase']=='active','overview active')
         window_geometries=sorted((w['contentGeometry'] for w in overview['windows']),key=lambda b:(b['x'],b['y']))
-        # Exit towards the other workspace using the public activation action.
-        evaluate('hl.plugin.hymission.close()')
+        # Exit to a window on the other workspace: the endpoint must use the
+        # pending activeWorkspace, even while Stage still has its old snapshot.
+        active_ws=json.loads(request('j/activeworkspace'))['id']
+        chosen=next(w for w in overview['windows'] if client_by_address[w['address']]['workspace']['id']!=active_ws)
+        exit_ws=client_by_address[chosen['address']]['workspace']['id']
+        b=chosen['contentGeometry']; px=b['x']+b['width']/2; py=b['y']+b['height']/2
+        pointer('press',px,py); pointer('release',px,py)
         closing=wait('j/hymission-overview-state',lambda s:s['phase'] in ('closing','closing-settle','inactive'),'overview closing')['phase']
         wait('j/hymission-overview-state',lambda s:not s['active'],'overview closed')
+        wait('j/activeworkspace',lambda s:s['id']==exit_ws,'overview selected workspace')
         stage=wait('j/hymission-stage-state',lambda s:s['screens'] and s['screens'][0]['overview_render_owner']=='stage','Stage restored')
         assert stage['hooks_ready'] and not stage['error']
         evaluate('hl.config({animations={enabled=false},plugin={hymission={stage_transition_ms=0}}})')
         observations.append({'reserved':reserved,'geometry':geometry,'card_click':active,'edge_click':edge_target,
-                             'overview_windows':window_geometries,'opening_observed':opening!='inactive','closing_observed':closing in ('closing','closing-settle'),
+                             'overview_windows':window_geometries,'overview_exit_workspace':exit_ws,'opening_observed':opening!='inactive','closing_observed':closing in ('closing','closing-settle'),
                              'stage_restored':True})
     (root/'default-off-observations.json').write_text(json.dumps(observations,indent=2))
     (root/'configerrors.txt').write_text(request('/configerrors'))
     print('PASS: tiles-disabled Stage dimensions, card/monitor-edge clicks, overview entry/exit and Stage restoration')
+
+
+if __name__ == "__main__":
+    import sys
+    from tiles_isolated_smoke import main
+
+    sys.argv.insert(1, "--default-off-regression")
+    main()

@@ -26,8 +26,8 @@ nix --extra-experimental-features 'nix-command flakes' \
 ```
 
 The tested plugin output is
-`/nix/store/hz6kanifdqkmnhdw36cblrdk68fk9sba-hymission-0.10.2` in that local
-store. Final build log: `build-tiles/nix-final-build.log` (ignored artifact).
+`/nix/store/k26nz30nl9ry1npf4y68vd3wj7smy3ny-hymission-0.10.2` in that local
+store. Review-fix build log: `build-tiles/review-nix-build.log` (ignored artifact).
 The updated lock is committed with the implementation.
 
 No upstream HEAD runtime acceptance is claimed. A separate private nested
@@ -35,6 +35,8 @@ compositor at local revision `e5a03b6a5ce64ec4c85954649bad4df083627574` passed
 the tiles integration suite, including an ASan-instrumented plugin run; see
 [the validation record](../workspace-tiles-validation.md). Host plugins were
 never loaded/unloaded/reloaded and `hyprpm update` was not run.
+The [review-fix record](../workspace-tiles-review-fixes.md) adds an exact
+tiles-disabled comparison with `origin/hyprland-master` and the final ASan run.
 
 ## Historical initial failure (2026-10-11)
 

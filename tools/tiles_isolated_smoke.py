@@ -384,6 +384,21 @@ def main():
             wait_json("j/clients",lambda cs:all(any(v["address"]==address and v["workspace"]["id"]==dest["activeWorkspace"]["id"] for v in cs) for address in group_members),"stage-group-move")
             assert len(tiles_state())==3
             # A new native client belongs to the tile focused by the committed drop.
+            # Closing a real source client mid-transfer must release ownership.
+            close_log=open(root/"client-close-drag.log","w"); handles.append(close_log)
+            closing_client=subprocess.Popen(["weston-simple-shm"],env=client_env,stdout=close_log,stderr=subprocess.STDOUT); processes.append(closing_client)
+            cs=wait_json("j/clients",lambda cs:len(cs)==4,"close-drag-client")
+            close_address=next(v["address"] for v in cs if v["pid"]==closing_client.pid)
+            close_stage=wait_json("j/hymission-stage-state",lambda s:any(w["address"]==close_address for sc in s["screens"] for c in sc["cards"] for w in c.get("windows",[])),"close-drag-preview")
+            a,b,v=source_preview(close_stage,close_address)
+            target=next(t for t in tiles_state() if t["id"]!=a["tile_id"])
+            dx=target["x"]+target["width"]*.7
+            pointer("press",v["x"]+v["width"]/2,v["y"]+v["height"]/2); pointer("move",dx,400)
+            assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]==4
+            closing_client.terminate()
+            wait_json("j/clients",lambda cs:len(cs)==3,"source-closed")
+            wait_json("j/hymission-tiles-state",lambda s:s["interaction_owner"]==0,"source-close-released")
+            pointer("release",dx,400)
             expected_ws=next(t["activeWorkspace"]["id"] for t in tiles_state() if t["focused"])
             client_log=open(root/"client-new.log","w"); handles.append(client_log)
             processes.append(subprocess.Popen(["weston-simple-shm"],env=client_env,stdout=client_log,stderr=subprocess.STDOUT))
@@ -521,9 +536,24 @@ def main():
             assert "three" in request('/eval hl.plugin.hymission.tile_add()')
             assert {t["id"]:t["activeWorkspace"] for t in tiles_state() if t["monitor"]==monitors[0]["name"]}==primary_before
             (root/"two-output-state.json").write_text(request("j/hymission-tiles-state"))
+            remove_log=open(root/"client-remove-drag.log","w"); handles.append(remove_log)
+            removing_client=subprocess.Popen(["weston-simple-shm"],env=client_env,stdout=remove_log,stderr=subprocess.STDOUT); processes.append(removing_client)
+            cs=wait_json("j/clients",lambda cs:len(cs)==1,"remove-drag-client")
+            remove_address=cs[0]["address"]
+            remove_stage=wait_json("j/hymission-stage-state",lambda s:any(w["address"]==remove_address for sc in s["screens"] for c in sc["cards"] for w in c.get("windows",[])),"remove-drag-preview")
+            a,b,v=source_preview(remove_stage,remove_address)
+            assert a["monitor"]=="TILES-SECOND"
+            target=next(t for t in tiles_state() if t["monitor"]==monitors[0]["name"])
+            dx=target["x"]+target["width"]*.7
+            pointer("press",v["x"]+v["width"]/2,v["y"]+v["height"]/2); pointer("move",dx,400)
+            assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]==4
             result=request("/output remove TILES-SECOND")
             assert result.strip()=="ok",result
             wait_json("j/hymission-tiles-state",lambda state:len(state["monitors"])==1 and len(state["tiles"])==3,"second-removed")
+            assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]==0
+            pointer("release",dx,400)
+            removing_client.terminate()
+            wait_json("j/clients",lambda cs:not cs,"remove-drag-client-closed")
             evaluate('hl.config({plugin={hymission={tiles_enabled=0}}}); hl.plugin.hymission_tiles_test.refresh()')
             disabled=wait_json("j/hymission-tiles-state",lambda s:not s["enabled"],"tiles-disabled")
             assert disabled["tiles"]==[]

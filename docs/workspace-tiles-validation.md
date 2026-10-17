@@ -3,6 +3,8 @@
 Date: 2026-10-17. Branch: `feat/workspace-tiles`. Pure plugin; default off;
 maximum three tiles per physical monitor. The reviewed design was updated before
 implementation of both monitor semantics and overview/Stage collaboration.
+The subsequent [review fixes and revalidation](workspace-tiles-review-fixes.md)
+record cancellation, native-path, ABI, default-off parity and protocol regressions.
 No host plugin load, unload, reload, `hyprpm update`, config edit or push occurred.
 The isolated compositor loads only the test build in its own process.
 
@@ -134,7 +136,8 @@ acceptance.
 **PENDING:** physical touchpad/touch/tablet and pointer constraints; mixed HDR/SDR
 visuals and metadata, 10-bit/FP16 hardware paths, mirror capture on hardware,
 physical fractional-scale/rotated outputs and disconnect/reconnect, VRR/tearing,
-lockscreen runtime interaction and ext-workspace protocol clients. Native mouse
+lockscreen runtime interaction. A real ext-workspace client now passes isolated
+visible-workspace activation; see the review record. Native mouse
 fullscreen-query scoping and lock cancellation have code paths, but these are
 not a substitute for device-level acceptance. Workspace display-name identity has
 model coverage; numeric workspace-ID mutation is not a runtime acceptance claim.
