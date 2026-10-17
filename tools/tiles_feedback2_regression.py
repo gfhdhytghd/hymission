@@ -101,4 +101,50 @@ def run(case,request,root,env,runtime,processes,handles):
         (root/'trackpad-samples.json').write_text(json.dumps(snapshots,indent=2))
         print('PASS: four-finger vertical InputManager -> TrackpadGestures -> Hymission wrapper -> unified tile swipe, five following-finger middle frames and stable neighbors')
         return
+    if case=='overview':
+        for ws in (701,702,703):
+            evaluate(f'hl.workspace_rule({{workspace="{ws}",persistent=true}}); hl.dispatch(hl.dsp.focus({{workspace={ws}}}))')
+            log=open(root/f'overview-client-{ws}.log','w');handles.append(log)
+            processes.append(subprocess.Popen([str(binary)],env=child,stdout=log,stderr=subprocess.STDOUT))
+            wait('j/clients',lambda cs:len(cs)==ws-700)
+        evaluate('hl.dispatch(hl.dsp.focus({workspace=701})); hl.plugin.hymission.tile_add({workspace="702"}); hl.plugin.hymission.tile_add({workspace="703"}); hl.plugin.hymission.tile_focus("left"); hl.plugin.hymission.tile_focus("left")')
+        for stage in (0,1):
+            evaluate(f'hl.config({{animations={{enabled=false}},plugin={{hymission={{stage_enabled={stage},stage_transition_ms=0}}}}}}); hl.plugin.hymission.stage_'+('open' if stage else 'close')+'()')
+            time.sleep(.2)
+            before={c['address']:{'x':c['at'][0],'y':c['at'][1],'width':c['size'][0],'height':c['size'][1]} for c in json.loads(request('j/clients'))}
+            capture(f'overview-before-stage-{stage}')
+            evaluate('hl.config({animations={enabled=true}}); hl.plugin.hymission.open("forceall")')
+            first=overview()
+            for w in first['windows']:
+                origin=w.get('animationFromGeometry',w['contentGeometry']);expected=before[w['address']]
+                assert max(abs(origin[k]-expected[k]) for k in expected)<30,('visible tile starts offscreen',stage,w,expected)
+            frames=[]
+            for i in range(40):
+                frame=overview();frames.append(frame)
+                for w in frame['windows']:
+                    if 'workspaceAlpha' in w:assert abs(w['workspaceAlpha']-1)<.01,w
+                    if frame['phase']=='opening' and 'animationToGeometry' in w:
+                        for axis in ('x','y'):
+                            b=before[w['address']][axis];g=w['animationToGeometry'][axis];v=w['contentGeometry'][axis]
+                            assert min(b,g)-2<=v<=max(b,g)+2,(stage,w,axis)
+                time.sleep(.007)
+            assert sum(f['phase']=='opening' for f in frames)>=3,frames
+            capture(f'overview-active-stage-{stage}')
+            evaluate('hl.plugin.hymission.close()')
+            closing=overview()
+            for w in closing['windows']:
+                if 'exitGeometry' in w:
+                    assert max(abs(w['exitGeometry'][k]-before[w['address']][k]) for k in before[w['address']])<30,('visible tile exits offscreen',w,before)
+            for i in range(35):
+                frame=overview();frames.append(frame)
+                for w in frame['windows']:
+                    if 'workspaceAlpha' in w:assert abs(w['workspaceAlpha']-1)<.01,w
+                time.sleep(.007)
+            wait('j/hymission-overview-state',lambda s:not s['active'])
+            (root/f'overview-stage-{stage}-frames.json').write_text(json.dumps(frames,indent=2))
+            capture(f'overview-after-stage-{stage}')
+            after={c['address']:{'x':c['at'][0],'y':c['at'][1],'width':c['size'][0],'height':c['size'][1]} for c in json.loads(request('j/clients'))}
+            assert before==after,(before,after)
+        print('PASS: all overview visible tile origins/endpoints, continuous middle frames, alpha and desktop restoration, Stage off/on')
+        return
     raise AssertionError('case not implemented: '+case)

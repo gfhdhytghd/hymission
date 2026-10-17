@@ -36,3 +36,17 @@ unified 来替代输入。属于隔离 compositor 的合成触控板事件，并
 状态检查通过但渲染红色头部检查失败，修复后通过。另覆盖 tiles 关闭/单 tile 的
 原有 Stage swipe；disabled regression 新增同一输入场景与参考插件做一致性比较。
 日志：`build-tiles/feedback2-gesture{,-negative}.log`。
+
+## 3. all overview 的可见分块端点
+
+原来的 offscreen endpoint 判断仅比较物理 monitor.m_activeWorkspace，把非 focused
+但已由 tile 呈现的 workspace 误判成隐藏区域。现在当前呈现的任意 tile workspace
+都保留实际起点/终点；真正隐藏的 workspace 仍沿用原有屏外/Stage 卡片端点策略。
+已有 alpha/visibility 恢复按当前 tile topology 进行，不退回 monitor 唯一 active 假设。
+
+状态输出增加 animationFromGeometry/animationToGeometry/exitGeometry/workspaceAlpha，
+便于采样核实端点与中间帧。`--feedback2-regression overview` 使用三个真实静态
+Wayland 窗口，在 Stage 关闭/开启两种情况下检查起点等于实际桌面位置、打开中间帧
+位于起终点之间、alpha 保持可见、退出终点回到原位及最终桌面几何不变。修复前同测试
+复现 x=981 的已显示窗口瞬间改为 x=1952 的屏外起点；修复后通过。
+日志：`build-tiles/feedback2-overview{,-negative}.log`，状态帧与截图在相应输出目录。

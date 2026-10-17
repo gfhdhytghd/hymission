@@ -2901,6 +2901,10 @@ std::string OverviewController::overviewStateJson() const {
             {"title", managed.window->metadata().title()},
             {"class", managed.window->metadata().appID()},
             {"contentGeometry", rectJson(content)},
+            {"animationFromGeometry",rectJson(managed.stageOpeningGlobal.value_or(managed.naturalGlobal))},
+            {"animationToGeometry",rectJson(managed.targetGlobal)},
+            {"exitGeometry",rectJson(managed.exitGlobal)},
+            {"workspaceAlpha",managed.window->m_workspace?managed.window->m_workspace->m_alpha->value():1.F},
             {"selectionGeometry", rectJson(selection)},
             {"zIndex", zIndex++},
         };
@@ -8846,6 +8850,10 @@ bool OverviewController::shouldUseOffscreenAnimationEndpoint(const ManagedWindow
 
     const auto workspace = window.window->m_workspace;
     if (!workspace || (workspace->type() == Workspace::eWorkspaceType::SPECIAL))
+        return false;
+    // A second tile's desktop is already on screen even though the physical
+    // monitor has a different m_activeWorkspace. Keep its real scene endpoint.
+    if (auto* tiles=TilesController::get();tiles && tiles->presented(workspace))
         return false;
 
     const auto activeWorkspace = activeWorkspaceForAnimationEndpoint(window, activeWorkspaceOverride);
