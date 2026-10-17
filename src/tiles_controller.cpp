@@ -5,6 +5,7 @@
 #include "stage_controller.hpp"
 #include "state_json.hpp"
 #include "tiles_symbols.hpp"
+#include "hook_symbols.hpp"
 #include <hyprland/src/animation/WorkspaceAnimationController.hpp>
 #include <hyprland/src/desktop/view/LayerSurface.hpp>
 #include <hyprland/src/desktop/view/Group.hpp>
@@ -248,10 +249,8 @@ struct TilesController::Impl {
     }
     template<class Fn> bool attach(const char* key, Fn fn, hooks::Lease*& lease) {
         const auto sig = tiles::symbols::lookup(key);
-        void* source = nullptr;
-        size_t count = 0;
-        for (const auto& match : HyprlandAPI::findFunctionsByName(handle, std::string(sig.substr(0, sig.find('('))).substr(std::string(sig.substr(0, sig.find('('))).rfind("::") + 2))) if (match.demangled == sig) { source = match.address; ++count; }
-        if (count != 1) { initError = std::string("tiles disabled: expected one exact symbol: ") + std::string(sig); return false; }
+        const auto source=hooks::findSymbol(HyprlandAPI::findFunctionsByName(handle, std::string(sig.substr(0, sig.find('('))).substr(std::string(sig.substr(0, sig.find('('))).rfind("::") + 2)),sig,true);
+        if (!source) { initError = std::string("tiles disabled: expected one exact symbol: ") + std::string(sig); return false; }
         lease = hooks::create(handle, source, hooks::target(fn));
         if (lease) leases.push_back(lease);
         if (!lease || !lease->hook()) { initError = std::string("tiles disabled: hook attach failed: ") + std::string(sig); return false; }

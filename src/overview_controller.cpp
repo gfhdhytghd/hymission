@@ -4,6 +4,7 @@
 #include "snapshot_framebuffer.hpp"
 #include "stage_controller.hpp"
 #include "tiles_controller.hpp"
+#include "hook_symbols.hpp"
 #include <linux/input-event-codes.h>
 
 #include <algorithm>
@@ -8083,16 +8084,7 @@ void* OverviewController::findFunction(const std::string& symbolName, const std:
 void* OverviewController::findFunction(const std::string& symbolName, const std::vector<std::string>& demangledNeedles) const {
     const auto matches = HyprlandAPI::findFunctionsByName(m_handle, symbolName);
     for (const auto& demangledNeedle : demangledNeedles) {
-        void* source = nullptr;
-        for (const auto& match : matches) {
-            const bool exact=demangledNeedle.ends_with(')') || demangledNeedle.ends_with(" const");
-            if (exact ? match.demangled!=demangledNeedle : match.demangled.find(demangledNeedle)==std::string::npos)
-                continue;
-            if (source)
-                return nullptr;
-            source = match.address;
-        }
-        if (source)
+        if (void* source=hooks::findSymbol(matches,demangledNeedle))
             return source;
     }
 

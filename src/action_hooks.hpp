@@ -1,4 +1,5 @@
 #include "hook_broker.hpp"
+#include "hook_symbols.hpp"
 #pragma once
 
 #include "overview_controller.hpp"
@@ -65,14 +66,7 @@ inline bool install(HANDLE handle, OverviewController* owner) {
     static_assert(std::is_same_v<WorkspaceFn, decltype(&workspaceOnMonitor)>);
     controller = owner;
     const auto attach = [&](const char* name, const char* signature, auto thunk, auto& original) {
-        void* address = nullptr;
-        for (const auto& match : HyprlandAPI::findFunctionsByName(handle, name)) {
-            if (match.demangled != signature)
-                continue;
-            if (address)
-                return false;
-            address = match.address;
-        }
+        void* address=hooks::findSymbol(HyprlandAPI::findFunctionsByName(handle,name),signature);
         if (!address)
             return false;
         auto* hook = hooks::create(handle, address, hooks::target(thunk));

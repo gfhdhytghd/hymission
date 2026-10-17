@@ -5,6 +5,7 @@
 #include "stage_edge_effect.hpp"
 #include "tiles_controller.hpp"
 #include "hook_attempt.hpp"
+#include "hook_symbols.hpp"
 #include "input_guard.hpp"
 
 #include <algorithm>
@@ -1264,16 +1265,7 @@ bool StageController::Impl::installHooks() {
     if (hookFailure)
         return false;
     const auto find = [&](const char* name, const char* qualified) -> void* {
-        void* address = nullptr;
-        for (const auto& match : HyprlandAPI::findFunctionsByName(handle, name)) {
-            if (match.demangled != qualified)
-                continue;
-            if (address) {
-                error = std::string("stage disabled: ambiguous symbol ") + qualified;
-                return nullptr;
-            }
-            address = match.address;
-        }
+        void* address=hooks::findSymbol(HyprlandAPI::findFunctionsByName(handle,name),qualified);
         if (!address)
             error = std::string("stage disabled: missing symbol ") + qualified;
         return address;
@@ -1347,10 +1339,8 @@ bool StageController::Impl::ensureEdgeHook() {
     if (blurFramebufferHook) return true;
     return edgeHookAttempt.run([&] {
     constexpr auto signature="Render::IHyprRenderer::blurMainFramebuffer(Render::CRenderContext&, float, Hyprutils::Math::CRegion const&, Render::SBlurContext const&)";
-    void* address=nullptr;
-    size_t matches=0;
-    for (const auto& m : HyprlandAPI::findFunctionsByName(handle,"blurMainFramebuffer")) if (m.demangled==signature) { address=m.address; ++matches; }
-    if (matches!=1) return false;
+    void* address=hooks::findSymbol(HyprlandAPI::findFunctionsByName(handle,"blurMainFramebuffer"),signature,true);
+    if (!address) return false;
     blurFramebufferHook=hooks::create(handle,address,hooks::target(&blurFramebufferThunk));
     if (blurFramebufferHook && blurFramebufferHook->hook()) return true;
     hooks::remove(handle,blurFramebufferHook); blurFramebufferHook=nullptr;
