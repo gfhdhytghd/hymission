@@ -4,4 +4,5 @@ build-cmake/
 Testing/
 
 build-tiles/
+build-tiles-asan/
 .tiles-progress.md

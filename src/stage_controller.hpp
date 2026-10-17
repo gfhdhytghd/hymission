@@ -24,6 +24,7 @@ class StageController {
     StageController(const StageController&) = delete;
     StageController& operator=(const StageController&) = delete;
     void initialize();
+    void handleTilesChange();
     bool toggleVisibility();
     bool setVisibility(bool visible);
     std::optional<Rect> holdRegion(const std::string& monitor) const;
@@ -58,6 +59,8 @@ class StageController {
     // Shared native-pass capture/edge service. It also works with Stage hidden.
     static void renderInViewport(const PHLMONITOR&, const stage::EdgeViewport&, const Rect&, const std::function<void()>&);
     static bool ensureEdgeService();
+    static std::optional<Rect> nativeDesktop(const PHLWORKSPACE&);
+    static std::optional<stage::EdgeFrame> overviewPresentation(const PHLWINDOW&, const PHLMONITOR&);
 
   private:
     struct Impl;

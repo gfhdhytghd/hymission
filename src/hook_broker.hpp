@@ -5,6 +5,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,8 @@ struct Lease {
     void* destination = nullptr;
     void* m_original = nullptr;
     bool enabled = false;
+    int priority = 0;
+    size_t continuationIndex = 0;
     bool hook();
     bool unhook();
 };
@@ -32,9 +35,12 @@ struct Group {
     std::vector<Lease*> leases;
     virtual ~Group() { if (native) nativeRemove(owner, native); }
     virtual void* bridge() = 0;
-    virtual void* continuation() = 0;
+    virtual void* continuation(Lease*) = 0;
+    virtual void releaseContinuation(Lease*) = 0;
     Lease* add(void* destination) {
-        auto* l = new Lease{this, destination, continuation()};
+        auto* l = new Lease{this, destination};
+        l->m_original=continuation(l);
+        if (!l->m_original) { delete l; return nullptr; }
         leases.push_back(l);
         return l;
     }
@@ -49,6 +55,7 @@ inline bool Lease::hook() {
         group->attached = true;
     }
     enabled = true;
+    std::stable_sort(group->leases.begin(),group->leases.end(),[](const auto* a,const auto* b) { return a->priority<b->priority; });
     return true;
 }
 inline bool Lease::unhook() {
@@ -64,42 +71,61 @@ inline void remove(void*, Lease* lease) {
     auto* g = lease->group;
     lease->unhook();
     std::erase(g->leases, lease);
+    g->releaseContinuation(lease);
     delete lease;
     if (g->leases.empty()) groups().erase(g->source);
 }
 
 // Each source is patched once. Independent controller leases can be enabled,
 // disabled or rolled back without changing anybody else's original pointer.
-// Reentrant native calls restart at the head; an original call continues after
-// the current subscriber. Newest subscriber is outermost, like nested wrappers.
+// Reentrant native calls restart at the head. Every lease has its own original
+// continuation, also valid when called outside its hook (preview helpers do so).
+// Newest subscriber is outermost, with explicit priority for work-area ordering.
 template<class> struct TypedGroup;
 template<class R, class... A> struct TypedGroup<R (*)(A...)> final : Group {
     using Fn = R (*)(A...);
     static constexpr size_t capacity = 16;
+    static constexpr size_t continuationCapacity = 64;
     inline static std::array<TypedGroup*, capacity> channels{};
-    inline static thread_local std::array<size_t, capacity> cursors{};
+    inline static std::array<Lease*, continuationCapacity> originals{};
     size_t channel = capacity;
     TypedGroup() {
         for (size_t i = 0; i < capacity; ++i) if (!channels[i]) { channel = i; channels[i] = this; break; }
     }
     ~TypedGroup() override { if (channel != capacity) channels[channel] = nullptr; }
-    R call(size_t from, A... args) {
-        const auto saved = cursors[channel];
-        struct Restore { size_t& value; size_t saved; ~Restore() { value = saved; } } restore{cursors[channel], saved};
+    // Entry owns the native ABI arguments. Borrow them through the broker;
+    // only an actual subscriber/native call constructs its by-value arguments.
+    template<class T> static decltype(auto) pass(std::remove_reference_t<T>& value) {
+        if constexpr (std::is_reference_v<T>) return std::forward<T>(value);
+        else return std::as_const(value);
+    }
+    R call(size_t from, A&... args) {
         for (size_t n = from; n < leases.size(); ++n) {
             auto* l = leases[leases.size() - n - 1];
             if (!l->enabled) continue;
-            cursors[channel] = n + 1;
-            return reinterpret_cast<Fn>(l->destination)(std::forward<A>(args)...);
+            return reinterpret_cast<Fn>(l->destination)(pass<A>(args)...);
         }
-        return reinterpret_cast<Fn>(nativeOriginal(native))(std::forward<A>(args)...);
+        return reinterpret_cast<Fn>(nativeOriginal(native))(pass<A>(args)...);
     }
-    template<size_t I> static R entry(A... args) { return channels[I]->call(0, std::forward<A>(args)...); }
-    template<size_t I> static R next(A... args) { return channels[I]->call(cursors[I], std::forward<A>(args)...); }
+    template<size_t I> static R entry(A... args) { return channels[I]->call(0, args...); }
+    template<size_t I> static R next(A... args) {
+        auto* lease=originals[I];
+        auto* group=static_cast<TypedGroup*>(lease->group);
+        const auto it=std::ranges::find(group->leases,lease);
+        const auto from=it==group->leases.end()?group->leases.size():group->leases.size()-static_cast<size_t>(it-group->leases.begin());
+        return group->call(from,args...);
+    }
     template<size_t... I> static auto entries(std::index_sequence<I...>) { return std::array<Fn, capacity>{&entry<I>...}; }
-    template<size_t... I> static auto continuations(std::index_sequence<I...>) { return std::array<Fn, capacity>{&next<I>...}; }
+    template<size_t... I> static auto continuations(std::index_sequence<I...>) { return std::array<Fn, sizeof...(I)>{&next<I>...}; }
     void* bridge() override { return channel == capacity ? nullptr : reinterpret_cast<void*>(entries(std::make_index_sequence<capacity>{})[channel]); }
-    void* continuation() override { return channel == capacity ? nullptr : reinterpret_cast<void*>(continuations(std::make_index_sequence<capacity>{})[channel]); }
+    void* continuation(Lease* lease) override {
+        for (size_t i=0;i<continuationCapacity;++i) if (!originals[i]) {
+            originals[i]=lease; lease->continuationIndex=i;
+            return reinterpret_cast<void*>(continuations(std::make_index_sequence<continuationCapacity>{})[i]);
+        }
+        return nullptr;
+    }
+    void releaseContinuation(Lease* lease) override { originals[lease->continuationIndex]=nullptr; }
 };
 using Factory = std::function<std::unique_ptr<Group>()>;
 inline auto& factories() { static std::map<void*, Factory> data; return data; }
@@ -115,7 +141,7 @@ inline Lease* create(void* owner, void* source, void* destination) {
         auto f = factories().find(destination);
         if (f == factories().end()) return nullptr;
         auto g = f->second();
-        if (!g->bridge() || !g->continuation()) return nullptr;
+        if (!g->bridge()) return nullptr;
         g->owner = owner; g->source = source;
         it = groups().emplace(source, std::move(g)).first;
     }

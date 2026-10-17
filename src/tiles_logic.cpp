@@ -50,7 +50,7 @@ std::optional<size_t> Model::presented(Workspace w) const {
     for (size_t i = 0; i < m_state.tiles.size(); ++i) if (m_state.tiles[i].workspace == w) return i;
     return {};
 }
-Result Model::add(Workspace w, std::optional<double> width) {
+Result Model::add(Workspace w, std::optional<double> width, bool before) {
     if (m_state.tiles.size() >= maxTiles) return std::unexpected("at most three tiles per monitor");
     if (!w || presented(w)) return std::unexpected("new tile requires an unpresented workspace");
     auto s = m_state;
@@ -60,7 +60,7 @@ Result Model::add(Workspace w, std::optional<double> width) {
     if (s.nextId == UINT64_MAX) return std::unexpected("tile IDs exhausted");
     s.tiles[i].width -= amount;
     s.focused = s.nextId++;
-    s.tiles.insert(s.tiles.begin() + i + 1, Tile{s.focused, w, amount, {}});
+    s.tiles.insert(s.tiles.begin() + i + (before ? 0 : 1), Tile{s.focused, w, amount, {}});
     return publish(std::move(s));
 }
 Result Model::resize(double width, int neighbor) {
@@ -206,5 +206,35 @@ Result DividerDrag::cancel(Model& model) {
     auto r=model.restore(m_initial,m_generation);
     if (r) m_generation=model.state().generation;
     return r;
+}
+std::vector<Box> thumbnailGrid(Box area, size_t count, bool horizontal, double aspect) {
+    std::vector<Box> out;
+    if (!finiteBox(area) || !count || !std::isfinite(aspect) || aspect<=0) return out;
+    const size_t cross=std::min(size_t{2},count);
+    const size_t rows=horizontal?cross:(count+cross-1)/cross;
+    const size_t columns=horizontal?(count+cross-1)/cross:cross;
+    const double cw=area.width/columns, ch=area.height/rows;
+    const double gap=std::min({8.0,cw/8,ch/8});
+    const double width=std::max(1e-6,std::min(cw-gap,(ch-gap)*aspect));
+    const double height=width/aspect;
+    for (size_t i=0;i<count;++i) {
+        const size_t row=horizontal?i/columns:i%rows, column=horizontal?i%columns:i/rows;
+        out.push_back({area.x+column*cw+(cw-width)/2,area.y+row*ch+(ch-height)/2,width,height});
+    }
+    return out;
+}
+Drop dropTarget(const Model& model, Id source, double x, double y, bool sidebar) {
+    const auto i=model.at(x,y);
+    if (!i) return {};
+    const auto& s=model.state();
+    const auto& t=s.tiles[*i]; const auto b=model.box(*i);
+    const bool same=source==t.id;
+    if (sidebar) return {DropKind::Move,t.id,b,0};
+    const bool split=source && s.tiles.size()<maxTiles && (s.tiles.size()==1 || same || x<b.x+b.width*0.2 || x>b.x+b.width*0.8);
+    if (!split) return {DropKind::Move,t.id,b,0};
+    if (b.width<s.minimum*2) return {DropKind::Invalid,t.id,b,0};
+    const bool left=x<b.x+b.width/2;
+    auto half=b; half.width/=2; if (!left) half.x+=half.width;
+    return {left?DropKind::SplitLeft:DropKind::SplitRight,t.id,half,b.x+b.width/2};
 }
 } // namespace hymission::tiles

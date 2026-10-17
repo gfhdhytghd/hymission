@@ -39,7 +39,7 @@ class Model {
   public:
     explicit Model(Box output, Workspace initial, double minimum = 240);
     const State& state() const { return m_state; }
-    Result add(Workspace workspace, std::optional<double> width = {});
+    Result add(Workspace workspace, std::optional<double> width = {}, bool before = false);
     Result resize(double width, int neighbor = 0);
     Result resizePair(size_t left, double leftWidth);
     Result remove();
@@ -71,4 +71,13 @@ class DividerDrag {
     uint64_t m_generation = 0;
 };
 std::expected<double, std::string> length(const std::string& value, double total, bool delta = false);
+std::vector<Box> thumbnailGrid(Box area, size_t count, bool horizontal, double aspect);
+enum class DropKind { Cancel, Invalid, Move, SplitLeft, SplitRight };
+struct Drop {
+    DropKind kind = DropKind::Cancel;
+    Id target = 0;
+    Box preview;
+    double divider = 0;
+};
+Drop dropTarget(const Model&, Id source, double x, double y, bool sidebar = false);
 } // namespace hymission::tiles

@@ -518,7 +518,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 #undef INT_CONF
 
     g_overviewController = std::make_unique<hymission::OverviewController>(g_pluginHandle);
-    if (!g_overviewController->initialize()) {
+    const bool overviewReady=g_overviewController->initialize();
+    if (!overviewReady) {
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to initialize overview controller", CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
     }
 
@@ -534,7 +535,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         return g_overviewController && g_overviewController->captureInputSuppressed();
     });
     g_stageController->initialize();
-    g_tilesController = std::make_unique<hymission::TilesController>(g_pluginHandle, [] { return g_overviewController && g_overviewController->suspendsStage(); });
+    g_tilesController = std::make_unique<hymission::TilesController>(g_pluginHandle, [] { return g_overviewController && g_overviewController->suspendsStage(); }, [] {
+        if (g_overviewController) g_overviewController->handleTilesChange();
+        if (g_stageController) g_stageController->handleTilesChange();
+    });
+    if (!overviewReady) g_tilesController->fail("overview required hooks are unavailable");
     g_tilesController->initialize();
     g_tilesStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, IPC::Socket1::SCommand{
         .name="hymission-tiles-state", .match=IPC::Socket1::COMMAND_MATCH_EXACT,

@@ -48,6 +48,22 @@ int main() {
     check(divider.activate(30).has_value());
     const auto changed=divider.state();
     check(!drag->cancel(divider) && !drag->update(divider,1100) && divider.state()==changed);
+    Model split({0,0,1920,1080},1,100);
+    check(dropTarget(split,1,100,500).kind==DropKind::SplitLeft);
+    check(dropTarget(split,1,1800,500).kind==DropKind::SplitRight);
+    check(split.add(2,{},true).has_value() && split.state().tiles[0].workspace==2);
+    check(split.add(3).has_value() && split.state().tiles.size()==3);
+    check(dropTarget(split,split.state().focused,100,500).kind==DropKind::Move);
+    for (bool horizontal:{false,true}) for (size_t count:{1U,2U,7U,30U}) {
+        const Box band{20,30,300,160};
+        const auto grid=thumbnailGrid(band,count,horizontal,0.7);
+        check(grid.size()==count);
+        for (size_t i=0;i<grid.size();++i) {
+            const auto& a=grid[i];
+            check(a.x>=band.x && a.y>=band.y && a.x+a.width<=band.x+band.width+1e-6 && a.y+a.height<=band.y+band.height+1e-6);
+            for (size_t j=0;j<i;++j) { const auto& b=grid[j]; check(a.x+a.width<=b.x || b.x+b.width<=a.x || a.y+a.height<=b.y || b.y+b.height<=a.y); }
+        }
+    }
     std::mt19937_64 rng(0x74696c6573);
     Model random({0, 0, 3840, 2160}, 1, 100);
     for (int round = 0; round < 40000; ++round) {

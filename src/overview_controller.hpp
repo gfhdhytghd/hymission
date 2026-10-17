@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hook_broker.hpp"
+struct SEventLoopDoLaterLock;
 
 #include "workspace_key.hpp"
 #include <hyprland/src/desktop/view/window/WindowPresentation.hpp>
@@ -121,6 +122,7 @@ class OverviewController {
     void handleWindowSetChange(PHLWINDOW window, WindowSetChangeKind kind = WindowSetChangeKind::General, bool preferDeferredRebuild = false);
     void handleWorkspaceChange(PHLWORKSPACE workspace);
     void handleMonitorChange(PHLMONITOR monitor);
+    void handleTilesChange();
     bool                shouldRenderWindowHook(const PHLWINDOW& window, const PHLMONITOR& monitor);
     Render::SWindowRenderPresentation effectiveAlphaHook(const Desktop::View::CWindowPresentation* presentation, Render::eSceneMode mode);
     void                borderDrawHook(void* borderDecorationThisptr, const PHLMONITOR& monitor, const float& alpha, const Render::SWindowRenderPresentation& presentation);
@@ -254,6 +256,8 @@ class OverviewController {
         PHLWORKSPACE             workspace;
         WorkspaceKey             workspaceId = WORKSPACE_INVALID;
         std::string              workspaceName;
+        uint64_t                 tileId = 0;
+        bool                     groupFocused = false;
         Rect                     rect;
         std::shared_ptr<Snapshot> snapshot;
         std::vector<WindowPreview> windows;
@@ -300,6 +304,7 @@ class OverviewController {
         bool                      commitDrop = false;
         bool                      completionScheduled = false;
         PHLWORKSPACE              targetWorkspace;
+        uint64_t                  targetTile=0;
         std::vector<Rect>         settleFrom;
         std::vector<Rect>         settleTo;
         std::chrono::steady_clock::time_point settleStart = {};
@@ -627,6 +632,7 @@ class OverviewController {
     void                       clearRegisteredTrackpadGestures();
     void                       rememberRegisteredTrackpadGesture(const GestureRegistration& gesture);
     void                       replaceNativeWorkspaceGestures(const char* source = "?");
+    void                      releaseAllHooks();
     [[nodiscard]] bool         installHooks();
     [[nodiscard]] bool         activateHooks();
     void                       deactivateHooks();
@@ -654,11 +660,15 @@ class OverviewController {
     [[nodiscard]] bool         windowMatchesOverviewScope(const PHLWINDOW& window, const State& state, bool requireUsableGeometry) const;
     [[nodiscard]] bool         shouldAutoCloseFor(const PHLWINDOW& window) const;
     [[nodiscard]] bool         shouldManageWindow(const PHLWINDOW& window, const State& state) const;
+    bool pointInWindowTile(const ManagedWindow&,double x,double y) const;
+    UP<SEventLoopDoLaterLock> m_tilesRebuild;
     [[nodiscard]] std::string  collectionSummary(const PHLMONITOR& monitor) const;
     [[nodiscard]] std::vector<Rect> targetRects() const;
     [[nodiscard]] std::vector<std::size_t> pickOrderForCurrentState() const;
     [[nodiscard]] Rect         workspaceStripBandRectForMonitor(const PHLMONITOR& monitor, const State& state) const;
     [[nodiscard]] Rect         overviewContentRectForMonitor(const PHLMONITOR& monitor, const State& state) const;
+    [[nodiscard]] Rect tileContentRect(const PHLMONITOR&, uint64_t, const State&) const;
+    [[nodiscard]] Rect tileStripBand(const PHLMONITOR&, uint64_t, const State&) const;
     [[nodiscard]] std::vector<Rect> stripRects() const;
     [[nodiscard]] const ManagedWindow* managedWindowFor(const State& state, const PHLWINDOW& window, bool includeTransient = false) const;
     [[nodiscard]] const ManagedWindow* collapsedOverviewItemFor(const State& state, const PHLWINDOW& window) const;

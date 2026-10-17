@@ -29,6 +29,18 @@ inline std::string_view lookup(std::string_view key) {
     if (key == "update") return "CUnifiedWorkspaceSwipeGesture::update(double)";
     if (key == "end") return "CUnifiedWorkspaceSwipeGesture::end()";
     if (key == "cancel") return "CUnifiedWorkspaceSwipeGesture::cancel()";
+    if (key == "mouseMoveUnified") return "CInputManager::mouseMoveUnified(unsigned int, bool, bool, std::optional<Hyprutils::Math::Vector2D>, bool)";
+    if (key == "hasFullscreenWorkspace") return "Fullscreen::CFullscreenController::hasFullscreen(Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>, std::optional<bool>)";
+    if (key == "fullscreenModesWorkspace") return "Fullscreen::CFullscreenController::getFullscreenModes(Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>, std::optional<bool>)";
+    if (key == "fullscreenWindowWorkspace") return "Fullscreen::CFullscreenController::getFullscreenWindow(Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>, std::optional<bool>)";
+    if (key == "setFullscreenFadeAnimation") return "Animation::Workspace::setFullscreenFadeAnimation(Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>, Animation::Workspace::eAnimationType)";
+    if (key == "renderLayer") return "Render::IHyprRenderer::renderLayer(Render::CRenderContext&, Hyprutils::Memory::CSharedPointer<Desktop::View::CLayerSurface>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>, std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&, bool, bool)";
+    if (key == "layerSurfaceAt") return "Desktop::CViewHitTester::layerSurfaceAt(Hyprutils::Math::Vector2D const&, std::vector<Hyprutils::Memory::CWeakPointer<Desktop::View::CLayerSurface>, std::allocator<Hyprutils::Memory::CWeakPointer<Desktop::View::CLayerSurface> > >*, Hyprutils::Math::Vector2D*, Hyprutils::Memory::CSharedPointer<Desktop::View::CLayerSurface>*, bool) const";
+    if (key == "logicalBox") return "Monitor::CMonitor::logicalBox() const";
+    if (key == "scrollRecalculate") return "Layout::Tiled::SScrollingData::recalculate(bool)";
+    if (key == "scrollFocus") return "Layout::Tiled::CScrollingAlgorithm::focusOnInput(Hyprutils::Memory::CSharedPointer<Layout::ITarget>, Layout::Tiled::CScrollingAlgorithm::eInputMode)";
+    if (key == "scrollFullscreenRequest") return "Fullscreen::ScrollingFullscreenHandler::CScrollingFullscreenHandler::requestFullscreen(Fullscreen::SFullscreenRequest const&)";
+    if (key == "scrollFullscreenColumn") return "Fullscreen::ScrollingFullscreenHandler::CScrollingFullscreenHandler::fullscreenColumnWidth() const";
     return {};
 }
 }

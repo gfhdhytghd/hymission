@@ -25,6 +25,7 @@ See the [changelog](https://gfhdhytghd.github.io/hymission/) for release history
 - Gesture-only `recommand` mode for two-sided `toggle` gestures
 - Workspace strip for the active-workspace scope, optionally shown in all scopes
 - Multi-monitor support
+- Optional workspace tiles: up to three independent workspace viewports per monitor
 - Pinned-window, special-workspace, and scrolling-layout aware behavior
 - Workspace-to-workspace overview transitions without showing the native workspace animation in the middle
 
@@ -41,9 +42,10 @@ https://github.com/user-attachments/assets/7d711730-72f6-4165-94fa-af38bae37385
 `main` upstream. Stable releases remain on `master`; compatibility fixes for
 unreleased Hyprland APIs belong on `hyprland-master`.
 
-The initial compatibility check **fails** against upstream `663b29b846e4`;
-see the [compatibility baseline](docs/compatibility/hyprland-master.md).
-This branch must not yet be treated as compatible with development HEAD.
+The development build is checked against upstream `8010b4e5c66f`
+(2026-10-17). See the [compatibility record](docs/compatibility/hyprland-master.md)
+and [workspace tiles validation](docs/workspace-tiles-validation.md) for the
+tested revisions and runtime evidence limits.
 
 The branch includes a reproducible Nix build. To check the latest upstream HEAD:
 
@@ -664,6 +666,62 @@ Search filters the current overview scope by Unicode-normalized, case-insensitiv
 
 ### Workspace strip and bar
 
+#### Workspace tiles
+
+Tiles are disabled by default. Enable the feature in your existing plugin block:
+
+```lua
+hl.config({ plugin = { hymission = {
+    tiles_enabled = 1,
+    tile_min_width = 240,       -- logical pixels
+    tile_divider_hit_width = 8, -- total divider hit width
+} } })
+
+hl.plugin.hymission.tile_add() -- split the focused tile, create a workspace
+hl.plugin.hymission.tile_focus("left")
+hl.plugin.hymission.tile_move_window("right")
+hl.plugin.hymission.tile_resize({ delta = "+80px" })
+hl.plugin.hymission.tile_remove()
+```
+
+Each physical monitor supports at most three tiles. Each tile keeps its own
+active workspace and history. Requesting a workspace already visible in another
+tile focuses that tile; an explicit on-current-monitor request swaps the active
+workspaces. Native directional focus crosses tile boundaries. New windows enter
+the focused tile unless an explicit native placement rule chooses otherwise.
+Fullscreen and maximize stay inside the owning tile. Special workspaces and
+pinned windows retain monitor-wide behavior.
+
+`tile_add({ workspace = "name:dev", width = "40%" })` can use a hidden workspace
+already on that monitor. The new width comes from the focused tile. Resize accepts
+either `width` or `delta`, with an optional `neighbor = "left"` or `"right"`;
+percentages refer to the physical monitor's logical width. Drag a divider to
+resize its adjacent pair; Esc restores the starting widths. Removing a tile
+hides its workspace without merging or closing its windows. Disabling tiles
+keeps the focused workspace and restores the full output area.
+
+Overview windows and workspace strips are grouped by tile. Vertical strips use
+two columns per group; horizontal strips use two rows. Clicking a workspace
+targets its group. Stage places a sidebar inside each tile, beside its desktop.
+Drag a preview to another column or desktop to move its window; drag an empty
+part of a stage card to move the whole stage. With one tile, dropping on a desktop
+half splits it. With two tiles, a source-tile half or another tile's outer 20%
+can create the third. At three tiles, desktop drops move windows. The translucent
+preview and divider show the result; Esc or returning to the source cancels it.
+
+`hl.plugin.hymission.tiles_state()` and `hyprctl -j hymission-tiles-state` expose
+both per-monitor `tiles` and a flat `tiles` array for bars. Each entry includes
+`id`, `name`, physical `monitor`, logical geometry, `scale`, `transform`,
+`activeWorkspace` and global `focused`. Use `(monitor, id)` as the tile identity;
+use `activeWorkspace.selector` for a native workspace request. The
+`hymission-tiles` socket2 event signals changes. `initError`, `edge_effect` and
+`edge_error` report initialization or hard-clip fallback status.
+
+Legacy config mode provides `hymission:tile_add`, `tile_resize`, `tile_remove`,
+`tile_focus` and `tile_move_window`; arguments use `key=value` fields or
+`left`/`right`. See the [design](docs/workspace-tiles-design.md) and
+[validation record](docs/workspace-tiles-validation.md) for details.
+
 #### Persistent desktop sidebar (stage mode)
 
 Stage mode is separate from overview. It reserves a left band on each monitor;
@@ -671,6 +729,8 @@ the native layout resizes the actual desktop to the remaining area. Applications
 keep their normal rendering scale and input coordinates. The sidebar lists only
 that monitor's **inactive workspaces**. Each card preserves the windows' original
 positions, relative sizes and overlap using one workspace-wide scale.
+When tiles are enabled, each tile gets its own sidebar and the active workspace
+also has a card so it can be dragged into Split View.
 Previews draw live window surfaces and receive native frame callbacks, with a
 16 ms repaint schedule. Window switches use Stage's animation for clicks, keys
 and swipes; incoming and outgoing window edges remain within the owning output.

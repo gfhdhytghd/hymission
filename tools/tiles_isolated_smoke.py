@@ -20,8 +20,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hyprland", default=str(Path.home() / ".local/lib/hyprland-hdr/Hyprland"))
     ap.add_argument("--debugger", action="store_true")
+    ap.add_argument("--asan", action="store_true")
     ap.add_argument("--gbm-backend", default="nvidia-drm", help="GBM backend for the isolated parent/child only")
     ap.add_argument("--fixture")
+    ap.add_argument("--integration", action="store_true")
     ap.add_argument("--plugin", required=True)
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
@@ -37,7 +39,7 @@ def main():
                LIBGL_ALWAYS_SOFTWARE="0")
     config = root / "hyprland.lua"
     config.write_text('hl.monitor({output="",mode="1920x1080@60",position="auto",scale="1"})\n'
-                      'hl.config({misc={disable_hyprland_logo=true,disable_splash_rendering=true},animations={enabled=false},xwayland={enabled=false}})\n'
+                      'hl.config({misc={disable_hyprland_logo=true,disable_splash_rendering=true},animations={enabled=false},xwayland={enabled=false},debug={enable_stdout_logs=true}})\n'
                       f'hl.plugin.load({json.dumps(str(Path(args.plugin).resolve()))})\n')
     if args.fixture:
         with config.open("a") as output:
@@ -65,6 +67,9 @@ def main():
         flags = subprocess.check_output(["pkg-config", "--cflags", "wayland-client"], text=True).split()
         subprocess.run(["cc", "-shared", "-fPIC", str(Path(__file__).with_name("tiles_wayland_test_shim.c")), *flags, "-ldl", "-o", str(shim)], check=True)
         env["LD_PRELOAD"] = str(shim)
+        if args.asan:
+            env["LD_PRELOAD"]=subprocess.check_output(["gcc","-print-file-name=libasan.so"],text=True).strip()+":"+str(shim)
+            env["ASAN_OPTIONS"]="detect_leaks=0:abort_on_error=1:log_path="+str(root/"asan")
         log = open(root / "hyprland.log", "w")
         handles.append(log)
         command = [args.hyprland, "--config", str(config)]
@@ -136,11 +141,11 @@ def main():
         assert [t["activeWorkspace"]["id"] for t in tiles_state()]==original_bindings
         assert tiles_state()[0]["focused"]
         evaluate('hl.dispatch(hl.dsp.focus({workspace=2,on_current_monitor=true}))')
-        assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[2,1,3]
+        assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[2,1,3],tiles_state()
         evaluate('hl.dispatch(hl.dsp.focus({workspace=4}))')
         assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[4,1,3]
         evaluate('hl.dispatch(hl.dsp.focus({workspace="previous"}))')
-        assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[2,1,3]
+        assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[2,1,3],tiles_state()
         evaluate('hl.plugin.hymission.tile_focus("right")')
         evaluate('hl.plugin.hymission.tile_focus("right")')
         if args.fixture:
@@ -170,6 +175,21 @@ def main():
             evaluate('assert(hl.plugin.hymission_tiles_test.pointer("escape"))')
             evaluate(f'assert(hl.plugin.hymission_tiles_test.pointer("release",{boundary+30},{y}))')
             assert [t["width"] for t in tiles_state()]==[t["width"] for t in before_drag]
+            evaluate('hl.config({gestures={workspace_swipe_forever=1}})')
+            before_forever=tiles_state()
+            evaluate('hl.plugin.hymission_tiles_test.swipe("begin")')
+            evaluate('hl.plugin.hymission_tiles_test.swipe("update",300)')
+            assert [t["activeWorkspace"] for t in tiles_state()][:2]==[t["activeWorkspace"] for t in before_forever][:2]
+            assert tiles_state()[2]["activeWorkspace"]!=before_forever[2]["activeWorkspace"]
+            evaluate('hl.plugin.hymission_tiles_test.swipe("end")')
+            evaluate('hl.config({gestures={workspace_swipe_forever=0,workspace_swipe_direction_lock=1,workspace_swipe_direction_lock_threshold=10}})')
+            before_lock=tiles_state()
+            evaluate('hl.plugin.hymission_tiles_test.swipe("begin")')
+            evaluate('hl.plugin.hymission_tiles_test.swipe("update",100)')
+            evaluate('hl.plugin.hymission_tiles_test.swipe("update",-100)')
+            evaluate('hl.plugin.hymission_tiles_test.swipe("end")')
+            assert [t["activeWorkspace"] for t in tiles_state()]==[t["activeWorkspace"] for t in before_lock]
+            evaluate('hl.config({gestures={workspace_swipe_direction_lock=0}})')
         state=json.loads(request("j/hymission-tiles-state"))
         before = state["tiles"]
         result = request("/eval hl.plugin.hymission.tile_add()")
@@ -185,6 +205,239 @@ def main():
         result = request('/eval hl.plugin.hymission.tile_remove()')
         assert result.strip() == "ok", result
         assert len(json.loads(request("j/hymission-tiles-state"))["tiles"]) == 2
+        if args.integration:
+            assert args.fixture, "integration needs the private input fixture"
+            def wait_json(command, predicate, label):
+                for _ in range(100):
+                    value=json.loads(request(command))
+                    if predicate(value): return value
+                    time.sleep(0.05)
+                (root / (label + ".json")).write_text(json.dumps(value,indent=2))
+                raise AssertionError((label,value))
+            evaluate('hl.plugin.hymission.tile_remove()')
+            assert len(tiles_state())==1
+            client_env=env.copy()
+            client_env.pop("LD_PRELOAD",None)
+            child_displays=[p for p in runtime.glob("wayland-*") if not p.name.endswith(".lock") and p.is_socket()]
+            assert len(child_displays)==1, child_displays
+            client_env["WAYLAND_DISPLAY"]=child_displays[0].name
+            def capture(name):
+                try:
+                    result=subprocess.run(["grim","-o",monitors[0]["name"],str(root/(name+".png"))],env=client_env,capture_output=True,text=True,timeout=8)
+                    if result.returncode: (root/(name+"-capture-error.txt")).write_text(result.stderr)
+                except (OSError,subprocess.TimeoutExpired) as error:
+                    (root/(name+"-capture-error.txt")).write_text(str(error))
+            for _ in range(3):
+                client_log=open(root / f"client-{_}.log","w"); handles.append(client_log)
+                processes.append(subprocess.Popen(["weston-simple-shm"],env=client_env,stdout=client_log,stderr=subprocess.STDOUT))
+                wait_json("j/clients",lambda clients:len(clients)==_+1,"clients")
+            evaluate('hl.config({plugin={hymission={stage_enabled=1,stage_transition_ms=0,stage_refresh_ms=16,workspace_strip_force_show=1,workspace_strip_empty_mode="always"}}})')
+            evaluate('hl.plugin.hymission.stage_open()')
+            def stage_ready(count):
+                return wait_json("j/hymission-stage-state",lambda s:s["enabled"] and s["hooks_ready"] and s["visibility_progress"]==1 and len(s["screens"])==count and any(c.get("windows") for sc in s["screens"] for c in sc["cards"]),"stage-ready")
+            def pointer(action,x=0,y=0):
+                evaluate(f'hl.plugin.hymission_tiles_test.pointer("{action}",{x},{y})')
+            def source_preview(state,address=None):
+                return next((sc,c,w) for sc in state["screens"] for c in sc["cards"] for w in c.get("windows",[]) if (address is None or w["address"]==address))
+            stage=stage_ready(1)
+            (root / "stage-single.json").write_text(json.dumps(stage,indent=2))
+            capture("stage-single")
+            def drag_from(sc,c,w,x,y,cancel=False):
+                sx=w["x"]+w["width"]/2; sy=w["y"]+w["height"]/2
+                pointer("press",sx,sy); pointer("move",x,y)
+                assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]!=0
+                if cancel:
+                    capture("split-preview")
+                    pointer("escape")
+                pointer("release",x,y)
+            sc,c,w=source_preview(stage)
+            before=tiles_state()
+            drag_from(sc,c,w,expected_width*0.8,300,True)
+            assert tiles_state()==before
+            stage=stage_ready(1); sc,c,w=source_preview(stage)
+            sx=w["x"]+w["width"]/2; sy=w["y"]+w["height"]/2
+            pointer("press",sx,sy); pointer("move",expected_width*0.8,300); pointer("move",sx,sy); pointer("release",sx,sy)
+            assert tiles_state()==before
+            drag_from(sc,c,w,expected_width*0.8,300)
+            wait_json("j/hymission-tiles-state",lambda s:len(s["tiles"])==2,"split-two")
+            stage=stage_ready(2)
+            (root / "stage-two.json").write_text(json.dumps(stage,indent=2))
+            # Drag one of the remaining source windows into a new half of its own tile.
+            source_tile=next(t for t in tiles_state() if t["id"]==sc["tile_id"])
+            remaining=next((a,b,v) for a in stage["screens"] if a["tile_id"]==sc["tile_id"] for b in a["cards"] for v in b.get("windows",[]))
+            drag_from(*remaining,source_tile["x"]+source_tile["width"]*0.8,340)
+            wait_json("j/hymission-tiles-state",lambda s:len(s["tiles"])==3,"split-three")
+            stage=stage_ready(3)
+            (root / "stage-three.json").write_text(json.dumps(stage,indent=2))
+            capture("stage-three")
+            # Stage's adjacent column must yield divider input to the shared owner.
+            before=tiles_state()
+            seam=before[0]["x"]+before[0]["width"]
+            pointer("press",seam,500); pointer("move",seam+30,500)
+            assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]!=0
+            pointer("escape"); pointer("release",seam+30,500)
+            assert tiles_state()==before
+            # A native directional focus request crosses a one-window tile edge.
+            clients=json.loads(request("j/clients"))
+            sole=next((i,t,[w for w in clients if w["workspace"]["id"]==t["activeWorkspace"]["id"]][0])
+                      for i,t in enumerate(before) if sum(w["workspace"]["id"]==t["activeWorkspace"]["id"] for w in clients)==1)
+            i,t,client=sole
+            direction="right" if i+1<len(before) else "left"
+            neighbor=before[i+(1 if direction=="right" else -1)]
+            evaluate(f'hl.plugin.hymission_tiles_test.window("focus","{client["address"]}")')
+            evaluate(f'hl.dispatch(hl.dsp.focus({{direction="{direction}"}}))')
+            assert next(v["id"] for v in tiles_state() if v["focused"])==neighbor["id"]
+            evaluate(f'hl.plugin.hymission_tiles_test.window("focus","{client["address"]}")')
+            evaluate(f'hl.plugin.hymission.tile_move_window("{direction}")')
+            wait_json("j/clients",lambda cs:any(w["address"]==client["address"] and w["workspace"]["id"]==neighbor["activeWorkspace"]["id"] for w in cs),"api-move-neighbor")
+            opposite="left" if direction=="right" else "right"
+            evaluate(f'hl.plugin.hymission.tile_move_window("{opposite}")')
+            wait_json("j/clients",lambda cs:any(w["address"]==client["address"] and w["workspace"]["id"]==t["activeWorkspace"]["id"] for w in cs),"api-move-return")
+            stage=stage_ready(3)
+            sc,c,w=source_preview(stage)
+            target=next(a for a in stage["screens"] if a["tile_id"]!=sc["tile_id"])
+            target_card=next(b for b in target["cards"] if b["workspace"]==target["active_workspace"])
+            # Column-to-column move; the source must cease owning the moved client.
+            drag_from(sc,c,w,target_card["x"]+target_card["width"]/2,target_card["y"]+target_card["height"]/2)
+            clients=wait_json("j/clients",lambda cs:any(v["address"]==w["address"] and v["workspace"]["id"]==target_card["workspace"] for v in cs),"cross-column")
+            assert len(tiles_state())==3
+            # At the limit a blank part of a stage card moves the entire stage.
+            stage=stage_ready(3)
+            group_screen=next(a for a in stage["screens"] if any(len(b.get("windows",[]))>1 for b in a["cards"]))
+            group_card=next(b for b in group_screen["cards"] if len(b.get("windows",[]))>1)
+            group_members=[v["address"] for v in group_card["windows"]]
+            dest=next(t for t in tiles_state() if t["id"]!=group_screen["tile_id"])
+            pointer("press",group_card["x"]+0.5,group_card["y"]+0.5)
+            pointer("move",dest["x"]+dest["width"]*0.7,400)
+            assert json.loads(request("j/hymission-tiles-state"))["interaction_owner"]!=0
+            pointer("release",dest["x"]+dest["width"]*0.7,400)
+            wait_json("j/clients",lambda cs:all(any(v["address"]==address and v["workspace"]["id"]==dest["activeWorkspace"]["id"] for v in cs) for address in group_members),"stage-group-move")
+            assert len(tiles_state())==3
+            # A new native client belongs to the tile focused by the committed drop.
+            expected_ws=next(t["activeWorkspace"]["id"] for t in tiles_state() if t["focused"])
+            client_log=open(root/"client-new.log","w"); handles.append(client_log)
+            processes.append(subprocess.Popen(["weston-simple-shm"],env=client_env,stdout=client_log,stderr=subprocess.STDOUT))
+            clients=wait_json("j/clients",lambda cs:len(cs)==4,"new-client")
+            new_client=next(v for v in clients if v["pid"]==processes[-1].pid)
+            assert new_client["workspace"]["id"]==expected_ws,(new_client,tiles_state())
+            address=new_client["address"]
+            def operation(action): evaluate(f'hl.plugin.hymission_tiles_test.window("{action}","{address}")')
+            operation("focus")
+            native_bindings=[t["activeWorkspace"] for t in tiles_state()]
+            target_tile=next(t for t in tiles_state() if t["activeWorkspace"]["id"]==new_client["workspace"]["id"])
+            for mode in ("fullscreen","maximize"):
+                operation(mode)
+                def inside(cs):
+                    w=next(v for v in cs if v["address"]==address)
+                    return w["fullscreen"]>0 and w["at"][0]>=target_tile["x"]-1 and w["at"][0]+w["size"][0]<=target_tile["x"]+target_tile["width"]+1 and w["size"][0]>0
+                fullscreen_clients=wait_json("j/clients",inside,mode+"-geometry")
+                assert [t["activeWorkspace"] for t in tiles_state()]==native_bindings
+                (root/(mode+"-clients.json")).write_text(json.dumps(fullscreen_clients,indent=2))
+                capture(mode)
+                operation("normal")
+            evaluate(f'hl.workspace_rule({{workspace="{target_tile["activeWorkspace"]["id"]}",layout="scrolling"}}); hl.plugin.hymission_tiles_test.refresh()')
+            wait_json("j/workspaces",lambda workspaces:any(ws.get("id")==target_tile["activeWorkspace"]["id"] and ws["tiledLayout"]=="scrolling" for ws in workspaces),"scrolling-layout")
+            for mode in ("fullscreen","maximized"):
+                evaluate(f'hl.plugin.hymission.fullscreen({{mode="{mode}",action="set"}})')
+                wait_json("j/clients",inside,"scrolling-"+mode)
+                operation("normal")
+            (root/"scrolling-state.json").write_text(request("j/hymission-tiles-state"))
+            operation("pin")
+            pinned_before=next(v for v in json.loads(request("j/clients")) if v["address"]==address)
+            direction="left" if tiles_state()[-1]["focused"] else "right"
+            evaluate(f'hl.plugin.hymission.tile_focus("{direction}")')
+            pinned_after=next(v for v in json.loads(request("j/clients")) if v["address"]==address)
+            assert pinned_after["pinned"] and pinned_after["at"]==pinned_before["at"]
+            operation("unpin"); operation("focus")
+            before_special=[t["activeWorkspace"] for t in tiles_state()]
+            evaluate('hl.plugin.hymission_tiles_test.special(true)')
+            assert [t["activeWorkspace"] for t in tiles_state()]==before_special
+            result=request('/eval hl.plugin.hymission.tile_add()')
+            assert "special" in result,result
+            evaluate('hl.plugin.hymission_tiles_test.special(false)')
+            assert [t["activeWorkspace"] for t in tiles_state()]==before_special
+            # Overview exposes aligned groups and keeps each window inside its tile.
+            for anchor in ("left","top"):
+                evaluate(f'hl.config({{plugin={{hymission={{workspace_strip_anchor="{anchor}"}}}}}})')
+                evaluate('hl.plugin.hymission.open("forceall")')
+                ov=wait_json("j/hymission-overview-state",lambda s:s["active"] and s["phase"]=="active" and not s.get("relayout_active",False) and len(s.get("tile_groups",[]))==3,"overview")
+                (root / ("overview-"+anchor+".json")).write_text(json.dumps(ov,indent=2))
+                capture("overview-"+anchor)
+                assert {e["tile_id"] for e in ov["strip"]}=={t["id"] for t in tiles_state()}
+                for tile in tiles_state():
+                    entries=[e for e in ov["strip"] if e["tile_id"]==tile["id"]]
+                    if len(entries)>1: assert len({round(e["geometry"]["y" if anchor=="top" else "x"],2) for e in entries})>1
+                by_id={t["id"]:t for t in tiles_state()}
+                for win in ov["windows"]:
+                    t=by_id[win["tile_id"]]; b=win["contentGeometry"]
+                    assert b["x"]>=t["x"]-1 and b["x"]+b["width"]<=t["x"]+t["width"]+1, (win,t)
+                entry=next(e for e in ov["strip"] if not e["active"])
+                old={t["id"]:t["activeWorkspace"]["id"] for t in tiles_state()}
+                b=entry["geometry"]; pointer("press",b["x"]+b["width"]/2,b["y"]+b["height"]/2); pointer("release",b["x"]+b["width"]/2,b["y"]+b["height"]/2)
+                now={t["id"]:t["activeWorkspace"]["id"] for t in tiles_state()}
+                assert now[entry["tile_id"]]==entry["workspace"] and all(now[k]==v for k,v in old.items() if k!=entry["tile_id"]),(old,now,entry)
+                evaluate('hl.plugin.hymission.close()')
+                wait_json("j/hymission-overview-state",lambda s:not s["active"],"overview-closed")
+            evaluate('hl.plugin.hymission.open("onlycurrentworkspace")')
+            compact=wait_json("j/hymission-overview-state",lambda s:s["active"] and s["phase"]=="active","compact")
+            assert len(compact["tile_groups"])==3
+            shown={t["activeWorkspace"]["id"] for t in tiles_state()}
+            clients_by_address={v["address"]:v for v in json.loads(request("j/clients"))}
+            assert all(clients_by_address[v["address"]]["workspace"]["id"] in shown for v in compact["windows"])
+            evaluate('hl.plugin.hymission.close()')
+            wait_json("j/hymission-overview-state",lambda s:not s["active"],"compact-closed")
+            for client in processes[2:]:
+                if client.poll() is None: client.terminate()
+            wait_json("j/clients",lambda cs:not cs,"clients-closed")
+            evaluate('hl.plugin.hymission.open("onlycurrentworkspace")')
+            empty=wait_json("j/hymission-overview-state",lambda s:s["active"] and s["phase"]=="active","empty-strip")
+            assert not empty["windows"] and len(empty["tile_groups"])==3 and {e["tile_id"] for e in empty["strip"]}=={t["id"] for t in tiles_state()}
+            capture("empty-strip")
+            (root/"empty-strip.json").write_text(json.dumps(empty,indent=2))
+            evaluate('hl.plugin.hymission.close()')
+            wait_json("j/hymission-overview-state",lambda s:not s["active"],"empty-closed")
+            # A managed single-tile output must also route requests to a tile
+            # on another physical output, including explicit native swaps.
+            result=request("/output create wayland TILES-SECOND")
+            assert result.strip()=="ok",result
+            second_monitors=wait_json("j/monitors",lambda ms:len(ms)==2 and all(m["width"]>0 and m["activeWorkspace"]["id"]>0 for m in ms),"second-output")
+            (root/"second-monitors.json").write_text(json.dumps(second_monitors,indent=2))
+            topology=wait_json("j/hymission-tiles-state",lambda state:len(state["tiles"])==4,"second-topology")
+            primary=[t for t in topology["tiles"] if t["monitor"]==monitors[0]["name"]]
+            secondary=next(t for t in topology["tiles"] if t["monitor"]=="TILES-SECOND")
+            evaluate(f'hl.dispatch(hl.dsp.focus({{workspace={primary[-1]["activeWorkspace"]["id"]}}}))')
+            evaluate(f'hl.dispatch(hl.dsp.focus({{workspace={secondary["activeWorkspace"]["id"]}}}))')
+            assert next(t for t in tiles_state() if t["focused"])["monitor"]=="TILES-SECOND"
+            old_secondary=secondary["activeWorkspace"]["id"]
+            requested=primary[0]
+            evaluate(f'hl.dispatch(hl.dsp.focus({{workspace={requested["activeWorkspace"]["id"]},on_current_monitor=true}}))')
+            swapped=tiles_state()
+            assert next(t for t in swapped if t["monitor"]=="TILES-SECOND")["activeWorkspace"]["id"]==requested["activeWorkspace"]["id"],swapped
+            assert next(t for t in swapped if t["monitor"]==requested["monitor"] and t["id"]==requested["id"])["activeWorkspace"]["id"]==old_secondary,swapped
+            assert all(next(n for n in swapped if n["monitor"]==t["monitor"] and n["id"]==t["id"])["activeWorkspace"]==t["activeWorkspace"] for t in primary[1:]),swapped
+            evaluate('hl.workspace_rule({workspace="name:tiles-bound",monitor="TILES-SECOND",persistent=true})')
+            evaluate('hl.dispatch(hl.dsp.focus({monitor="'+monitors[0]["name"]+'"}))')
+            evaluate('hl.dispatch(hl.dsp.focus({workspace="name:tiles-bound"}))')
+            bound=next(t for t in tiles_state() if t["focused"])
+            assert bound["monitor"]=="TILES-SECOND" and bound["activeWorkspace"]["address"]=="tiles-bound",bound
+            used={ws["id"] for ws in json.loads(request("j/workspaces")) if "id" in ws}
+            restricted=next(i for i in range(1,10000) if i not in used)
+            evaluate(f'hl.workspace_rule({{workspace="{restricted}",monitor="{monitors[0]["name"]}"}})')
+            primary_before={t["id"]:t["activeWorkspace"] for t in tiles_state() if t["monitor"]==monitors[0]["name"]}
+            evaluate('hl.plugin.hymission.tile_add()')
+            assert next(t for t in tiles_state() if t["focused"])["activeWorkspace"]["id"]!=restricted
+            evaluate('hl.plugin.hymission.tile_add()')
+            assert len([t for t in tiles_state() if t["monitor"]=="TILES-SECOND"])==3
+            assert "three" in request('/eval hl.plugin.hymission.tile_add()')
+            assert {t["id"]:t["activeWorkspace"] for t in tiles_state() if t["monitor"]==monitors[0]["name"]}==primary_before
+            (root/"two-output-state.json").write_text(request("j/hymission-tiles-state"))
+            result=request("/output remove TILES-SECOND")
+            assert result.strip()=="ok",result
+            wait_json("j/hymission-tiles-state",lambda state:len(state["monitors"])==1 and len(state["tiles"])==3,"second-removed")
+            evaluate('hl.config({plugin={hymission={tiles_enabled=0}}}); hl.plugin.hymission_tiles_test.refresh()')
+            disabled=wait_json("j/hymission-tiles-state",lambda s:not s["enabled"],"tiles-disabled")
+            assert disabled["tiles"]==[]
+            print("PASS: isolated real clients; Stage cancel/return/split/group/column/desktop; overview groups/grids/click/current/empty; fullscreen/maximize/pin/special; two-output focus/swap/binding; disable")
         (root / "state.json").write_text(request("j/hymission-tiles-state"))
         (root / "configerrors.txt").write_text(request("/configerrors"))
         print("PASS: private nested compositor, default-off, add/max-three/focus/resize/remove and state geometry")

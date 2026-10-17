@@ -75,7 +75,7 @@ inline bool install(HANDLE handle, OverviewController* owner) {
         }
         if (!address)
             return false;
-        auto* hook = hooks::create(handle, address, reinterpret_cast<void*>(thunk));
+        auto* hook = hooks::create(handle, address, hooks::target(thunk));
         if (!hook)
             return false;
         hooks.push_back(hook);
