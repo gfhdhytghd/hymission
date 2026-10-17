@@ -835,6 +835,7 @@ class OverviewController {
     [[nodiscard]] bool windowMatchesActiveSearch(const PHLWINDOW& window) const;
     [[nodiscard]] const SpatialPickMap& spatialPickMapForCurrentState() const;
     void notify(const std::string& message, const CHyprColor& color, float durationMs) const;
+    bool initFailed(const std::string& reason);
     void warnAboutDeprecatedExpansionConfig();
     void warnAboutVimLabels();
     void debugLog(const std::string& message) const;
@@ -1099,6 +1100,7 @@ class OverviewController {
     bool                      m_searchActive = false;
     bool                      m_searchPreeditActive = false;
     bool                      m_searchFailureNotified = false;
+    std::string               m_initError;
 };
 
 } // namespace hymission
