@@ -363,3 +363,26 @@ fullscreen 的 set/sync 都使用 tile allocation；layout-aware scrolling fulls
 topology generation 变化会使旧拖拽失效，并通知 Stage/overview 重建分组；overview 的选中放大、邻居避让与命中都限制在同一 tile。strip 预览裁取本 tile 的原生 surface 视区，避免把完整物理 monitor 压成窄条。边缘渲染继续只使用 Stage 的原生 pass capture/effect 服务。
 
 设计中的硬件输入、HDR/混合输出、性能预算及协议边界是验收要求，不能因软件隔离测试通过而视为已完成；实际覆盖与 PENDING 项逐项列于验收记录。
+
+
+## 2026-10-17 真机反馈后的交互修订
+
+多 tile 时，Stage sidebar 和 workspace strip 的所有列都集中在物理输出最左侧，
+每个 tile 一列，顺序与 tile 的水平顺序一致。列的点击、跨列窗口/组拖放及拖出 split
+仍使用原 tile ID 和统一交互 owner。Stage 限制总列宽，避免最左 tile 的桌面失去
+可用宽度；只对被左侧列带覆盖的桌面区域保留空间，不在每个 tile 重复留白。
+多 tile 下不再使用 Smartisan 左右交替列的位置。单 tile / capability 关闭保持原行为。
+
+布局 work area 继续避开 bar 的 reserved area；渲染裁剪独立于布局区域，native
+桌面内容的垂直装饰/阴影可扩展到输出边缘，overview 和 Stage 预览则使用自己的
+目标坐标和预览 clip，不叠加 native tile clip。保留旧版顶部保护及回归测试。
+
+多 tile workspace 切换采用原生 workspace 动画配置（方向、时长、曲线、style），
+只把水平/垂直行程映射到当前 tile 的范围。窗口在固定 tile viewport 内移动，其他
+分块不参与。swipe 的 commit/cancel 从当前预览位移连续收尾，不先跳回桌面或重新
+从整屏边缘启动动画。通过中间帧状态采样和私有 compositor 截图核实。
+
+all / forceall 在每个物理输出内统一排列所有 workspace 的窗口，恢复全屏 overview
+的布局与命中语义；不按 tile 分组窗口。仅 onlycurrentworkspace（ws overview）把每个
+正在呈现的 tile workspace 分别排在其 tile 区域。strip 的左侧多列归属不随这两种
+窗口布局范围变化，点击仍只切换对应列的 tile。

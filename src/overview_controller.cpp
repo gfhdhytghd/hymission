@@ -8519,13 +8519,14 @@ Rect OverviewController::overviewContentRectForMonitor(const PHLMONITOR& monitor
 }
 
 Rect OverviewController::tileStripBand(const PHLMONITOR& monitor,uint64_t tile,const State& state) const {
-    if (!tile || !TilesController::get()) return workspaceStripBandRectForMonitor(monitor,state);
-    for (const auto& view:TilesController::get()->views(monitor)) if (view.id==tile) {
-        const bool top=workspaceStripAnchor()=="top";
-        const double thickness=std::min(workspaceStripThickness(monitor),(top?view.allocation.h:view.allocation.w)*0.30);
-        const auto r=reserveWorkspaceStripBand({view.allocation.x,view.allocation.y,view.allocation.w,view.allocation.h},parseWorkspaceStripAnchor(workspaceStripAnchor()),thickness,workspaceStripGap());
-        return {r.band.x,r.band.y,r.band.width,r.band.height};
-    }
+    if (!tile || !TilesController::get() || !TilesController::get()->enabled(monitor)) return workspaceStripBandRectForMonitor(monitor,state);
+    const auto views=TilesController::get()->views(monitor);
+    const auto available=monitor->logicalBoxMinusReserved();
+    double narrowest=available.w;
+    for (const auto& view:views) narrowest=std::min(narrowest,view.allocation.w);
+    const double width=std::min(workspaceStripThickness(monitor),narrowest*.5/views.size());
+    for (size_t i=0;i<views.size();++i) if (views[i].id==tile)
+        return {available.x+i*width,available.y,width,available.h};
     return {};
 }
 Rect OverviewController::tileContentRect(const PHLMONITOR& monitor,uint64_t tile,const State& state) const {
@@ -8534,10 +8535,10 @@ Rect OverviewController::tileContentRect(const PHLMONITOR& monitor,uint64_t tile
         const auto b=view.allocation.intersection(monitor->logicalBoxMinusReserved());
         Rect area{b.x-monitor->m_position.x,b.y-monitor->m_position.y,b.w,b.h};
         if (!workspaceStripEnabled(state)) return area;
-        const bool top=workspaceStripAnchor()=="top";
-        const double thickness=std::min(workspaceStripThickness(monitor),(top?b.h:b.w)*0.30);
-        const auto r=reserveWorkspaceStripBand(area,parseWorkspaceStripAnchor(workspaceStripAnchor()),thickness,workspaceStripGap());
-        return {r.content.x,r.content.y,r.content.width,r.content.height};
+        const auto views=TilesController::get()->views(monitor);
+        const auto band=tileStripBand(monitor,views.back().id,state);
+        const double left=std::clamp(band.x+band.width+workspaceStripGap()-monitor->m_position.x,area.x,area.x+area.width-1);
+        return {left,area.y,area.x+area.width-left,area.height};
     }
     return {};
 }
@@ -14937,7 +14938,10 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
                 }
                 auto band=tileStripBand(monitor,view.id,state);
                 const double inset=std::min({8.0,band.width/8,band.height/8});
-                const auto slots=tiles::thumbnailGrid({band.x+inset,band.y+inset,band.width-inset*2,band.height-inset*2},group.size(),horizontal,view.allocation.w/std::max(1.0,view.allocation.h));
+                std::vector<tiles::Box> slots;
+                const double width=std::max(1.0,band.width-inset*2);
+                const double height=std::min(width*view.allocation.h/std::max(1.0,view.allocation.w),std::max(1.0,(band.height-inset*(group.size()+1))/group.size()));
+                for (size_t i=0;i<group.size();++i) slots.push_back({band.x+inset,band.y+inset+i*(height+inset),width,height});
                 for (size_t i=0;i<slots.size();++i) { const auto& b=slots[i]; group[i].rect={b.x,b.y,b.width,b.height}; }
                 state.stripEntries.insert(state.stripEntries.end(),group.begin(),group.end());
             }

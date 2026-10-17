@@ -389,6 +389,12 @@ def main():
             drag_from(*remaining,source_tile["x"]+source_tile["width"]*0.8,340)
             wait_json("j/hymission-tiles-state",lambda s:len(s["tiles"])==3,"split-three")
             stage=stage_ready(3)
+            columns=sorted(stage["screens"],key=lambda sc:next(t["x"] for t in tiles_state() if t["id"]==sc["tile_id"]))
+            assert all(sc["sidebar_side"]=="left" for sc in columns)
+            assert abs(columns[0]["sidebar"]["x"]-monitors[0]["x"])<1
+            for a,b in zip(columns,columns[1:]):
+                assert abs(a["sidebar"]["x"]+a["sidebar"]["width"]-b["sidebar"]["x"])<1
+            assert columns[-1]["sidebar"]["x"]+columns[-1]["sidebar"]["width"]<expected_width*.4
             (root / "stage-three.json").write_text(json.dumps(stage,indent=2))
             capture("stage-three")
             # Stage's adjacent column must yield divider input to the shared owner.
@@ -517,12 +523,20 @@ def main():
                 evaluate(f'hl.config({{plugin={{hymission={{workspace_strip_anchor="{anchor}"}}}}}})')
                 evaluate('hl.plugin.hymission.open("forceall")')
                 ov=wait_json("j/hymission-overview-state",lambda s:s["active"] and s["phase"]=="active" and not s.get("relayout_active",False) and len(s.get("tile_groups",[]))==3,"overview")
+                grouped={t["id"]:[e for e in ov["strip"] if e["tile_id"]==t["id"]] for t in tiles_state()}
+                previous_right=-1
+                for t in tiles_state():
+                    entries=grouped[t["id"]]
+                    assert entries and len({round(e["geometry"]["x"],3) for e in entries})==1
+                    left=min(e["geometry"]["x"] for e in entries); right=max(e["geometry"]["x"]+e["geometry"]["width"] for e in entries)
+                    assert left>previous_right and right<(max(t["x"]+t["width"] for t in tiles_state())-min(t["x"] for t in tiles_state()))*.31,(left,right,previous_right,ov["strip"])
+                    previous_right=right
                 (root / ("overview-"+anchor+".json")).write_text(json.dumps(ov,indent=2))
                 capture("overview-"+anchor)
                 assert {e["tile_id"] for e in ov["strip"]}=={t["id"] for t in tiles_state()}
                 for tile in tiles_state():
                     entries=[e for e in ov["strip"] if e["tile_id"]==tile["id"]]
-                    if len(entries)>1: assert len({round(e["geometry"]["y" if anchor=="top" else "x"],2) for e in entries})>1
+                    if len(entries)>1: assert len({round(e["geometry"]["y"],2) for e in entries})>1
                 by_id={t["id"]:t for t in tiles_state()}
                 for win in ov["windows"]:
                     t=by_id[win["tile_id"]]; b=win["contentGeometry"]
