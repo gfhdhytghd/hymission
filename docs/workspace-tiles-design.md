@@ -425,3 +425,18 @@ ws-only overview 内切换 tile workspace 时，目标 binding 的原生 renderO
 目标 tile/workspace 绑定，通过现有 activation 事务移窗。Esc 取消、pinned、special、
 resize 和 capability 关闭不提交迁移。ws-only overview 拖入空 tile 时以其 desktop
 作为 fallback drop target，窗口和整组继续使用现有 OverviewDrag/settlement 事务。
+
+
+## Stage 多窗口截图复查
+
+用户确认：卡片保持完整显示器的比例，只展示所属 tile 当前可见区域。
+卡片中的 tile viewport 等比居中，窗口绘制、blur/fade、capture clip、拖放和
+Stage/overview flight 端点均使用这块映射后的 viewport；不能把卡片两侧留白
+当成 scrolling tape 的额外可见范围。左侧第二/第三列的输出 clip 仍是物理显示器，
+不能使用原 tile 的 desktop 区域来裁剪已经集中到最左边的卡片。
+
+scrolling camera offset 与 inhibition offset 是 viewport 的逻辑像素距离。
+tile 分割/调整、Stage 开关和关闭 tiles 导致 work-area 主轴尺寸改变时，
+在 native -> tile geometry -> Stage reservation 的最终 work area 外层按尺寸比例
+重标定这两个 offset，保留相同的相机位置，避免多窗口全部落到缩略图之外。
+默认关闭没有该 hook；普通单 tile 路径不额外取得 viewport 所有权。

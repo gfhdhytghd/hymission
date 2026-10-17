@@ -101,14 +101,72 @@ def run(case,request,root,env,runtime,processes,handles):
                     assert pixel[1]>120 and pixel[0]<90,('target workspace is visually blank after ws strip exit',stage,side,finish,pixel,client,tile)
         print('PASS: both tile strip switches survive ws overview teardown with visible rendered clients, Stage off/on and Esc/close')
         return
-    if case=='stage':
+    if case in ('stage','stage-multi'):
         evaluate('hl.monitor({output="",mode="6144x3456@60",position="auto",scale="2",reserved={top=58,right=0,bottom=0,left=0}}); hl.config({general={layout="scrolling"},scrolling={column_width=.85,fullscreen_on_one_column=true,focus_fit_method=1},plugin={hymission={niri_mode=0,stage_transition_ms=0}}})')
         wait('j/monitors',lambda ms:ms[0]['scale']==2 and ms[0]['width']==6144)
-        for ws in (501,502,503,504):spawn(ws)
-        evaluate('hl.dispatch(hl.dsp.focus({workspace=501})); hl.plugin.hymission.tile_add({workspace="503"}); hl.dispatch(hl.dsp.focus({workspace=504})); hl.dispatch(hl.dsp.focus({workspace=503})); hl.plugin.hymission.tile_focus("left"); hl.config({plugin={hymission={stage_enabled=1}}}); hl.plugin.hymission.stage_open()')
+        for ws in (501,502,503,504):
+            spawn(ws)
+            if case=='stage-multi':
+                spawn(ws)
+                spawn(ws)
+        evaluate('hl.dispatch(hl.dsp.focus({workspace=501})); hl.plugin.hymission.tile_add({workspace="503"}); hl.dispatch(hl.dsp.focus({workspace=504})); hl.dispatch(hl.dsp.focus({workspace=503})); hl.plugin.hymission.tile_focus("left")')
+        time.sleep(.15);before_stage=read('j/clients')
+        evaluate('hl.config({plugin={hymission={stage_enabled=1}}}); hl.plugin.hymission.stage_open()')
         s=wait('j/hymission-stage-state',lambda s:s['visibility_progress']==1 and len(s['screens'])==2 and all(sc['cards'] and all(c.get('windows') for c in sc['cards']) for sc in s['screens']))
         time.sleep(.2);s=read('j/hymission-stage-state')
         image=capture('stage-hidpi-scrolling')
+        if case=='stage-multi':
+            (root/'stage-multi-state.json').write_text(json.dumps(s,indent=2))
+            capture('stage-multi-scrolling')
+            # A workspace card must not expose pieces of scrolling columns
+            # beyond its mapped tile viewport in the letterbox margins.
+            for sc in s['screens']:
+                desk=sc['desktop_geometry']
+                for c in sc['cards']:
+                    z=min(c['width']/desk['width'],c['height']/desk['height'])
+                    left=c['x']+(c['width']-desk['width']*z)/2
+                    right=left+desk['width']*z
+                    assert any(w['x']+w['width']>left+2 and w['x']<right-2 for w in c['windows']),('occupied Stage workspace completely outside its own viewport',sc['tile_id'],c)
+                    visible=max(c['windows'],key=lambda w:max(0,min(right,w['x']+w['width'])-max(left,w['x'])))
+                    px=(max(left,visible['x'])+min(right,visible['x']+visible['width']))/2
+                    pixel=image.getpixel((int(px*2),int((c['y']+c['height']/2)*2)))
+                    assert pixel[1]>180 and pixel[0]<80,('occupied Stage viewport rendered blank',sc['tile_id'],c,pixel)
+                    samples=[image.getpixel((int(x*2),int((c['y']+c['height']/2)*2)))
+                        for x in (left-12,right+12) if c['x']+2<x<c['x']+c['width']-2]
+                    assert all(p[1]<150 for p in samples),('off-viewport scrolling window leaked into card padding',sc['tile_id'],c,samples)
+            (root/'stage-multi-native-before.json').write_text(json.dumps(before_stage,indent=2))
+            # Repeated open/close must not accumulate camera scaling errors.
+            for cycle in range(3):
+                evaluate('hl.plugin.hymission.stage_close()')
+                wait('j/hymission-stage-state',lambda s:s['visibility_progress']==0)
+                time.sleep(.15);closed=read('j/clients')
+                for before in before_stage:
+                    current=next(c for c in closed if c['address']==before['address'])
+                    assert max(abs(x-y) for x,y in zip(before['at']+before['size'],current['at']+current['size']))<=3,('scroll camera drift after Stage cycle',cycle,before,current)
+                evaluate('hl.plugin.hymission.stage_open()')
+                wait('j/hymission-stage-state',lambda s:s['visibility_progress']==1)
+                time.sleep(.15)
+            for width,fraction in (('40%',.4),('50%',.5)):
+                evaluate('hl.plugin.hymission.tile_focus("left"); hl.plugin.hymission.tile_resize({width="'+width+'"})')
+                wait('j/hymission-stage-state',lambda s:len(s['screens'])==2 and abs(s['screens'][0]['base']['width']-3072*fraction)<1)
+                time.sleep(.2);resized=read('j/hymission-stage-state');capture('stage-multi-resized-'+width[:-1])
+                for sc in resized['screens']:
+                    desk=sc['desktop_geometry']
+                    for c in sc['cards']:
+                        z=min(c['width']/desk['width'],c['height']/desk['height'])
+                        left=c['x']+(c['width']-desk['width']*z)/2;right=left+desk['width']*z
+                        assert any(w['x']+w['width']>left+2 and w['x']<right-2 for w in c['windows']),('scroll camera lost workspace during tile resize',width,sc,c)
+            fresh=read('j/hymission-stage-state')
+            sc=next(sc for sc in fresh['screens'] if sc['tile_id']==tiles()[1]['id'])
+            card=next(c for c in sc['cards'] if c['workspace']==504)
+            candidate=max(card['windows'],key=lambda w:w['x'])
+            evaluate('hl.plugin.hymission.open("forceall")')
+            ov=wait('j/hymission-overview-state',lambda s:s['phase']=='active' and not s['relayout_active'])
+            w=next(w for w in ov['windows'] if w['address']==candidate['address'])
+            assert abs(w['animationFromGeometry']['x']-candidate['x'])<3,('right-column Stage origin clipped by tile home instead of output',candidate,w)
+            evaluate('hl.plugin.hymission.close()');wait('j/hymission-overview-state',lambda s:not s['active'])
+            print('PASS: multi-window Stage visibility/clipping, three camera cycles, tile resize and right-column overview origin')
+            return
         for sc in s['screens']:
             for c in sc['cards']:
                 ws=c['workspace']

@@ -50,8 +50,9 @@
 #define private public
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
-#undef private
 #include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
+#undef private
+#include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollTapeController.hpp>
 #include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingFullscreenHandler.hpp>
 #include <hyprland/src/managers/fullscreen/handler/FullscreenHandler.hpp>
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
@@ -90,7 +91,7 @@ struct TilesController::Impl {
     UP<SEventLoopDoLaterLock> deferred;
     bool ready = false, applying = false, frameFanout = false, stopping = false;
     std::string initError, edgeFailure;
-    bool softEdgeDrawn=false, nativeDropCancelled=false;
+    bool softEdgeDrawn=false, nativeDropCancelled=false, collapsing=false;
     std::map<WorkspaceKey,std::pair<PHLMONITORREF,tiles::Id>> homes;
     Owner interaction = Owner::None;
     struct Swipe {
@@ -280,7 +281,7 @@ struct TilesController::Impl {
     inline static hooks::Lease *typedHook, *typedCurrentHook, *stringHook, *stringCurrentHook, *resolverHook, *previousHook, *previousMonitorHook,
         *directionHook, *moveHook, *placementHook, *swapHook, *swipeBeginHook, *swipeUpdateHook, *swipeEndHook, *swipeCancelHook;
     inline static hooks::Lease *pointerHook, *fsHasHook, *fsModesHook, *fsWindowHook, *fsFadeHook, *layerHook, *layerHitHook;
-    inline static hooks::Lease *dragEndHook, *logicalBoxHook, *scrollRecalculateHook, *scrollFocusHook, *scrollRequestHook, *scrollColumnHook;
+    inline static hooks::Lease *cameraAreaHook, *dragEndHook, *logicalBoxHook, *scrollRecalculateHook, *scrollFocusHook, *scrollRequestHook, *scrollColumnHook;
 
     struct LayoutScope {
         PHLWORKSPACE previous;
@@ -338,6 +339,27 @@ struct TilesController::Impl {
         const auto space=HandlerAccess::space(handler);
         LayoutScope scope{space?space->workspace():nullptr};
         return reinterpret_cast<decltype(&scrollColumn)>(scrollColumnHook->m_original)(handler);
+    }
+    static void cameraArea(Layout::CSpace* space) {
+        const auto ws=space?space->workspace():nullptr;
+        const auto mon=ws?ws->m_monitor.lock():nullptr;
+        auto* scrolling=ws && ws->type()!=Workspace::eWorkspaceType::SPECIAL && space->algorithm() ?
+            dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(space->algorithm()->tiledAlgo().get()):nullptr;
+        auto* controller=scrolling && scrolling->m_scrollingData?scrolling->m_scrollingData->controller.get():nullptr;
+        const bool remap=controller && self->ready && (self->active(mon) || self->applying || self->collapsing);
+        const bool horizontal=controller && controller->isPrimaryHorizontal();
+        const auto before=space->workArea();
+        reinterpret_cast<decltype(&cameraArea)>(cameraAreaHook->m_original)(space);
+        if (!remap) return;
+        const auto after=space->workArea();
+        const double from=horizontal?before.w:before.h,to=horizontal?after.w:after.h;
+        if (from<=1 || to<=1 || std::abs(from-to)<.001) return;
+        // Scroll offsets are distances in the old viewport, not column indices.
+        // Follow the final work area after both Tiles and Stage reservations.
+        const double ratio=to/from;
+        const double offset=controller->getOffset()*ratio;
+        controller->getScrollInhibitor().offsetWhenInhibited*=ratio;
+        controller->setOffset(offset);
     }
     static void area(Layout::CSpace* space) {
         // Rebuild native monitor gaps/reserved areas in physical coordinates.
@@ -929,7 +951,7 @@ struct TilesController::Impl {
 };
 
 bool TilesController::Impl::install() {
-    return attach("dragEnd", &dragEnd, dragEndHook,20) && attach("logicalBox", &logicalBox, logicalBoxHook) && attach("scrollRecalculate", &scrollRecalculate, scrollRecalculateHook) &&
+    return attach("recheckWorkArea", &cameraArea, cameraAreaHook,20) && attach("dragEnd", &dragEnd, dragEndHook,20) && attach("logicalBox", &logicalBox, logicalBoxHook) && attach("scrollRecalculate", &scrollRecalculate, scrollRecalculateHook) &&
         attach("scrollFocus", &scrollFocus, scrollFocusHook) && attach("scrollFullscreenRequest", &scrollRequest, scrollRequestHook) && attach("scrollFullscreenColumn", &scrollColumn, scrollColumnHook) &&
         attach("mouseMoveUnified", &pointerInput, pointerHook) && attach("hasFullscreenWorkspace", &fsHas, fsHasHook) &&
         attach("fullscreenModesWorkspace", &fsModes, fsModesHook) && attach("fullscreenWindowWorkspace", &fsWindow, fsWindowHook) &&
@@ -1070,6 +1092,8 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp, bool i
         (transfer->targetMonitor==mon && transfer->targetGeneration!=o.model.state().generation))) instance->finishTransfer(false);
 }
 void TilesController::Impl::collapse() {
+    collapsing=true;
+    Hyprutils::Utils::CScopeGuard restoreCameraScope{[this] { collapsing=false; }};
     if (transfer) { transfer.reset(); interaction=Owner::None; }
     endResize(true);
     cancelSwipe();

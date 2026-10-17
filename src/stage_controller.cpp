@@ -525,7 +525,9 @@ struct StageController::Impl {
     void captureWindowPasses(Render::IHyprRenderer* renderer, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport, const std::function<void()>& render,
                              std::optional<Rect> overviewClip = std::nullopt, bool separateFadeouts = false);
     stage::EdgeViewport desktopViewport(const Screen& screen) const;
+    CBox cardDesktopViewport(const Screen&,const CBox& card) const;
     stage::EdgeViewport cardViewport(const CBox& card) const;
+    stage::EdgeViewport cardViewport(const Screen&,const CBox& card) const;
     std::pair<Rect, std::optional<stage::EdgeViewport>> flightFrame(const Flight& flight, double progress, const PHLMONITOR& monitor) const;
     void retargetFlight(Flight& flight, double progress, const PHLMONITOR& monitor);
     void startFlights(Screen& screen, WorkspaceKey previous, const std::vector<Card>& oldCards, const stage::Geometry& oldGeometry, double oldScroll, bool oldRight,
@@ -2286,7 +2288,7 @@ void StageController::Impl::updateDragHover() {
         dragHover->tiled = tiled;
     } else
         dragHover->to = target;
-    dragHover->toViewport = onDesktop ? desktopViewport(*screen) : cardViewport(card);
+    dragHover->toViewport = onDesktop ? desktopViewport(*screen) : cardViewport(*screen,card);
     g_pHyprRenderer->damageMonitor(monitor);
     if (window->m_monitor != monitor)
         g_pHyprRenderer->damageMonitor(window->m_monitor.lock());
@@ -2474,7 +2476,7 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
                 clearDragHover();
                 dragHover = DragHover{window, screen->monitor, card.workspace, card.syntheticId, box, box, Clock::now()};
                 dragHover->tiled = !window->isFloating();
-                dragHover->fromViewport = dragHover->toViewport = cardViewport(CBox{origin, {screen->geometry.cardWidth, screen->geometry.cardHeight}});
+                dragHover->fromViewport = dragHover->toViewport = cardViewport(*screen,CBox{origin, {screen->geometry.cardWidth, screen->geometry.cardHeight}});
                 g_pSeatManager->setPointerFocus(nullptr, {});
                 armMotion();
                 damage(*screen);
@@ -2792,7 +2794,7 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
                         if (edgeTransfer || scrollingTiled(window)) {
                             screen->flights.back().fromViewport = edgeTransfer ? originViewport.value_or(desktopViewport(*screen)) :
                                 stage::edgeViewport(rect(dropOrigin), 0, 0);
-                            screen->flights.back().toViewport = cardViewport(CBox{sidebar(*screen).x + screen->geometry.padding,
+                            screen->flights.back().toViewport = cardViewport(*screen,CBox{sidebar(*screen).x + screen->geometry.padding,
                                 screen->base.y + cardTop(*screen, std::distance(screen->cards.begin(), card)), screen->geometry.cardWidth, screen->geometry.cardHeight});
                         }
                         screen->flights.back().edgeTransfer = edgeTransfer;
@@ -2958,6 +2960,8 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
             continue;
         }
         if (card.previewsReady) {
+            const auto workspaceViewport=cardDesktopViewport(*screen,box);
+            const auto workspaceClip=physical(workspaceViewport).intersection(cardClip);
             for (const auto& preview : card.previews) {
                 const auto window = preview.window.lock();
                 if (!window || !window->mapped() || window->isHidden() || static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED) || window->m_workspace != workspace || flying(*screen, window) || thumbnailDrag == window || (TilesController::get() && TilesController::get()->transferDragging() && TilesController::get()->transferMember(window)))
@@ -2968,11 +2972,11 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
                 // Export the geometry actually drawn into this frame, including
                 // slide/scroll offsets and card/output clipping. Consumers select
                 // the preview but capture the native window by its address.
-                const CBox logicalClip = cardClip.copy().scale(1.0 / monitor->m_scale).translate(monitor->m_position);
+                const CBox logicalClip = workspaceClip.copy().scale(1.0 / monitor->m_scale).translate(monitor->m_position);
                 const CBox visible = target.intersection(logicalClip);
                 double renderedRounding = 0;
-                drawPreview(window, monitor, target, cardClip, radius,
-                    (window->isFloating() || scrollingTiled(window)) ? std::optional{cardViewport(box)} : std::nullopt, &renderedRounding);
+                drawPreview(window, monitor, target, workspaceClip, radius,
+                    (window->isFloating() || scrollingTiled(window)) ? std::optional{cardViewport(workspaceViewport)} : std::nullopt, &renderedRounding);
                 if (previewLayer(window) != stage::PreviewLayer::Hidden && visible.w >= 1 && visible.h >= 1)
                     screen->capturePreviews.push_back({window, target, logicalClip, renderedRounding});
             }
@@ -3256,7 +3260,7 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
                 const auto miniatureView = [&](const std::vector<Card>& cards, const stage::Geometry& geometry, double scroll, bool right) -> std::optional<stage::EdgeViewport> {
                     const auto area = stage::desktopArea(rect(screen.base), geometry, right);
                     const auto view = miniature(workspace, box(area), cards, geometry, scroll, right, window, false);
-                    return view ? std::optional{cardViewport(*view)} : std::nullopt;
+                    return view ? std::optional{cardViewport(screen,*view)} : std::nullopt;
                 };
                 if (old != previousFlights.end())
                     flight.fromViewport = flightFrame(*old, oldProgress, monitor).second;
@@ -3299,9 +3303,21 @@ stage::EdgeViewport StageController::Impl::desktopViewport(const Screen& screen)
     return stage::edgeViewport(rect(desktop(screen)), screen.right ? 0 : width, screen.right ? width : 0);
 }
 
+CBox StageController::Impl::cardDesktopViewport(const Screen& screen,const CBox& card) const {
+    if (!clustered(screen)) return card;
+    const auto area=desktop(screen);
+    const double scale=std::min(card.w/area.w,card.h/area.h);
+    const auto size=area.size()*scale;
+    return CBox{card.middle()-size/2,size};
+}
+
 stage::EdgeViewport StageController::Impl::cardViewport(const CBox& card) const {
     const double width = blurFramebufferHook ? setting("stage_scrolling_preview_edge_width", 16) : 0;
     return stage::edgeViewport(rect(card), width, width, width, width);
+}
+
+stage::EdgeViewport StageController::Impl::cardViewport(const Screen& screen,const CBox& card) const {
+    return cardViewport(cardDesktopViewport(screen,card));
 }
 
 std::pair<Rect, std::optional<stage::EdgeViewport>> StageController::Impl::flightFrame(const Flight& flight, double progress, const PHLMONITOR& monitor) const {
@@ -3601,7 +3617,7 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
                     flight.to = preview->target.copy().translate(Vector2D{sidebar(screen).x + screen.geometry.padding,
                         screen.base.y + cardTop(screen, std::distance(screen.cards.begin(), card))});
                     if (flight.toViewport)
-                        flight.toViewport = cardViewport(CBox{sidebar(screen).x + screen.geometry.padding,
+                        flight.toViewport = cardViewport(screen,CBox{sidebar(screen).x + screen.geometry.padding,
                             screen.base.y + cardTop(screen, std::distance(screen.cards.begin(), card)), screen.geometry.cardWidth, screen.geometry.cardHeight});
                 }
             }
@@ -4048,7 +4064,7 @@ std::optional<stage::OverviewEndpoint> StageController::Impl::cardEndpoint(const
     } else if (!settled)
         offset = (screen.right ? 1 : -1) * (1 - screen.shown * visibility) * screen.geometry.bandWidth;
     const auto area = sidebar(screen);
-    const CBox output=screen.tile?screen.base:CBox{monitor->m_position,monitor->m_size};
+    const CBox output{monitor->m_position,monitor->m_size};
     const CBox strip{area.x + offset, area.y + screen.geometry.paddingTop, area.w,
                      area.h - screen.geometry.paddingTop - screen.geometry.paddingBottom};
     for (std::size_t i = 0; i < screen.cards.size(); ++i) {
@@ -4062,13 +4078,14 @@ std::optional<stage::OverviewEndpoint> StageController::Impl::cardEndpoint(const
             if (preview.window != window)
                 continue;
             const Rect target = rect(preview.target.copy().translate(cardBox.pos()));
-            auto viewport = (window->isFloating() || scrollingTiled(window)) ? stage::edgeViewportForWindow(cardViewport(cardBox), target) :
-                stage::edgeViewport(rect(cardBox), 0, 0);
+            const auto workspaceViewport=cardDesktopViewport(screen,cardBox);
+            auto viewport = (window->isFloating() || scrollingTiled(window)) ? stage::edgeViewportForWindow(cardViewport(workspaceViewport), target) :
+                stage::edgeViewport(rect(workspaceViewport), 0, 0);
             if (screen.right ? viewport.right > 0 : viewport.left > 0) {
                 viewport.fixedOuterEdge = screen.right ? stage::FixedOuterEdge::Right : stage::FixedOuterEdge::Left;
-                viewport.fixedOuterX = screen.right ? cardBox.x + cardBox.w : cardBox.x;
+                viewport.fixedOuterX = screen.right ? workspaceViewport.x + workspaceViewport.w : workspaceViewport.x;
             }
-            const CBox clip = cardBox.intersection(strip).intersection(output);
+            const CBox clip = workspaceViewport.intersection(strip).intersection(output);
             return stage::OverviewEndpoint{target, viewport, previewLayer(window) == stage::PreviewLayer::Hidden ? Rect{} : rect(clip)};
         }
     }
