@@ -410,6 +410,8 @@ struct StageController::Impl {
     using FadeoutsFn = void (*)(Render::IHyprRenderer*, Render::CRenderContext&, PHLMONITOR, Desktop::eFadeoutPlane, PHLWORKSPACE);
     StageEdgeEffect edgeEffect;
     bool capturingWindowPasses = false;
+    uint64_t syncCalls=0,drawCalls=0,previewDraws=0,previewCulled=0,nestedCaptures=0;
+    uint64_t drawNanos=0,drawMaxNanos=0;
     SwipeBeginFn swipeBeginOriginal = nullptr;
     bool drawingDecoration = false;
     float decorationRadius = 0;
@@ -525,6 +527,7 @@ struct StageController::Impl {
     void captureWindowPasses(Render::IHyprRenderer* renderer, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport, const std::function<void()>& render,
                              std::optional<Rect> overviewClip = std::nullopt, bool separateFadeouts = false);
     stage::EdgeViewport desktopViewport(const Screen& screen) const;
+    CBox previewFootprint(const PHLWINDOW&,const CBox& target) const;
     CBox cardDesktopViewport(const Screen&,const CBox& card) const;
     stage::EdgeViewport cardViewport(const CBox& card) const;
     stage::EdgeViewport cardViewport(const Screen&,const CBox& card) const;
@@ -1631,6 +1634,7 @@ std::vector<StageController::Impl::Card> StageController::Impl::cardsForWorkspac
 }
 
 void StageController::Impl::sync() {
+    ++syncCalls;
     if (sessionLocked())
         return;
 
@@ -2863,15 +2867,39 @@ void StageController::Impl::renderStage(eRenderStage stage) {
     if (stage == (progress ? RENDER_PRE_WINDOWS : RENDER_POST_WINDOWS)) {
         stagePassQueued = true;
         const PHLMONITORREF ref = monitor;
+        CBox bounds{{},monitor->m_size};
+        if (!progress && !screen->tile && screen->flights.empty() && !screen->paneTransition && !dragHover)
+            bounds=sidebar(*screen).translate(-monitor->m_position);
+        else if (!progress && clustered(*screen) && !dragHover && !TilesController::get()->transferDragging()) {
+            bool first=true,settled=true;
+            CBox combined;
+            for (const auto& column:screens) if (column.monitor==monitor) {
+                settled &= column.flights.empty() && !column.paneTransition;
+                if (!column.geometry.enabled()) continue;
+                const auto band=sidebar(column);
+                if (first) { combined=band; first=false; }
+                else {
+                    const auto end=Vector2D{std::max(combined.x+combined.w,band.x+band.w),std::max(combined.y+combined.h,band.y+band.h)};
+                    combined.x=std::min(combined.x,band.x); combined.y=std::min(combined.y,band.y);
+                    combined.w=end.x-combined.x; combined.h=end.y-combined.y;
+                }
+            }
+            if (settled && !first) bounds=combined.translate(-monitor->m_position);
+        }
         renderContext().m_pass.add(makeUnique<StagePassElement>([this, ref] {
             if (const auto mon = ref.lock())
                 draw(mon);
-        }, !progress && !screen->tile && screen->flights.empty() && !screen->paneTransition && !dragHover ? sidebar(*screen).translate(-monitor->m_position)
-                                  : CBox{{}, monitor->m_size}));
+        }, bounds));
     }
 }
 
 void StageController::Impl::draw(const PHLMONITOR& monitor) {
+    ++drawCalls;
+    const auto started=Clock::now();
+    Hyprutils::Utils::CScopeGuard timeDraw{[&] {
+        const auto ns=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now()-started).count());
+        drawNanos+=ns; drawMaxNanos=std::max(drawMaxNanos,ns);
+    }};
     if (TilesController::get() && TilesController::get()->available()) {
         for (auto& screen:screens) if (screen.monitor==monitor) { drawingScreen=&screen; drawOne(monitor); }
         drawingScreen=nullptr;
@@ -2983,7 +3011,14 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
                 // the preview but capture the native window by its address.
                 const CBox logicalClip = workspaceClip.copy().scale(1.0 / monitor->m_scale).translate(monitor->m_position);
                 const CBox visible = target.intersection(logicalClip);
+                // An off-tape column has no pixels in this card. Do not enter
+                // native surface/edge rendering for it (including CSD bounds).
+                if (clustered(*screen) && previewFootprint(window,target).intersection(logicalClip).empty()) {
+                    ++previewCulled;
+                    continue;
+                }
                 double renderedRounding = 0;
+                ++previewDraws;
                 drawPreview(window, monitor, target, workspaceClip, radius,
                     (window->isFloating() || scrollingTiled(window)) ? std::optional{cardViewport(workspaceViewport)} : std::nullopt, &renderedRounding);
                 if (previewLayer(window) != stage::PreviewLayer::Hidden && visible.w >= 1 && visible.h >= 1)
@@ -3312,6 +3347,16 @@ stage::EdgeViewport StageController::Impl::desktopViewport(const Screen& screen)
     return stage::edgeViewport(rect(desktop(screen)), screen.right ? 0 : width, screen.right ? width : 0);
 }
 
+CBox StageController::Impl::previewFootprint(const PHLWINDOW& window,const CBox& target) const {
+    if (!window) return {};
+    const CBox source{window->positionAnimation()->value(),window->sizeAnimation()->value()};
+    auto footprint=window->getFullWindowBoundingBox();
+    const auto fittedSource=setting("stage_window_decorations",0)?footprint:source;
+    const double scale=std::min(target.w/std::max(1.0,fittedSource.w),target.h/std::max(1.0,fittedSource.h));
+    const auto fitted=target.middle()-fittedSource.size()*scale/2;
+    return footprint.translate(-fittedSource.pos()).scale(scale).translate(fitted);
+}
+
 CBox StageController::Impl::cardDesktopViewport(const Screen& screen,const CBox& card) const {
     if (!clustered(screen)) return card;
     const auto area=desktop(screen);
@@ -3349,6 +3394,11 @@ void StageController::Impl::retargetFlight(Flight& flight, double progress, cons
 
 void StageController::Impl::captureWindowPasses(Render::IHyprRenderer* renderer, const PHLMONITOR& monitor,
                                                const stage::EdgeViewport& viewport, const std::function<void()>& render, std::optional<Rect> overviewClip, bool separateFadeouts) {
+    if (capturingWindowPasses) {
+        ++nestedCaptures;
+        render();
+        return;
+    }
     // Layout work-area bounds place windows, but must not trim their vertical
     // decorations. Keep the scrolling tape's horizontal clip; use the output
     // height for native desktop drawing only, not card/flight coordinate maps.
@@ -3727,8 +3777,10 @@ void StageController::Impl::updatePreviewLiveness() {
                 const auto top = cardTop(screen, i);
                 if (top + screen.geometry.cardHeight <= screen.geometry.paddingTop || top >= screen.base.h - screen.geometry.paddingBottom)
                     continue;
+                const auto viewport=cardDesktopViewport(screen,CBox{0,0,screen.geometry.cardWidth,screen.geometry.cardHeight});
                 for (const auto& preview : screen.cards[i].previews)
-                    add(preview.window);
+                    if (!clustered(screen) || !previewFootprint(preview.window.lock(),preview.target).intersection(viewport).empty())
+                        add(preview.window);
             }
             for (const auto& flight : screen.flights)
                 add(flight.preview.window);
@@ -3835,6 +3887,10 @@ std::string StageController::Impl::stateJson() const {
         {"last_drop_trace", dropTrace},
         {"captureVersion", 1}, {"captureWindows", nlohmann::json::array()},
         {"screens", nlohmann::json::array()}};
+    const auto& effect=edgeEffect.metrics();
+    result["render_metrics"]={{"sync_calls",syncCalls},{"draw_calls",drawCalls},{"preview_draws",previewDraws},{"preview_culled",previewCulled},
+        {"nested_captures",nestedCaptures},{"draw_ns",drawNanos},{"draw_max_ns",drawMaxNanos},
+        {"effect_calls",effect.calls},{"effect_soft_calls",effect.softCalls},{"effect_alias_calls",effect.aliasCalls},{"effect_soft_pixels",effect.softPixels}};
     for (const auto& screen : screens) {
         const auto monitor = screen.monitor.lock();
         if (!monitor)

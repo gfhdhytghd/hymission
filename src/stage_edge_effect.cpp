@@ -178,6 +178,7 @@ SP<Render::IFramebuffer> StageEdgeEffect::bufferFor(const PHLMONITOR& monitor, c
 
 bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport& viewport, const CBox& clip,
                            const std::function<void(const CBox&)>& drawWindow) {
+    ++m_metrics.calls;
     auto& state = renderContext().m_data;
     const auto& v = viewport.box;
     const CBox view = CBox{v.x - monitor->m_position.x, v.y - monitor->m_position.y, v.width, v.height}.scale(monitor->m_scale);
@@ -203,7 +204,7 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
     const bool soft = (left > 0 && affected.x < view.x + left) || (right > 0 && affected.x + affected.w > view.x + view.w - right) ||
         (top > 0 && affected.y < view.y + top) || (bottom > 0 && affected.y + affected.h > view.y + view.h - bottom);
     const auto destination = state.currentFB;
-    const auto fb = soft && destination && ensureShader() ? bufferFor(monitor, destination) : nullptr;
+    const auto fb = soft && !m_backdrop && destination && ensureShader() ? bufferFor(monitor, destination) : nullptr;
     const auto horizontal = fb ? bufferFor(monitor, destination, true) : nullptr;
     if (!fb || !horizontal) {
         // Some native texture paths use the clip rectangle instead of damage.
@@ -217,6 +218,9 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
         });
         return true;
     }
+    ++m_metrics.softCalls;
+    if (fb==destination || horizontal==destination) ++m_metrics.aliasCalls;
+    m_metrics.softPixels+=static_cast<uint64_t>(affected.w*affected.h);
     // The outer native pass expands damage for live blur. Stay inside that
     // expansion even when system blur size/passes are configured very small.
     static auto blurSize = CConfigValue<Config::INTEGER>("decoration:blur:size");

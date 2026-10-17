@@ -28,7 +28,7 @@ def main():
     ap.add_argument("--default-off-regression", action="store_true")
     ap.add_argument("--top-clip-regression", action="store_true")
     ap.add_argument("--animation-regression", action="store_true")
-    ap.add_argument("--feedback3-regression",choices=("hover","workspace","stage","stage-multi","drag"))
+    ap.add_argument("--feedback3-regression",choices=("hover","workspace","stage","stage-multi","stage-perf","drag"))
     ap.add_argument("--feedback2-regression",choices=("panel","gesture","overview","stage"))
     ap.add_argument("--plugin", required=True)
     ap.add_argument("--output", required=True)
@@ -197,6 +197,11 @@ def main():
         evaluate('hl.dispatch(hl.dsp.focus({workspace=2,on_current_monitor=true}))')
         assert [t["activeWorkspace"]["id"] for t in tiles_state()]==[2,1,3],tiles_state()
         if args.fixture:
+            # These dispatcher/history assertions own the left tile. Keep the
+            # real pointer there too, so an asynchronous native refocus cannot
+            # redirect an empty-desktop command to a different hovered tile.
+            left=tiles_state()[0]
+            evaluate(f'hl.plugin.hymission_tiles_test.pointer("native",{left["x"]+left["width"]/2},{left["y"]+left["height"]/2})')
             evaluate('assert(hl.plugin.hymission_tiles_test.change_workspace("98",true)==0); assert(hl.plugin.hymission_tiles_test.change_workspace("2",false)==1)')
             evaluate('hl.config({animations={enabled=true}})')
         evaluate('hl.dispatch(hl.dsp.focus({workspace=4}))')

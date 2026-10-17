@@ -452,6 +452,13 @@ struct TilesController::Impl {
             clipBox=CBox{clip.x,clip.y,clip.width,clip.height};
         }
         if (clipBox.empty()) return;
+        const auto livePresentation=overview?p:w->presentation().renderPresentation(Render::eSceneMode::MONITOR);
+        if (!overview) {
+            // WORKSPACE_WINDOWS selects the complete scrolling tape. Its
+            // off-viewport columns must not enqueue native/effect passes.
+            const auto bounds=w->getFullWindowBoundingBox().translate(livePresentation.workspaceOffset+livePresentation.floatingOffset);
+            if (bounds.intersection(clipBox).empty()) return;
+        }
         const Rect clip{clipBox.x,clipBox.y,clipBox.w,clipBox.h};
         auto edge=stage::edgeViewport(clip,0,0);
         if (presentation) edge=stage::edgeViewport(clip,presentation->viewport.left,presentation->viewport.right,presentation->viewport.top,presentation->viewport.bottom);
@@ -469,7 +476,6 @@ struct TilesController::Impl {
         // intentionally strips workspace motion/alpha for snapshots. This is a
         // live tile scene: retain the native MONITOR presentation inside our
         // fixed tile clip, including warped offsets while fingers are down.
-        const auto livePresentation=overview?p:w->presentation().renderPresentation(Render::eSceneMode::MONITOR);
         StageController::renderInViewport(mon, edge, clip, [&] { original(r, ctx, w, mon, livePresentation, now, decorate, mode, ignore, standalone); });
     }
     using SceneFn = void (*)(Render::IHyprRenderer*, Render::CRenderContext&, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp&, Render::eSceneMode);
@@ -958,7 +964,7 @@ bool TilesController::Impl::install() {
         attach("setFullscreenFadeAnimation", &fsFade, fsFadeHook) && attach("renderLayer", &layer, layerHook) && attach("layerSurfaceAt", &layerHit, layerHitHook) &&
         attach("recheckWorkArea", &area, areaHook) && attach("windowAt", &hit, hitHook) &&
         attach("rawWindowFocus", &rawFocus, focusHook) && attach("changeWorkspaceMonitor", &change, changeHook) &&
-        attach("isVisibleNotCovered", &visible, visibleHook) && attach("renderWindow", &window, windowHook) &&
+        attach("isVisibleNotCovered", &visible, visibleHook) && attach("renderWindow", &window, windowHook,20) &&
         attach("renderWorkspaceWindows", &normal, normalHook) && attach("renderWorkspaceWindowsFullscreen", &full, fullHook) &&
         attach("sendFrameEventsToWorkspace", &frames, framesHook) && attach("setTargetSizeAndPosition", &fsSet, fsSetHook) && attach("syncTargetSizeAndPosition", &fsSync, fsSyncHook) &&
         attach("changeWorkspaceTyped", &typed, typedHook) && attach("changeWorkspaceCurrentTyped", &typedCurrent, typedCurrentHook) &&

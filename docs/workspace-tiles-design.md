@@ -440,3 +440,18 @@ tile 分割/调整、Stage 开关和关闭 tiles 导致 work-area 主轴尺寸�
 在 native -> tile geometry -> Stage reservation 的最终 work area 外层按尺寸比例
 重标定这两个 offset，保留相同的相机位置，避免多窗口全部落到缩略图之外。
 默认关闭没有该 hook；普通单 tile 路径不额外取得 viewport 所有权。
+
+
+## Stage 绘制所有权与性能修订
+
+Tile 的 live renderWindow viewport subscriber 固定在 Stage 外层（priority 20），
+由一个 pass capture 负责最终 tile viewport。嵌套 capture 不再次包装 pass；
+柔边效果在已有 backdrop 作用域内不复用同一 scratch framebuffer。
+完整 scrolling tape 的窗口选择必须在实际 tile/卡片视区再次剔除不可见列，
+使用包含 CSD/阴影的边界以及原生 workspace/floating 动画位移，不裁掉顶部装饰。
+隐藏 workspace 仅为实际可见预览维持 liveness。稳定多列 sidebar 的 Stage pass
+使用各列边界的并集，drag/flight/overview 保留覆盖相应动画区域的边界。
+
+stage_show_active=0 对每个 tile 均生效，已在桌面呈现的 workspace 不再重复出卡片；
+stage_show_active=1 保留显示 active 卡片的行为。空列保留共同列宽和水平顺序，
+可以作为对应 tile active workspace 的拖入目标，不因没有卡片而错投左侧 tile。

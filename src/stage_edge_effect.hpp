@@ -12,6 +12,8 @@ namespace hymission {
 // stays in the current compositor pass; no begin/end or client state changes.
 class StageEdgeEffect {
   public:
+    struct Metrics { uint64_t calls=0,softCalls=0,aliasCalls=0,softPixels=0; };
+    const Metrics& metrics() const { return m_metrics; }
     ~StageEdgeEffect();
     bool draw(const PHLMONITOR& monitor, const stage::EdgeViewport& viewport, const CBox& clip,
               const std::function<void(const CBox&)>& drawWindow);
@@ -19,6 +21,7 @@ class StageEdgeEffect {
     void reset();
     const std::string& error() const { return m_error; }
   private:
+    Metrics m_metrics;
     struct Buffer {
         PHLMONITORREF monitor;
         SP<Render::IFramebuffer> framebuffer;

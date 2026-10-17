@@ -101,12 +101,12 @@ def run(case,request,root,env,runtime,processes,handles):
                     assert pixel[1]>120 and pixel[0]<90,('target workspace is visually blank after ws strip exit',stage,side,finish,pixel,client,tile)
         print('PASS: both tile strip switches survive ws overview teardown with visible rendered clients, Stage off/on and Esc/close')
         return
-    if case in ('stage','stage-multi'):
+    if case in ('stage','stage-multi','stage-perf'):
         evaluate('hl.monitor({output="",mode="6144x3456@60",position="auto",scale="2",reserved={top=58,right=0,bottom=0,left=0}}); hl.config({general={layout="scrolling"},scrolling={column_width=.85,fullscreen_on_one_column=true,focus_fit_method=1},plugin={hymission={niri_mode=0,stage_transition_ms=0}}})')
         wait('j/monitors',lambda ms:ms[0]['scale']==2 and ms[0]['width']==6144)
         for ws in (501,502,503,504):
             spawn(ws)
-            if case=='stage-multi':
+            if case in ('stage-multi','stage-perf'):
                 spawn(ws)
                 spawn(ws)
         evaluate('hl.dispatch(hl.dsp.focus({workspace=501})); hl.plugin.hymission.tile_add({workspace="503"}); hl.dispatch(hl.dsp.focus({workspace=504})); hl.dispatch(hl.dsp.focus({workspace=503})); hl.plugin.hymission.tile_focus("left")')
@@ -115,6 +115,53 @@ def run(case,request,root,env,runtime,processes,handles):
         s=wait('j/hymission-stage-state',lambda s:s['visibility_progress']==1 and len(s['screens'])==2 and all(sc['cards'] and all(c.get('windows') for c in sc['cards']) for sc in s['screens']))
         time.sleep(.2);s=read('j/hymission-stage-state')
         image=capture('stage-hidpi-scrolling')
+        if case=='stage-perf':
+            frames=[];latencies=[]
+            for i in range(35):
+                start=time.monotonic();frame=read('j/hymission-stage-state');latencies.append(time.monotonic()-start)
+                frames.append(frame);time.sleep(.06)
+            (root/'stage-perf.json').write_text(json.dumps({'frames':frames,'ipc_ms':[v*1000 for v in latencies]},indent=2))
+            metrics=frames[-1]['render_metrics']
+            assert metrics['effect_alias_calls']==0 and metrics['nested_captures']==0,metrics
+            assert metrics['preview_culled']>0,metrics
+            initial=frames[0]['render_metrics'];count=metrics['draw_calls']-initial['draw_calls']
+            assert count>10,('not enough compositor frames sampled',count)
+            effects=(metrics['effect_calls']-initial['effect_calls'])/count
+            pixels=(metrics['effect_soft_pixels']-initial['effect_soft_pixels'])/count
+            assert effects<=10 and pixels<6144*3456*.6,('unbounded per-frame effect workload',effects,pixels)
+            for sc in frames[-1]['screens']:
+                assert all(c['workspace']!=sc['active_workspace'] for c in sc['cards']),('stage_show_active=0 ignored',sc)
+            capture('stage-perf')
+            print('Stage metrics',metrics,'IPC max ms',max(latencies)*1000)
+            # Exercise the inverse hook installation order as well: retain
+            # Stage while removing/reinstalling Tiles hooks.
+            evaluate('hl.plugin.hymission.tile_focus("left"); hl.config({plugin={hymission={tiles_enabled=0}}}); hl.plugin.hymission_tiles_test.refresh()')
+            wait('j/hymission-tiles-state',lambda s:not s['enabled'])
+            evaluate('hl.config({plugin={hymission={tiles_enabled=1}}}); hl.plugin.hymission_tiles_test.refresh()')
+            wait('j/hymission-tiles-state',lambda s:s['enabled'])
+            evaluate('hl.plugin.hymission.tile_add({workspace="503"}); hl.plugin.hymission.tile_focus("left")')
+            wait('j/hymission-stage-state',lambda s:len(s['screens'])==2 and all(sc['cards'] for sc in s['screens']))
+            time.sleep(.3);ordered=read('j/hymission-stage-state')['render_metrics']
+            assert ordered['effect_alias_calls']==0 and ordered['nested_captures']==0,ordered
+            # No active-card duplication, and a genuinely empty column remains
+            # a transfer destination for the active desktop of that tile.
+            evaluate('hl.config({plugin={hymission={stage_show_empty=0}}})')
+            for c in list(read('j/clients')):
+                if c['workspace']['id'] not in (503,504):continue
+                evaluate('hl.plugin.hymission.tile_focus("right"); hl.plugin.hymission_tiles_test.window("focus",'+json.dumps(c['address'])+'); hl.plugin.hymission.tile_move_window("left")')
+            stage=wait('j/hymission-stage-state',lambda s:len(s['screens'])==2 and s['screens'][0]['cards'] and not s['screens'][1]['cards'])
+            left,right=stage['screens'];band=right['sidebar']
+            assert abs(band['width']-left['sidebar']['width'])<1,('empty column lost its fixed position/width',stage)
+            source=next(c for c in left['cards'] if c['workspace']==502)
+            w=max(source['windows'],key=lambda w:w['x'])
+            x=w['x']+w['width']/2;y=w['y']+w['height']/2
+            dx=band['x']+band['width']/2;dy=band['y']+100
+            pointer('press',x,y);pointer('move',dx,dy);pointer('release',dx,dy)
+            target=right['active_workspace']
+            wait('j/clients',lambda cs:next(c for c in cs if c['address']==w['address'])['workspace']['id']==target)
+            assert len(tiles())==2
+            print('PASS: active workspace cards hidden, bounded preview work, no nested/aliased effects, empty-column transfer')
+            return
         if case=='stage-multi':
             (root/'stage-multi-state.json').write_text(json.dumps(s,indent=2))
             capture('stage-multi-scrolling')
