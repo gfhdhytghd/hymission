@@ -365,6 +365,7 @@ struct StageController::Impl {
     Screen* drawingScreen = nullptr;
     bool tileDragPending = false;
     bool tileDragCandidate=false;
+    bool nativeCardActivation=false;
     bool legacyTileOwner=false;
     std::vector<PHLWINDOWREF> tileDragMembers;
     CBox tileDragOrigin;
@@ -683,7 +684,7 @@ struct StageController::Impl {
     static void workspaceAnimationThunk(PHLWORKSPACE workspace, Animation::Workspace::eAnimationType type, bool left, bool instant,
                                         std::optional<std::string> style) {
         auto* self = instance;
-        if (sessionLocked()) {
+        if (sessionLocked() || self->nativeCardActivation) {
             reinterpret_cast<WorkspaceAnimationFn>(self->workspaceAnimationHook->m_original)(workspace, type, left, instant, std::move(style));
             return;
         }
@@ -1730,7 +1731,9 @@ void StageController::Impl::sync() {
         auto views=TilesController::get()?TilesController::get()->views(monitor):std::vector<TilesController::View>{};
         if (views.empty()) views.push_back({monitor,monitor->m_activeWorkspace,0,CBox{monitor->m_position,monitor->m_size},true});
         for (const auto& view:views) {
-        const auto activeWorkspace=view.workspace;
+        // Single-tile native activation updates the monitor before the tile
+        // model's deferred reconcile; publish it in this synchronous refresh.
+        const auto activeWorkspace=views.size()==1?monitor->m_activeWorkspace:view.workspace;
         auto* screen = screenFor(monitor,view.id);
         if (!screen) {
             screens.emplace_back();
@@ -1743,7 +1746,7 @@ void StageController::Impl::sync() {
         const auto oldGeometry = screen->geometry;
         const bool switching = screen->active != WORKSPACE_INVALID && activeWorkspace && screen->active != workspaceKey(activeWorkspace);
         const bool changedOutput = !sameBox(base, screen->base) || screen->scale != monitor->m_scale || screen->transform != static_cast<int>(monitor->m_transform);
-        if (visibility == 1 && !visibilityGesture && !finishingOverview && switching && !changedOutput && !changedPolicy && !reconfigure && !blocked() && !screen->covered && !screen->suspended) {
+        if (!nativeCardActivation && visibility == 1 && !visibilityGesture && !finishingOverview && switching && !changedOutput && !changedPolicy && !reconfigure && !blocked() && !screen->covered && !screen->suspended) {
             pendingFlights.push_back({monitor, view.id, screen->active, screen->cards, oldGeometry, screen->scroll, screen->right, {}});
             for (const auto& window : Desktop::windowState()->windows()) {
                 if (window->m_monitor == monitor && (!view.id || window->m_workspace==activeWorkspace || workspaceKey(window->m_workspace)==screen->active) && window->mapped() && !window->isHidden() && !static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED))
@@ -2544,11 +2547,14 @@ void StageController::Impl::activate(const PHLWORKSPACE& workspace, bool cardCli
     if (!monitor)
         return;
     hoverCenterGuardWorkspace.reset();
-    if (auto* tiles=TilesController::get(); tiles && tiles->available()) {
+    if (auto* tiles=TilesController::get(); tiles && tiles->enabled(monitor)) {
         const auto [column,index]=hit(g_pInputManager->getMouseCoordsInternal(),true);
         const auto id=column && column->monitor==monitor?column->tile:tiles->preferredTile(workspace,monitor);
         if (id && tiles->activate(monitor,id,workspace)) { request(); return; }
     }
+    const bool previousNative=nativeCardActivation;
+    nativeCardActivation=cardClick && TilesController::get() && TilesController::get()->available() && !TilesController::get()->enabled(monitor);
+    Hyprutils::Utils::CScopeGuard restoreNative{[&] { nativeCardActivation=previousNative; }};
     const bool switched = monitor->m_activeWorkspace != workspace;
     Desktop::focusState()->rawMonitorFocus(monitor);
     monitor->changeWorkspace(workspace, false, true);

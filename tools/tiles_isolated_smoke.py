@@ -278,6 +278,18 @@ def main():
             stage=json.loads(request("j/hymission-stage-state"))
             (root/"same-column-before.json").write_text(json.dumps(stage,indent=2))
             sc,c,w=source_preview(stage)
+            # Stage card activation on a managed single tile must retain the
+            # native changeWorkspace animation, just like typed actions.
+            sx=w["x"]+w["width"]/2; sy=w["y"]+w["height"]/2
+            evaluate(f'hl.config({{animations={{enabled=true}},plugin={{hymission={{stage_transition_ms=220}}}}}}); hl.plugin.hymission_tiles_test.pointer("press",{sx},{sy}); hl.plugin.hymission_tiles_test.pointer("release",{sx},{sy}); local a=hl.plugin.hymission_tiles_test.workspace_animation("{original_ws}"); assert(a.animated and math.abs(a.x)>1)')
+            wait_json("j/activeworkspace",lambda ws:ws["id"]==original_ws,"single-tile-stage-native-click")
+            time.sleep(.03)
+            evaluate(f'assert(hl.plugin.hymission_tiles_test.workspace_animation("{original_ws}").animated)')
+            assert all(sc["transition_windows"]==0 for sc in json.loads(request("j/hymission-stage-state"))["screens"])
+            evaluate('hl.config({animations={enabled=false},plugin={hymission={stage_transition_ms=0}}}); hl.dispatch(hl.dsp.focus({workspace=77})); hl.plugin.hymission_tiles_test.refresh()')
+            stage=wait_json("j/hymission-stage-state",lambda s:len(s["screens"])==1 and len(s["screens"][0]["cards"])>=2 and any(c.get("windows") for c in s["screens"][0]["cards"]),"same-column-after-click")
+            time.sleep(.15)
+            stage=json.loads(request("j/hymission-stage-state")); sc,c,w=source_preview(stage)
             destination=next(card for card in sc["cards"] if card["workspace"]==77)
             source_members=[v["address"] for v in c["windows"]]
             pointer("press",c["x"]+0.5,c["y"]+0.5)
