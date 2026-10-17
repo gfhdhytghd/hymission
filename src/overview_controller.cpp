@@ -7658,7 +7658,31 @@ void OverviewController::releaseAllHooks() {
         if (*hook) hooks::remove(m_handle,*hook);
         *hook=nullptr;
     }
+    m_surfaceTexBoxOriginal=nullptr;
+    m_surfaceBoundingBoxOriginal=nullptr;
+    m_surfaceOpaqueRegionOriginal=nullptr;
+    m_surfaceVisibleRegionOriginal=nullptr;
+    m_surfaceDrawOriginal=nullptr;
+    m_surfaceNeedsLiveBlurOriginal=nullptr;
+    m_surfaceNeedsPrecomputeBlurOriginal=nullptr;
+    m_shouldRenderWindowOriginal=nullptr;
+    m_effectiveAlphaOriginal=nullptr;
+    m_rendererDrawElementOriginal=nullptr;
     m_renderLayerOriginal=nullptr;
+    m_borderDrawOriginal=nullptr;
+    m_shadowDrawOriginal=nullptr;
+    m_groupBarDrawOriginal=nullptr;
+    m_calculateUVForSurfaceOriginal=nullptr;
+    m_customShadowOriginal=nullptr;
+    m_workspaceSwipeBeginOriginal=nullptr;
+    m_workspaceSwipeUpdateOriginal=nullptr;
+    m_workspaceSwipeEndOriginal=nullptr;
+    m_unifiedWorkspaceSwipeBeginOriginal=nullptr;
+    m_unifiedWorkspaceSwipeUpdateOriginal=nullptr;
+    m_unifiedWorkspaceSwipeEndOriginal=nullptr;
+    m_scrollMoveGestureBeginOriginal=nullptr;
+    m_scrollMoveGestureUpdateOriginal=nullptr;
+    m_scrollMoveGestureEndOriginal=nullptr;
     decorationGradientOriginal=nullptr;
 }
 

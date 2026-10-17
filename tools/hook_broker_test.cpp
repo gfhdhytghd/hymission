@@ -3,7 +3,7 @@
 #include <iostream>
 namespace h = hymission::hooks;
 namespace {
-struct Native { void* original; void* bridge; bool attached = false; };
+struct Native { void* source; void* bridge; bool attached = false; void* original=nullptr; };
 int allocations = 0;
 bool fail = false;
 int original(int n) { return n * 2; }
@@ -21,8 +21,8 @@ int second(int n) { return reinterpret_cast<int (*)(int)>(b->m_original)(n + 1) 
 }
 namespace hymission::hooks {
 void* nativeCreate(void*, void* source, void* destination) { ++allocations; return new Native{source, destination}; }
-bool nativeAttach(void* p) { return static_cast<Native*>(p)->attached = !fail; }
-void nativeDetach(void* p) { static_cast<Native*>(p)->attached = false; }
+bool nativeAttach(void* p) { auto* n=static_cast<Native*>(p); n->original=fail?nullptr:n->source; return n->attached = !fail; }
+void nativeDetach(void* p) { auto* n=static_cast<Native*>(p); n->attached=false; n->original=nullptr; }
 void* nativeOriginal(void* p) { return static_cast<Native*>(p)->original; }
 void nativeRemove(void*, void* p) { delete static_cast<Native*>(p); --allocations; }
 }
@@ -40,9 +40,14 @@ int main() {
     b->hook(); a->unhook(); assert(call(3) == 18);
     a->hook(); assert(call(3) == 19);
     h::remove(nullptr, b); assert(call(3) == 7);
+    const auto cached=reinterpret_cast<int (*)(int)>(a->m_original);
+    a->unhook();
+    assert(!a->m_original && call(3)==6 && cached(3)==6);
+    assert(a->hook() && a->m_original && call(3)==7);
     a->unhook(); fail = true;
     assert(!a->hook() && !a->enabled);
     h::remove(nullptr, a);
+    assert(cached(3)==0 && call(3)==0); // removed lease/group cannot be dereferenced
     assert(allocations == 0 && h::groups().empty());
     fail=false;
     ownedA=h::create(nullptr,reinterpret_cast<void*>(&consume),h::target(&wrapOwnedA));

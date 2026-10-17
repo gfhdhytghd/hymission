@@ -53,6 +53,7 @@ inline bool Lease::hook() {
     if (!group->attached) {
         if (!nativeAttach(group->native)) return false;
         group->attached = true;
+        for (auto* lease:group->leases) lease->m_original=group->continuation(lease);
     }
     enabled = true;
     std::stable_sort(group->leases.begin(),group->leases.end(),[](const auto* a,const auto* b) { return a->priority<b->priority; });
@@ -63,6 +64,7 @@ inline bool Lease::unhook() {
     if (group->attached && std::ranges::none_of(group->leases, [](auto* l) { return l->enabled; })) {
         nativeDetach(group->native);
         group->attached = false;
+        for (auto* lease:group->leases) lease->m_original=nullptr;
     }
     return true;
 }
@@ -89,6 +91,13 @@ template<class R, class... A> struct TypedGroup<R (*)(A...)> final : Group {
     inline static std::array<TypedGroup*, capacity> channels{};
     inline static std::array<Lease*, continuationCapacity> originals{};
     size_t channel = capacity;
+    static R unavailable() {
+        if constexpr (std::is_void_v<R>) return;
+        else if constexpr (std::is_reference_v<R>) {
+            static std::remove_reference_t<R> empty{};
+            return static_cast<R>(empty);
+        } else return R{};
+    }
     TypedGroup() {
         for (size_t i = 0; i < capacity; ++i) if (!channels[i]) { channel = i; channels[i] = this; break; }
     }
@@ -100,16 +109,21 @@ template<class R, class... A> struct TypedGroup<R (*)(A...)> final : Group {
         else return std::as_const(value);
     }
     R call(size_t from, A&... args) {
+        // unhook() destroys Hyprland's trampoline. The restored source is the
+        // only valid native entry after detach; never retain that trampoline.
+        if (!attached) return source?reinterpret_cast<Fn>(source)(pass<A>(args)...):unavailable();
         for (size_t n = from; n < leases.size(); ++n) {
             auto* l = leases[leases.size() - n - 1];
             if (!l->enabled) continue;
             return reinterpret_cast<Fn>(l->destination)(pass<A>(args)...);
         }
-        return reinterpret_cast<Fn>(nativeOriginal(native))(pass<A>(args)...);
+        const auto original=native?nativeOriginal(native):nullptr;
+        return original?reinterpret_cast<Fn>(original)(pass<A>(args)...):unavailable();
     }
-    template<size_t I> static R entry(A... args) { return channels[I]->call(0, args...); }
+    template<size_t I> static R entry(A... args) { return channels[I]?channels[I]->call(0, args...):unavailable(); }
     template<size_t I> static R next(A... args) {
         auto* lease=originals[I];
+        if (!lease) return unavailable();
         auto* group=static_cast<TypedGroup*>(lease->group);
         const auto it=std::ranges::find(group->leases,lease);
         const auto from=it==group->leases.end()?group->leases.size():group->leases.size()-static_cast<size_t>(it-group->leases.begin());
@@ -119,6 +133,8 @@ template<class R, class... A> struct TypedGroup<R (*)(A...)> final : Group {
     template<size_t... I> static auto continuations(std::index_sequence<I...>) { return std::array<Fn, sizeof...(I)>{&next<I>...}; }
     void* bridge() override { return channel == capacity ? nullptr : reinterpret_cast<void*>(entries(std::make_index_sequence<capacity>{})[channel]); }
     void* continuation(Lease* lease) override {
+        for (size_t i=0;i<continuationCapacity;++i) if (originals[i]==lease)
+            return reinterpret_cast<void*>(continuations(std::make_index_sequence<continuationCapacity>{})[i]);
         for (size_t i=0;i<continuationCapacity;++i) if (!originals[i]) {
             originals[i]=lease; lease->continuationIndex=i;
             return reinterpret_cast<void*>(continuations(std::make_index_sequence<continuationCapacity>{})[i]);

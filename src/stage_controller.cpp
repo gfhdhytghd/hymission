@@ -1355,6 +1355,8 @@ bool StageController::Impl::ensureEdgeHook() {
 }
 
 void StageController::Impl::releaseHooks() {
+    renderWindow=nullptr;
+    shouldBlur=nullptr;
     for (auto** hook : {&areaHook, &dragHook, &windowFocusHook, &scrollFocusHook, &hitHook, &roundingHook, &renderWindowHook, &surfaceBoxHook, &surfaceVisibleHook, &surfaceUVHook, &addPassHook,
                         &workspaceAnimationHook, &changeWorkspaceHook, &blurFramebufferHook, &fadeoutsHook}) {
         if (!*hook)
@@ -2801,7 +2803,7 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
 }
 void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
     auto* screen = visualScreenFor(monitor);
-    if (!screen || renderBlocked(monitor) || rendering || !g_pHyprOpenGL)
+    if (!screen || !hooksReady || renderBlocked(monitor) || rendering || !g_pHyprOpenGL)
         return;
     screen->capturePreviews.clear();
     const auto now = Clock::now();
@@ -3354,6 +3356,8 @@ void StageController::Impl::drawWindowPasses(StageWindowPassElement::Elements& e
 
 void StageController::Impl::drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, double radius,
                                        std::optional<stage::EdgeViewport> viewport, double* captureRounding, bool forceDecorations) {
+    if (!hooksReady || !renderWindowHook || !renderWindowHook->enabled || !renderWindowHook->m_original || !renderWindow || !window)
+        return;
     // Cached cards/flights can outlive a fullscreen change. Do not resurrect a
     // covered window (or its blur) before the next preview collection.
     if (previewLayer(window) == stage::PreviewLayer::Hidden)
