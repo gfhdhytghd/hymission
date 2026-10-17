@@ -94,4 +94,36 @@ def run(case,request,root,env,runtime,processes,handles):
                     assert pixel[1]>120 and pixel[0]<90,('target workspace is visually blank after ws strip exit',stage,side,finish,pixel,client,tile)
         print('PASS: both tile strip switches survive ws overview teardown with visible rendered clients, Stage off/on and Esc/close')
         return
+    if case=='stage':
+        evaluate('hl.monitor({output="",mode="6144x3456@60",position="auto",scale="2",reserved={top=58,right=0,bottom=0,left=0}}); hl.config({general={layout="scrolling"},scrolling={column_width=.85,fullscreen_on_one_column=true,focus_fit_method=1},plugin={hymission={niri_mode=0,stage_transition_ms=0}}})')
+        wait('j/monitors',lambda ms:ms[0]['scale']==2 and ms[0]['width']==6144)
+        for ws in (501,502,503,504):spawn(ws)
+        evaluate('hl.dispatch(hl.dsp.focus({workspace=501})); hl.plugin.hymission.tile_add({workspace="503"}); hl.dispatch(hl.dsp.focus({workspace=504})); hl.dispatch(hl.dsp.focus({workspace=503})); hl.plugin.hymission.tile_focus("left"); hl.config({plugin={hymission={stage_enabled=1}}}); hl.plugin.hymission.stage_open()')
+        s=wait('j/hymission-stage-state',lambda s:s['visibility_progress']==1 and len(s['screens'])==2 and all(sc['cards'] and all(c.get('windows') for c in sc['cards']) for sc in s['screens']))
+        time.sleep(.2);s=read('j/hymission-stage-state')
+        image=capture('stage-hidpi-scrolling')
+        for sc in s['screens']:
+            for c in sc['cards']:
+                ws=c['workspace']
+                if len(c.get('windows',[]))!=1:continue
+                w=c['windows'][0]
+                # A one-window workspace should be centered in its own card,
+                # independent of the workspace's global tile origin.
+                assert abs(w['x']+w['width']/2-(c['x']+c['width']/2))<c['width']*.12,('preview retains another tile global x offset',sc,c)
+                assert c['y']-1<=w['y'] and w['y']+w['height']<=c['y']+c['height']+1,('cropped Stage content',c)
+                px=int((w['x']+w['width']/2)*2)
+                assert image.getpixel((px,int((w['y']+w['height']/2)*2)))[1]>180,('preview not rendered in its card',c)
+                assert any((lambda rgb:rgb[0]>180 and rgb[1]<80)(image.getpixel((px,y))) for y in range(int(c['y']*2),int((w['y']+20)*2))),('CSD header clipped in Stage card',c)
+        clients=read('j/clients')
+        for sc in s['screens']:
+            b=sc['desktop_geometry'];base=sc['base'];zoom=b['width']/base['width']
+            # Native non-covering scrolling fullscreen uses logicalBox(), not
+            # workArea(). It must see the same scaled monitor as the desktop.
+            top=b['y']-base['y']*zoom;height=1728*zoom
+            c=next(c for c in clients if c['workspace']['id']==sc['active_workspace'])
+            assert c['at'][1]>=top-2 and c['at'][1]+c['size'][1]<=top+height+2,('scrolling fullscreen ignored Stage transform',sc,c)
+        (root/'stage-hidpi-scrolling-clients.json').write_text(json.dumps(clients,indent=2))
+        (root/'stage-hidpi-scrolling.json').write_text(json.dumps(s,indent=2))
+        print('PASS: scale=2 scrolling workspaces centered inside monitor-aspect Stage cards with complete vertical content')
+        return
     raise AssertionError('unimplemented '+case)

@@ -301,9 +301,10 @@ struct TilesController::Impl {
         const auto ws=self->layoutWorkspace;
         if (self->ready && ws && ws->type()!=Workspace::eWorkspaceType::SPECIAL && ws->m_monitor.get()==mon) {
             auto view=self->view(ws);
-            if (view) return view->allocation;
+            if (view) return StageController::tilePresentation(view->monitor,view->allocation).value_or(view->allocation);
             const auto id=instance->preferredTile(ws,ws->m_monitor.lock());
-            for (const auto& candidate:instance->views(ws->m_monitor.lock())) if (candidate.id==id) return candidate.allocation;
+            for (const auto& candidate:instance->views(ws->m_monitor.lock())) if (candidate.id==id)
+                return StageController::tilePresentation(candidate.monitor,candidate.allocation).value_or(candidate.allocation);
         }
         return reinterpret_cast<decltype(&logicalBox)>(logicalBoxHook->m_original)(mon);
     }
@@ -338,6 +339,9 @@ struct TilesController::Impl {
         return reinterpret_cast<decltype(&scrollColumn)>(scrollColumnHook->m_original)(handler);
     }
     static void area(Layout::CSpace* space) {
+        // Rebuild native monitor gaps/reserved areas in physical coordinates.
+        // Stage transforms the resulting tile area once, after this subscriber.
+        LayoutScope physicalMonitor{nullptr};
         reinterpret_cast<decltype(&area)>(areaHook->m_original)(space);
         auto v = self->view(space->workspace());
         if (!v && self->ready && space->workspace() && space->workspace()->type()!=Workspace::eWorkspaceType::SPECIAL) {

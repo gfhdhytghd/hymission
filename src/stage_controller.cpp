@@ -2264,7 +2264,9 @@ void StageController::Impl::updateDragHover() {
         CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
     // Preview placement follows the pointer inside the card, without moving the
     // real window or changing its workspace while the native drag is held.
-    const double scale = onDesktop ? 1 : screen->geometry.cardWidth / desktopCanvas(*screen).w;
+    const auto previewDesktop = desktop(*screen);
+    const double scale = onDesktop ? 1 : clustered(*screen) ? std::min(screen->geometry.cardWidth / previewDesktop.w,
+        screen->geometry.cardHeight / previewDesktop.h) : screen->geometry.cardWidth / previewDesktop.w;
     const CBox card = onDesktop ? desktop(*screen) : inGap ? sidebar(*screen) : CBox{sidebar(*screen).x + screen->geometry.padding, screen->base.y + cardTop(*screen, *index),
         screen->geometry.cardWidth, screen->geometry.cardHeight};
     const CBox target = box(stage::dragTargetBox(rect(native), rect(card), pointer.x, pointer.y, scale, onDesktop));
@@ -2937,7 +2939,11 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
         // off-desktop part of the framebuffer.
         if (screen->background && screen->background->getTexture()) {
             const auto deskRect = desktopCanvas(*screen);
-            if (deskRect.w > 0 && deskRect.h > 0) {
+            if (clustered(*screen)) {
+                // All columns share the monitor aspect ratio. Wallpaper fills
+                // the card while the tile-local workspace is centered within it.
+                g_pHyprOpenGL->renderTexture(renderContext(), screen->background->getTexture(), physical(box), {.a = 1.0F});
+            } else if (deskRect.w > 0 && deskRect.h > 0) {
                 const double sx = box.w / deskRect.w;
                 const double sy = box.h / deskRect.h;
                 const CBox backdropBox{box.x - (deskRect.x - monitor->m_position.x) * sx,
@@ -3754,7 +3760,10 @@ bool StageController::Impl::updatePreviews(Screen& screen, Card& card, const Vec
         inputs.push_back(WindowInput{.index = i, .natural = Rect{box.x + offset.x, box.y + offset.y, box.w, box.h}});
         boxes[i] = box;
     }
-    const auto area = desktopCanvas(screen);
+    // The card represents this workspace's viewport, irrespective of its
+    // physical tile origin. Fit that viewport into the common monitor-aspect
+    // card; using the full-output canvas leaves each tile in a different half.
+    const auto area = desktop(screen);
     const auto slots = stage::arrangeWindows(inputs, screen.geometry, Rect{area.x, area.y, area.w, area.h});
     std::vector<Preview> previews;
     for (const auto& slot : slots)
