@@ -103,9 +103,12 @@ template<class R, class... A> struct TypedGroup<R (*)(A...)> final : Group {
     }
     ~TypedGroup() override { if (channel != capacity) channels[channel] = nullptr; }
     // Entry owns the native ABI arguments. Borrow them through the broker;
-    // only an actual subscriber/native call constructs its by-value arguments.
+    // only an actual subscriber/native call receives its by-value arguments.
+    // Pointer/scalar arguments and references on getTexBox/draw need no object
+    // copies. Non-trivial native ABI values retain an owned copy per callee.
     template<class T> static decltype(auto) pass(std::remove_reference_t<T>& value) {
         if constexpr (std::is_reference_v<T>) return std::forward<T>(value);
+        else if constexpr (std::is_trivially_copyable_v<T>) return std::move(value);
         else return std::as_const(value);
     }
     R call(size_t from, A&... args) {
