@@ -52,3 +52,33 @@ ws-only overview 的空 tile 没有 thumbnail hit 区域，现增加 tile deskto
 双向、Stage 开关、Esc 取消、已有窗口的目标及 ws overview 双向空 tile drop，全部通过；
 原生拖动中截帧验证窗口在对面 tile 实际可见且未取得第二个 tiles 交互 owner。
 旧实现负对照在松手 workspace 归属断言失败。
+
+## 验证与交付边界
+
+- 每项单独提交：d8a1d31（hover）、9076592（ws 退出空白）、4823f24（列蓝框）、
+  e9d68cd（Stage）、ca768e5（跨 tile 拖放）。本文件及设计同步随各项/最终验证提交。
+- `cmake --build build-tiles -j 6` 通过；完整 CTest **16/16 PASS，无跳过**，
+  `build-tiles/feedback3-ctest.log`。
+- release compositor：`~/.local/lib/hyprland-hdr/Hyprland`，
+  e5a03b6a5ce64ec4c85954649bad4df083627574，SHA256
+  b08dd5a78a0f8f04ae3936d77a4b99da105c97b53e5d975cdd4fdbd88dc0ced6。
+  完整 `tiles_isolated_smoke --integration` 通过，`feedback3-full.log`。
+- `tiles_disabled_regression` 当前/参考两次通过，解析后的 observations JSON 完全一致；
+  参考插件 commit 552bd339fe4809e0a031d277ca97f4dac6d0a5da，
+  `feedback3-disabled-{current,reference}.log`。
+- `--feedback3-regression hover/workspace/stage/drag` 全部通过；hover 追加了 Stage
+  缩放后的空 tile，panel 追加 ws-only focused 列边缘实际像素无蓝框断言。
+  `feedback3-hover.log`、`feedback3-workspace-stagefix.log`、`feedback3-stage.log`、
+  `feedback3-drag.log`、`feedback3-panel.log`。
+- 既有四指真实私有 pointer 事件路径、中间帧 workspace 动画、all overview、3-tile Stage
+  整屏缩放及顶部 CSD 像素回归全部通过：`feedback3-gesture.log`、
+  `feedback3-animation.log`、`feedback3-all-overview.log`、`feedback3-stage-global.log`、
+  `feedback3-top.log`。各隔离测试的 configerrors 为空。
+- 按 AGENTS.md 刷新 hyprland flake input，upstream main 仍为
+  8010b4e5c66f97aa82cd5b3332b4ec613779b9a7，lock 未变。
+  Nix `.#hymission` 构建通过（`feedback3-nix.log`）；内置 14 项通过、2 项 GL 测试
+  因无 EGL 环境跳过，本地完整 CTest 中两项均通过。
+
+所有截帧、状态采样和负对照在 build-tiles 的私有 compositor 内，未向本机会话注入输入。
+它们不代替物理触控板、实际应用内容或用户桌面验收；本机视觉验收待用户安全更新后确认。
+截图未提交，未 push、未 reload，未执行 hyprpm update 或本机会话 plugin load/unload。

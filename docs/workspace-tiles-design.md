@@ -391,7 +391,7 @@ all / forceall 在每个物理输出内统一排列所有 workspace 的窗口，
 ## 第二轮真机反馈后的呈现规则
 
 多列 workspace strip 共用一次整屏左侧玻璃背景绘制，延伸到顶部 reserved 区域；
-列间不画背景接缝或分隔线，focused 列仅有内缩描边。
+列间不画背景接缝或分隔线；第三轮反馈取消 focused 列的整列描边，仅保留 workspace 自身的 active/selection 标记。
 
 Tile live scene 仅借用 WORKSPACE_WINDOWS 的窗口选择，renderWindow 使用原生
 MONITOR presentation 的位移和 alpha；触控板事件经过 InputManager 和完整手势匹配
@@ -400,9 +400,28 @@ MONITOR presentation 的位移和 alpha；触控板事件经过 InputManager 和
 all overview 中，其他 tile 正在呈现的 workspace 与 focused workspace 一样保留当前
 实际屏幕起点和终点，不能应用隐藏 workspace 的 offscreen 规则。
 
-多 tile 的 Stage workspace 卡片以完整物理输出为画布，用统一的显示器宽高比、
-卡片宽度和缩放，不能按各 tile 的宽高比拉长卡片。原 workspace 的窗口在这个整屏
-画布中的相对位置保留；卡片间高度相同，窗口与背景使用同一画布变换。桌面部分的
+多 tile 的 Stage workspace 卡片用统一的完整显示器宽高比、卡片宽度和高度，
+不能按各 tile 的宽高比拉长卡片。第三轮反馈后，窗口按所属 tile 的 desktop viewport
+等比居中映射到卡片，保留 workspace 内部相对位置，不能携带 tile 在整屏中的横向偏移；
+背景铺满共同的显示器比例卡片，拖放使用对应的等比映射。桌面部分的
 所有 tile 共用缩放和平移，输入命中、拖放预览、分割线命中和焦点 warp 使用同一变换
 的逆映射。tile 的持久 allocation/topology 不变，Stage 状态另暴露 desktop_geometry。
 单 tile 与 capability 关闭继续使用既有 Stage 几何与动画路径。
+
+
+## 第三轮真机反馈后的输入与退出规则
+
+空 tile 的指针 hover 按原生 mouse_move_focuses_monitor/refocus 规则发布焦点 workspace，
+普通 workspace dispatch/swipe 因此以该 tile 为上下文；Stage 使用同一个桌面逆映射。
+overview、special workspace 和进行中的拖动保留既有 owner，不由 hover 改写上下文。
+
+ws-only overview 内切换 tile workspace 时，目标 binding 的原生 renderOffset 和 alpha
+必须同时恢复到可呈现状态；只跳过原生切换动画而保留隐藏 workspace 的屏外位移会造成
+退出后空白。桌面正常切换保留原生动画路径。Stage 下 scrolling 的非覆盖 fullscreen
+和 work-area 采用同一缩放几何，保留 reserved 与 CSD 顶部空间。
+
+原生 move 拖动可以跨 tile 边界绘制；原生 controller 是唯一移动 owner。
+松手后先完成原生分组/平铺恢复和 Stage sidebar 落点处理，再对未消费的桌面落点验证
+目标 tile/workspace 绑定，通过现有 activation 事务移窗。Esc 取消、pinned、special、
+resize 和 capability 关闭不提交迁移。ws-only overview 拖入空 tile 时以其 desktop
+作为 fallback drop target，窗口和整组继续使用现有 OverviewDrag/settlement 事务。

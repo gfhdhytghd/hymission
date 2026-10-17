@@ -51,7 +51,14 @@ def run(case,request,root,env,runtime,processes,handles):
         evaluate('hl.dispatch(hl.dsp.focus({workspace=504}))')
         after=tiles()
         assert after[0]['activeWorkspace']['id']==501 and after[1]['activeWorkspace']['id']==504,(before,after)
-        print('PASS: hovering empty tile publishes native workspace context before switching')
+        evaluate('hl.plugin.hymission.tile_focus("left"); hl.config({plugin={hymission={stage_enabled=1,stage_transition_ms=0}}}); hl.plugin.hymission.stage_open()')
+        stage=wait('j/hymission-stage-state',lambda s:s['visibility_progress']==1 and len(s['screens'])==2)
+        b=next(sc['desktop_geometry'] for sc in stage['screens'] if sc['tile_id']==after[1]['id'])
+        pointer('native',b['x']+b['width']/2,b['y']+b['height']/2)
+        assert read('j/activeworkspace')['id']==504
+        evaluate('hl.dispatch(hl.dsp.focus({workspace=503}))')
+        assert [t['activeWorkspace']['id'] for t in tiles()]==[501,503]
+        print('PASS: hovering empty tile publishes native workspace context before switching, Stage off/on')
         return
     if case=='workspace':
         evaluate('hl.config({general={layout="scrolling"},scrolling={column_width=.85,fullscreen_on_one_column=true,focus_fit_method=1},plugin={hymission={niri_mode=0,stage_transition_ms=0}}})')

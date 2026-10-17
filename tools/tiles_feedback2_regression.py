@@ -30,7 +30,7 @@ def run(case,request,root,env,runtime,processes,handles):
     if case=='panel':
         evaluate('hl.monitor({output="",mode="1920x1080@60",position="auto",scale="1",reserved={top=80,right=0,bottom=24,left=0}})')
         wait('j/monitors',lambda ms:ms[0]['reserved'][1]>=80)
-        evaluate('hl.plugin.hymission.tile_add(); hl.plugin.hymission.tile_add(); hl.plugin.hymission.open("forceall")')
+        evaluate('hl.plugin.hymission.tile_add(); hl.plugin.hymission.tile_add(); hl.plugin.hymission.open("onlycurrentworkspace")')
         ov=wait('j/hymission-overview-state',lambda s:s['phase']=='active')
         (root/'panel-state.json').write_text(json.dumps(ov,indent=2))
         time.sleep(.1)
@@ -46,7 +46,13 @@ def run(case,request,root,env,runtime,processes,handles):
             seam=int((a+b)/2)
             row=[image.getpixel((x,30)) for x in range(seam-6,seam+7)]
             assert max(max(p[c] for p in row)-min(p[c] for p in row) for c in range(3))<3,('column seam',row)
-        print('PASS: one continuous strip glass panel across columns and reserved header')
+        # Empty background below the thumbnails must have no focused-column
+        # blue frame either (the old frame ran at band.x + 3).
+        for entries in groups.values():
+            x=int(min(b['x'] for b in entries)-8+3)
+            pixel=image.getpixel((x,700))
+            assert max(pixel)-min(pixel)<12,('focused tile column outline remains',x,pixel)
+        print('PASS: continuous ws-only strip glass panel, no seams/header line/focused-column outline')
         return
     if case in ('gesture','overview','stage'):
         xml=Path(subprocess.check_output(['pkg-config','--variable=pkgdatadir','wayland-protocols'],text=True).strip())/'stable/xdg-shell/xdg-shell.xml'
