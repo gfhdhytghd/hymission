@@ -540,7 +540,19 @@ struct TilesController::Impl {
         const auto mon=State::monitorState()->query().vec(pos).run();
         if (!self->applying && !locked() && self->active(mon) && !mon->m_activeSpecialWorkspace && !(self->overview && self->overview())) {
             auto* o=self->output(mon);
-            if (const auto i=self->at(*o,pos)) self->pointerWorkspace=workspaceForKey(o->model.state().tiles[*i].workspace);
+            if (const auto i=self->at(*o,pos)) {
+                self->pointerWorkspace=workspaceForKey(o->model.state().tiles[*i].workspace);
+                static auto focusMonitor=CConfigValue<Config::INTEGER>("misc:mouse_move_focuses_monitor");
+                // Empty virtual outputs have no window focus event to publish
+                // their active workspace. Match native monitor hover routing.
+                const auto* drag=g_layoutManager->dragController().get();
+                if (!pointerOnly && (*focusMonitor || refocus) && self->interaction==Owner::None &&
+                    (!drag || !drag->target()) && o->model.state().focused!=o->model.state().tiles[*i].id &&
+                    mon->logicalBoxMinusReserved().containsPoint(pos)) {
+                    (void)o->model.activate(workspaceKey(self->pointerWorkspace));
+                    self->apply(*o,true,false);
+                }
+            }
         }
         reinterpret_cast<decltype(&pointerInput)>(pointerHook->m_original)(input,time,refocus,mouse,position,pointerOnly);
     }
