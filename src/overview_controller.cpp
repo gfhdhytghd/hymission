@@ -2761,6 +2761,8 @@ void OverviewController::clearToggleSwitchSession() {
 }
 
 SDispatchResult OverviewController::open(const std::string& args) {
+    if (!m_initError.empty())
+        return {.success = false, .error = m_initError};
     if (sessionLocked())
         return {};
 
@@ -2804,6 +2806,8 @@ SDispatchResult OverviewController::close() {
 }
 
 SDispatchResult OverviewController::toggle(const std::string& args) {
+    if (!m_initError.empty())
+        return {.success = false, .error = m_initError};
     if (sessionLocked())
         return {};
 
@@ -2898,6 +2902,7 @@ std::string OverviewController::overviewStateJson() const {
         {"version", 1},
         {"active", isVisible()},
         {"phase", phaseName()},
+        {"initError", m_initError},
         {"groupedWindowsPolicy", groupedWindowsPolicy() == GroupedWindowsPolicy::Collapsed ? "collapsed" : "expanded"},
         {"windows", nlohmann::json::array()},
     };
@@ -7672,6 +7677,12 @@ void OverviewController::setAnimationsEnabledOverride(bool disable, std::optiona
     }
 }
 
+bool OverviewController::initFailed(const std::string& reason) {
+    m_initError = reason;
+    notify(reason, CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+    return false;
+}
+
 bool OverviewController::installHooks() {
     static_assert(std::is_same_v<SurfaceGetTexBoxFn, decltype(&hkSurfaceTexBox)>);
     static_assert(std::is_same_v<SurfaceBoundingBoxFn, decltype(&hkSurfaceBoundingBox)>);
@@ -7699,10 +7710,10 @@ bool OverviewController::installHooks() {
     static_assert(std::is_same_v<BorderDrawFn, decltype(&hkGroupBarDraw)>);
     static_assert(std::is_same_v<SurfaceBlurNeedsFn, decltype(&hkSurfaceNeedsPrecomputeBlur)>);
     if (!actionHooks::install(m_handle, this))
-        return false;
+        return initFailed("[hymission] failed to hook Config::Actions fullscreen/workspace functions");
     if (!hookFunction("renderState", "CAnimatedDecorationGradient::renderState() const", m_decorationGradientHook,
                       reinterpret_cast<void*>(&hookDecorationGradient)) || !m_decorationGradientHook->hook())
-        return false;
+        return initFailed("[hymission] failed to hook CAnimatedDecorationGradient::renderState");
     decorationGradientOriginal = reinterpret_cast<DecorationGradientFn>(m_decorationGradientHook->m_original);
 
     const auto activateOptionalHook = [&](CFunctionHook*& hook, auto& original, const char* label) {
@@ -7731,14 +7742,12 @@ bool OverviewController::installHooks() {
                           "IHyprRenderer::shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<CMonitor>)",
                           "CHyprRenderer::shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<CMonitor>)"},
                       m_shouldRenderWindowHook, reinterpret_cast<void*>(&hkShouldRenderWindow))) {
-        notify("[hymission] failed to hook shouldRenderWindow(window, monitor)", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to hook shouldRenderWindow(window, monitor)");
     }
 
     if (!hookFunction("renderPresentation", "Desktop::View::CWindowPresentation::renderPresentation(Render::eSceneMode) const", m_effectiveAlphaHook,
                       reinterpret_cast<void*>(&hkEffectiveAlpha))) {
-        notify("[hymission] failed to hook CWindow::effectiveAlpha for expanded groups", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to hook CWindow::effectiveAlpha for expanded groups");
     }
 
     (void)hookFunction("renderLayer", std::vector<std::string>{"IHyprRenderer::renderLayer(", "CHyprRenderer::renderLayer("}, m_renderLayerHook,
@@ -7751,49 +7760,40 @@ bool OverviewController::installHooks() {
                        m_rendererDrawElementHook, reinterpret_cast<void*>(&hkRendererDrawElement));
 
     if (!hookFunction("getTexBox", "CSurfacePassElement::getTexBox(", m_surfaceTexBoxHook, reinterpret_cast<void*>(&hkSurfaceTexBox))) {
-        notify("[hymission] failed to hook getTexBox", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to hook getTexBox");
     }
 
     if (!hookFunction("boundingBox", "CSurfacePassElement::boundingBox(", m_surfaceBoundingBoxHook, reinterpret_cast<void*>(&hkSurfaceBoundingBox))) {
-        notify("[hymission] failed to hook boundingBox", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to hook boundingBox");
     }
 
     if (!hookFunction("opaqueRegion", "CSurfacePassElement::opaqueRegion(", m_surfaceOpaqueRegionHook, reinterpret_cast<void*>(&hkSurfaceOpaqueRegion))) {
-        notify("[hymission] failed to hook opaqueRegion", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to hook opaqueRegion");
     }
 
     if (!hookFunction("visibleRegion", "CSurfacePassElement::visibleRegion(", m_surfaceVisibleRegionHook, reinterpret_cast<void*>(&hkSurfaceVisibleRegion))) {
-        notify("[hymission] failed to hook visibleRegion", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to hook visibleRegion");
     }
 
     if (!hookFunction("draw", "IPassElement::draw(", m_surfaceDrawHook, reinterpret_cast<void*>(&hkSurfaceDraw))) {
-        notify("[hymission] failed to hook surface draw", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to hook surface draw");
     }
 
     if (!hookFunction("needsLiveBlur", "CSurfacePassElement::needsLiveBlur(", m_surfaceNeedsLiveBlurHook, reinterpret_cast<void*>(&hkSurfaceNeedsLiveBlur))) {
-        notify("[hymission] failed to hook surface needsLiveBlur", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to hook surface needsLiveBlur");
     }
 
     if (!hookFunction("needsPrecomputeBlur", "CSurfacePassElement::needsPrecomputeBlur(", m_surfaceNeedsPrecomputeBlurHook,
                       reinterpret_cast<void*>(&hkSurfaceNeedsPrecomputeBlur))) {
-        notify("[hymission] failed to hook surface needsPrecomputeBlur", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to hook surface needsPrecomputeBlur");
     }
 
     if (!hookFunction("draw", "CHyprBorderDecoration::draw(", m_borderDrawHook, reinterpret_cast<void*>(&hkBorderDraw))) {
-        notify("[hymission] failed to hook border decoration draw", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to hook border decoration draw");
     }
 
     if (!hookFunction("draw", "CHyprDropShadowDecoration::draw(", m_shadowDrawHook, reinterpret_cast<void*>(&hkShadowDraw))) {
-        notify("[hymission] failed to hook shadow decoration draw", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to hook shadow decoration draw");
     }
 
     if (!hookFunction("drawShadow", "CHyprGLRenderer::drawShadow(Render::CRenderContext&, Hyprutils::Math::CBox const&, int, float, int, Config::CGradientValueData const&, float, Render::SWindowRenderPresentation const&)",
@@ -7807,19 +7807,16 @@ bool OverviewController::installHooks() {
     if (!hookFunction("calculateUVForSurface",
                       std::vector<std::string>{"IElementRenderer::calculateUVForSurface(", "CHyprRenderer::calculateUVForSurface("},
                       m_calculateUVForSurfaceHook, reinterpret_cast<void*>(&hkCalculateUVForSurface))) {
-        notify("[hymission] failed to hook calculateUVForSurface", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to hook calculateUVForSurface");
     }
 
     if (!wrapDispatcher("fullscreen", m_fullscreenActiveOriginal, [this](std::string args) { return fullscreenDispatcherHook(std::move(args)); })) {
-        notify("[hymission] failed to wrap fullscreen dispatcher", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to wrap fullscreen dispatcher");
     }
     m_fullscreenActiveDispatcherWrapped = true;
 
     if (!wrapDispatcher("fullscreenstate", m_fullscreenStateActiveOriginal, [this](std::string args) { return fullscreenStateDispatcherHook(std::move(args)); })) {
-        notify("[hymission] failed to wrap fullscreenstate dispatcher", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+        return initFailed("[hymission] failed to wrap fullscreenstate dispatcher");
     }
     m_fullscreenStateDispatcherWrapped = true;
 
