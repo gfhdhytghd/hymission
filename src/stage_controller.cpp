@@ -1,4 +1,5 @@
 #include "stage_controller.hpp"
+#include "numeric_config.hpp"
 #include "stage_logic.hpp"
 #include "stage_edge_effect.hpp"
 #include "input_guard.hpp"
@@ -67,7 +68,7 @@
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
 #include <hyprland/src/layout/supplementary/WorkspaceAlgoMatcher.hpp>
 
-#include "vendor/nlohmann/json.hpp"
+#include "state_json.hpp"
 
 namespace hymission {
 namespace {
@@ -124,16 +125,16 @@ long setting(const char* suffix, long fallback) {
     return fallback;
 }
 
-double numberSetting(const char* key, double fallback) {
+double numberSetting(const char* key, double fallback, double minimum = 0.0, double maximum = 1000000.0) {
     const auto value = Config::mgr()->getConfigValue(key);
     if (!value.dataptr || !value.type)
         return fallback;
     if (*value.type == typeid(Config::FLOAT))
-        return **reinterpret_cast<Config::FLOAT* const*>(value.dataptr);
+        return finiteConfig(**reinterpret_cast<Config::FLOAT* const*>(value.dataptr), fallback, minimum, maximum);
     if (*value.type == typeid(bool))
         return **reinterpret_cast<bool* const*>(value.dataptr) ? 1 : 0;
     if (*value.type == typeid(Config::INTEGER))
-        return **reinterpret_cast<Config::INTEGER* const*>(value.dataptr);
+        return finiteConfig(**reinterpret_cast<Config::INTEGER* const*>(value.dataptr), fallback, minimum, maximum);
     return fallback;
 }
 
@@ -1093,7 +1094,7 @@ void StageController::Impl::endSwipe() {
     const double distance = std::max(1.0, numberSetting("gestures:workspace_swipe_distance", 300));
     const double force = numberSetting("gestures:workspace_swipe_min_speed_to_force", 30);
     const bool commit = !swipe->cancelled && std::abs(native->m_delta) >= 2 &&
-        (std::abs(native->m_delta) >= distance * numberSetting("gestures:workspace_swipe_cancel_ratio", 0.5) || (force > 0 && native->m_avgSpeed >= force));
+        (std::abs(native->m_delta) >= distance * numberSetting("gestures:workspace_swipe_cancel_ratio", 0.5, 0, 1) || (force > 0 && native->m_avgSpeed >= force));
     native->m_workspaceBegin.reset();
     native->m_initialDirection = 0;
     swipe->released = true;
@@ -2287,7 +2288,7 @@ void StageController::Impl::finishThumbnailDrag() {
         return;
     const bool toDesktop = destination->isVisible();
     traceDrop("thumbnail_release", window, destination, true);
-    finishDrop(destination, window, from, stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
+    finishDrop(destination, window, from, stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
         numberSetting("decoration:rounding", 0), from.w, from.h), center, {}, center, frame.viewport, edgeTransfer);
     if (!toDesktop || window->m_workspace != destination)
         return;
@@ -2412,7 +2413,7 @@ void StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
                     dropOrigin = box(frame.window);
                     originViewport = frame.viewport;
                     edgeTransfer = dragHover->edgeTransfer;
-                    dropRadius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
+                    dropRadius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
                         numberSetting("decoration:rounding", 0), dropOrigin.w, dropOrigin.h);
                 }
                 const auto placement = edgeTransfer ? dragHover->to.middle() : dropOrigin.middle();
@@ -2522,7 +2523,7 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
                         const auto target = preview->target.copy().translate(Vector2D{sidebar(*screen).x + screen->geometry.padding,
                             screen->base.y + cardTop(*screen, std::distance(screen->cards.begin(), card))});
                         screen->flights.push_back({*preview, dropOrigin, target, dropRadius, static_cast<float>(stage::previewRounding(
-                            numberSetting("plugin:hymission:stage_window_rounding", -1), numberSetting("decoration:rounding", 0), target.w, target.h)), true});
+                            numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096), numberSetting("decoration:rounding", 0), target.w, target.h)), true});
                         if (edgeTransfer || scrollingTiled(window)) {
                             screen->flights.back().fromViewport = edgeTransfer ? originViewport.value_or(desktopViewport(*screen)) :
                                 stage::edgeViewport(rect(dropOrigin), 0, 0);
@@ -2667,7 +2668,7 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
                 const auto window = preview.window.lock();
                 if (!window || !window->m_isMapped || window->isHidden() || window->m_pinned || window->m_workspace != workspace || flying(*screen, window) || thumbnailDrag == window)
                     continue;
-                const auto radius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
+                const auto radius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
                     numberSetting("decoration:rounding", 0), preview.target.w, preview.target.h);
                 const CBox target = preview.target.copy().translate(box.pos());
                 // Export the geometry actually drawn into this frame, including
@@ -2685,7 +2686,7 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
             // output: the sidebar clip would cut the desktop-facing edge.
             if (setting("stage_active_glow", 0) != 0 && monitor->m_activeWorkspace && workspace == monitor->m_activeWorkspace) {
                 const auto glow = CHyprColor(static_cast<uint64_t>(setting("focus_selected_color", 0xF23DC7FF)));
-                const double glowRound = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
+                const double glowRound = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
                     numberSetting("decoration:rounding", 0), box.w, box.h);
                 const int ringRound = static_cast<int>(std::lround(glowRound * monitor->m_scale));
                 const auto ringBox = physical(CBox{box.x - 2, box.y - 2, box.w + 4, box.h + 4});
@@ -2700,7 +2701,7 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
             // Reorder target marker while dragging a card onto another one.
             if (screen->reorderHover == i) {
                 const auto accent = CHyprColor(static_cast<uint64_t>(setting("focus_selected_color", 0xF23DC7FF)));
-                const double hoverRound = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
+                const double hoverRound = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
                     numberSetting("decoration:rounding", 0), box.w, box.h);
                 const int hoverRingRound = static_cast<int>(std::lround(hoverRound * monitor->m_scale));
                 g_pHyprRenderer->m_renderData.clipBox = outputClip;
@@ -2771,7 +2772,7 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
             const auto box = hymission::box(frame.window);
             const auto bounds = dragHover->onDesktop ? rect(CBox{monitor->m_position, monitor->m_size}) : flightBounds(monitor);
             const auto clip = physical(CBox{bounds.x, bounds.y, bounds.width, bounds.height});
-            const double radius = dragHover->onDesktop ? window->rounding() : stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1),
+            const double radius = dragHover->onDesktop ? window->rounding() : stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
                 numberSetting("decoration:rounding", 0), box.w, box.h);
             if (!dragHover->edgeTransfer)
                 drawPreview(window, monitor, box, clip, radius, std::nullopt, nullptr, dragHover->onDesktop);
@@ -2890,7 +2891,7 @@ void StageController::Impl::startFlights(Screen& screen, WORKSPACEID previous, c
                     natural.w * scale, natural.h * scale};
     };
     const auto radius = [&](const CBox& box) {
-        return stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1), numberSetting("decoration:rounding", 0), box.w, box.h);
+        return stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096), numberSetting("decoration:rounding", 0), box.w, box.h);
     };
     for (const auto& workspace : workspaces) {
         Screen capture;
@@ -3526,7 +3527,7 @@ std::string StageController::Impl::stateJson() const {
                                      {"scroll", screen.scroll}, {"max_scroll", screen.geometry.maxScroll}, {"covered", screen.covered}, {"suspended", screen.suspended},
                                      {"cards", cards}});
     }
-    return result.dump() + "\n";
+    return dumpStateJson(result) + "\n";
 }
 
 StageController::StageController(HANDLE handle, std::function<bool()> suspended,

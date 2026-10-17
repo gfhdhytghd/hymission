@@ -11,7 +11,7 @@ See the [changelog](https://gfhdhytghd.github.io/hymission/) for release history
 > Hyprland plugins run inside the compositor process. Install plugins only from sources you trust.
 
 > [!WARNING]
-> This software is 99% vibe coded with OpenAI CodeX, but have been manual audited, warn in case you mind it.
+> This software is vibe coded: 2% human, 20% Claude, 78% OpenAI Codex. It has been manually audited; warning in case you mind it.
 
 **Inspired By Apple Mission Control**
 
@@ -454,6 +454,8 @@ overlap. It attempts every window count before falling back to row search.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `natural_scale_flex` | float | `0.22` | Natural-engine-only free scale range. Values are clamped to `0.0` - `0.25`; recent-first multi-workspace ordering keeps earlier windows visibly larger, while natural layouts may use larger per-window scale differences to fill sparse space. |
+
+Non-finite numeric settings use their defaults. Layout padding, spacing and minimum lengths are limited to 0–4096 logical pixels; preview scales to 0–4, small-window boost to 0.1–4, and layout weights to 0–100. The minimum slot scale cannot exceed the maximum preview scale. Workspace strip refresh intervals are limited to 0–60000 ms (0 keeps frame-driven refresh). Gesture finger counts must be decimal integers from 2 to 9; scales must be finite and are limited to 0.1–10.
 
 ### Behavior
 
