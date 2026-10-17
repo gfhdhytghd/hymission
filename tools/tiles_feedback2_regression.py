@@ -2,6 +2,7 @@
 import json
 import subprocess
 import time
+from pathlib import Path
 from PIL import Image
 
 
@@ -46,5 +47,58 @@ def run(case,request,root,env,runtime,processes,handles):
             row=[image.getpixel((x,30)) for x in range(seam-6,seam+7)]
             assert max(max(p[c] for p in row)-min(p[c] for p in row) for c in range(3))<3,('column seam',row)
         print('PASS: one continuous strip glass panel across columns and reserved header')
+        return
+    if case in ('gesture','overview','stage'):
+        xml=Path(subprocess.check_output(['pkg-config','--variable=pkgdatadir','wayland-protocols'],text=True).strip())/'stable/xdg-shell/xdg-shell.xml'
+        subprocess.run(['wayland-scanner','client-header',str(xml),str(root/'xdg-shell-client.h')],check=True)
+        subprocess.run(['wayland-scanner','private-code',str(xml),str(root/'xdg-shell-protocol.c')],check=True)
+        flags=subprocess.check_output(['pkg-config','--cflags','--libs','wayland-client'],text=True).split()
+        binary=root/'tiles-marker'
+        subprocess.run(['cc',str(Path(__file__).with_name('tiles_top_marker_client.c')),str(root/'xdg-shell-protocol.c'),'-I'+str(root),*flags,'-o',str(binary)],check=True)
+    if case=='gesture':
+        evaluate('hl.gesture({fingers=4,direction="vertical",action="workspace"}); hl.animation({leaf="workspaces",enabled=true,speed=8,bezier="default",style="slidevert"}); hl.config({gestures={workspace_swipe_invert=false,workspace_swipe_distance=300,workspace_swipe_cancel_ratio=.05,workspace_swipe_min_speed_to_force=0,workspace_swipe_forever=false}}); hl.plugin.hymission_tiles_test.refresh()')
+        for ws in (601,602,603,604):evaluate(f'hl.workspace_rule({{workspace="{ws}",persistent=true}})')
+        for ws in (601,602,603):
+            evaluate(f'hl.dispatch(hl.dsp.focus({{workspace={ws}}}))')
+            log=open(root/f'gesture-client-{ws}.log','w');handles.append(log)
+            processes.append(subprocess.Popen([str(binary)],env=child,stdout=log,stderr=subprocess.STDOUT))
+            wait('j/clients',lambda cs:len(cs)==ws-600)
+        for capability in (0,1):
+            evaluate(f'hl.config({{plugin={{hymission={{tiles_enabled={capability},stage_enabled=1,stage_transition_ms=0}}}}}}); hl.plugin.hymission_tiles_test.refresh(); hl.dispatch(hl.dsp.focus({{workspace=601}})); hl.plugin.hymission.stage_open()')
+            wait('j/hymission-stage-state',lambda s:s['enabled'] and s['visibility_progress']==1)
+            evaluate('hl.plugin.hymission_tiles_test.trackpad("begin"); hl.plugin.hymission_tiles_test.trackpad("update",40)')
+            baseline=json.loads(request('j/hymission-stage-state'))
+            assert baseline['screens'][0]['swipe_active'] and baseline['screens'][0]['swipe_progress']>0,baseline
+            (root/f'gesture-single-{capability}.json').write_text(json.dumps(baseline,indent=2))
+            evaluate('hl.plugin.hymission_tiles_test.trackpad("cancel")')
+            wait('j/hymission-stage-state',lambda s:not s['screens'][0]['swipe_active'])
+        evaluate('hl.plugin.hymission.stage_close(); hl.config({plugin={hymission={stage_enabled=0}}})')
+        evaluate('hl.dispatch(hl.dsp.focus({workspace=601})); hl.plugin.hymission.tile_add({workspace="603"}); hl.plugin.hymission.tile_add({workspace="604"}); hl.plugin.hymission.tile_focus("left"); hl.plugin.hymission.tile_focus("left"); hl.config({plugin={hymission={stage_enabled=1,stage_transition_ms=0,stage_show_active=1}}}); hl.plugin.hymission.stage_open()')
+        wait('j/hymission-stage-state',lambda s:s['enabled'] and len(s['screens'])==3 and s['visibility_progress']==1)
+        evaluate('hl.config({animations={enabled=true}})')
+        snapshots=[]
+        evaluate('hl.plugin.hymission_tiles_test.trackpad("begin")')
+        for i in range(1,6):
+            evaluate('hl.plugin.hymission_tiles_test.trackpad("update",40)')
+            path=root/f'trackpad-{i}.json'
+            evaluate('hl.plugin.hymission_tiles_test.animation_report('+json.dumps(str(path))+')')
+            frame=json.loads(path.read_text());snapshots.append(frame)
+            assert state()['interaction_owner']==2,state()
+            assert abs(frame['601']['value'][0])<.01 and abs(frame['601']['value'][1]+i*40/300*1080)<.1,('vertical input not following fingers',i,frame)
+            assert abs(frame['602']['alpha']-1)<.01
+            for ws in ('603','604'):assert frame[ws]['value']==[0,0] and abs(frame[ws]['alpha']-1)<.01,frame
+            image=capture(f'trackpad-{i}')
+            focused=next(t for t in state()['tiles'] if t['focused'])
+            x=int(focused['x']+focused['width']*.8)
+            red=[y for y in range(80,image.height) if (lambda p:p[0]>120 and p[1]<70 and p[2]<70)(image.getpixel((x,y)))]
+            assert red,('offset state changed but no incoming header in the rendered middle frame',i,x)
+            expected=(1-i*40/300)*1080
+            assert abs(min(red)-expected)<80,('rendered header did not follow input',i,min(red),expected)
+            time.sleep(.02)
+        evaluate('hl.plugin.hymission_tiles_test.trackpad("end")')
+        wait('j/hymission-tiles-state',lambda s:s['interaction_owner']==0)
+        wait('j/activeworkspace',lambda s:s['id']==602)
+        (root/'trackpad-samples.json').write_text(json.dumps(snapshots,indent=2))
+        print('PASS: four-finger vertical InputManager -> TrackpadGestures -> Hymission wrapper -> unified tile swipe, five following-finger middle frames and stable neighbors')
         return
     raise AssertionError('case not implemented: '+case)

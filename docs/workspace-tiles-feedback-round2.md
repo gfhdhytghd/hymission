@@ -13,3 +13,26 @@
 截图：`build-tiles/feedback2-panel/shared-panel.png`。
 
 用户提供的 `.tiles-feedback-strip.png` 仅用于查看，保持未跟踪，不提交。
+
+## 2. 四指垂直手势实际渲染
+
+读取本机配置确认：`hyprland-main.lua:63` 注册四指 vertical `action="workspace"`，
+workspaces/In/Out 样式为 slidevert。插件加载/配置完成时将原生 workspace 手势替换成
+CHymissionWorkspaceTrackpadGesture，正常桌面最终经过 CWorkspaceSwipeGesture 和
+unified swipe。不是 Super+四指 overview 或四指水平 layout scroll。
+
+真正根因在绘制端：tile scene 使用 WORKSPACE_WINDOWS 仅选择一个 workspace，
+但这个快照场景的 presentation 会主动清除 workspace offset/alpha。原先的动画状态
+测试虽然有中间位移，实际窗口绘制仍没有位移。实时 tile renderWindow 现在恢复
+原生 MONITOR presentation，然后继续在固定 tile viewport 内裁剪；预览/快照以及
+单 tile、tiles 关闭路径不变。
+
+新增测试 fixture 从 InputManager::onSwipeBegin/Update/End 输入四指触控板事件，
+经过 EventBus、手势匹配、Hymission 包装层再到 unified；不直接调用 dispatcher 或
+unified 来替代输入。属于隔离 compositor 的合成触控板事件，并非本机物理设备输入。
+
+`--feedback2-regression gesture` 每次 40 delta，采集五个跟手状态和截图；断言垂直
+位移、邻区静止，以及截图中 incoming 红色 CSD 头部真正按 delta 移动。修复前同测试
+状态检查通过但渲染红色头部检查失败，修复后通过。另覆盖 tiles 关闭/单 tile 的
+原有 Stage swipe；disabled regression 新增同一输入场景与参考插件做一致性比较。
+日志：`build-tiles/feedback2-gesture{,-negative}.log`。

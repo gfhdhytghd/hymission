@@ -138,6 +138,18 @@ int window(lua_State* L) {
     } else return luaL_error(L,"unknown test window action");
     return 0;
 }
+// Enter through the same InputManager methods as an IPointer touchpad. This
+// exercises EventBus interception, gesture matching and the trackpad wrapper;
+// it deliberately does not call the unified swipe or any dispatcher directly.
+int trackpad(lua_State* L) {
+    const std::string action=luaL_checkstring(L,1);
+    static uint32_t time=1;
+    if (action=="begin") g_pInputManager->onSwipeBegin({.timeMs=time++,.fingers=4});
+    else if (action=="update") g_pInputManager->onSwipeUpdate({.timeMs=time++,.fingers=4,.delta={0.0,luaL_checknumber(L,2)}});
+    else if (action=="end" || action=="cancel") g_pInputManager->onSwipeEnd({.timeMs=time++,.cancelled=action=="cancel"});
+    else return luaL_error(L,"unknown trackpad event");
+    return 0;
+}
 int swipe(lua_State* L) {
     const std::string action=luaL_checkstring(L,1);
     if (action=="begin" || action=="try_begin") {
@@ -174,6 +186,7 @@ int pointer(lua_State* L) {
 APICALL EXPORT std::string PLUGIN_API_VERSION() { return HYPRLAND_API_VERSION; }
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     fixtureHandle=handle;
+    HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","trackpad",trackpad);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","animation_report",animationReport);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","symbol_report",symbolReport);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","change_workspace",workspaceChange);

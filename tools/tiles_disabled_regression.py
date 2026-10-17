@@ -97,6 +97,15 @@ def run(request,root,env,runtime,processes,handles):
     pointer('release',px+35,py+35)
     assert before=={w['address']:w['workspace']['id'] for w in json.loads(request('j/clients'))}
     observations.append({'suppressed_release_retained':True,'overview_drag_escape_closes':True,'escape_keeps_workspaces':True})
+    # Real trackpad event entry, including the replaced native gesture wrapper.
+    evaluate('hl.gesture({fingers=4,direction="vertical",action="workspace"}); hl.config({gestures={workspace_swipe_invert=false,workspace_swipe_distance=300}}); hl.plugin.hymission_tiles_test.refresh(); hl.dispatch(hl.dsp.focus({workspace=1}))')
+    wait('j/hymission-stage-state',lambda s:s['screens'] and s['screens'][0]['active_workspace']==1,'gesture-origin')
+    evaluate('hl.plugin.hymission_tiles_test.trackpad("begin"); hl.plugin.hymission_tiles_test.trackpad("update",40)')
+    gesture=json.loads(request('j/hymission-stage-state'))['screens'][0]
+    assert gesture['swipe_active'] and gesture['swipe_progress']>0,gesture
+    observations.append({'vertical_stage_swipe_active':gesture['swipe_active'],'vertical_stage_swipe_progress':gesture['swipe_progress']})
+    evaluate('hl.plugin.hymission_tiles_test.trackpad("cancel")')
+    wait('j/hymission-stage-state',lambda s:not s['screens'][0]['swipe_active'],'gesture-cancelled')
     (root/'default-off-observations.json').write_text(json.dumps(observations,indent=2))
     (root/'configerrors.txt').write_text(request('/configerrors'))
     print('PASS: tiles-disabled Stage dimensions, card/monitor-edge clicks, overview entry/exit and Stage restoration')

@@ -415,7 +415,12 @@ struct TilesController::Impl {
                 edge=stage::edgeViewportForWindow(stage::edgeViewport(clip,width,width,0,0),{pos.x,pos.y,size.x,size.y});
             } else if (width>0) self->edgeFailure="native blur backdrop hook unavailable; hard clip retained";
         }
-        StageController::renderInViewport(mon, edge, clip, [&] { original(r, ctx, w, mon, p, now, decorate, mode, ignore, standalone); });
+        // WORKSPACE_WINDOWS selects only this workspace, but its presentation
+        // intentionally strips workspace motion/alpha for snapshots. This is a
+        // live tile scene: retain the native MONITOR presentation inside our
+        // fixed tile clip, including warped offsets while fingers are down.
+        const auto livePresentation=overview?p:w->presentation().renderPresentation(Render::eSceneMode::MONITOR);
+        StageController::renderInViewport(mon, edge, clip, [&] { original(r, ctx, w, mon, livePresentation, now, decorate, mode, ignore, standalone); });
     }
     using SceneFn = void (*)(Render::IHyprRenderer*, Render::CRenderContext&, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp&, Render::eSceneMode);
     static void scenes(bool full, Render::IHyprRenderer* r, Render::CRenderContext& ctx, PHLMONITOR mon, PHLWORKSPACE ws, const Time::steady_tp& now, Render::eSceneMode mode) {
