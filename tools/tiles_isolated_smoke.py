@@ -28,6 +28,10 @@ def main():
     ap.add_argument("--default-off-regression", action="store_true")
     ap.add_argument("--top-clip-regression", action="store_true")
     ap.add_argument("--animation-regression", action="store_true")
+    ap.add_argument("--stage-switch-regression",choices=("off","single","two","three"))
+    ap.add_argument("--stage-switch-observe",action="store_true")
+    ap.add_argument("--stage-switch-layout",choices=("dwindle","scrolling"),default="dwindle")
+    ap.add_argument("--stage-switch-route",choices=("key","relative","card","swipe","strip"))
     ap.add_argument("--relative-regression",choices=("off","single","two","three"))
     ap.add_argument("--relative-observe",action="store_true")
     ap.add_argument("--presentation-regression",choices=("two","three"))
@@ -143,7 +147,7 @@ def main():
 
         for _ in range(100):
             try:
-                state = json.loads(request("j/hymission-stage-state" if (args.default_off_regression or args.stage_animation_profile or args.stage_height_regression or args.focus_reflow_regression) else "j/hymission-tiles-state"))
+                state = json.loads(request("j/hymission-stage-state" if (args.default_off_regression or args.stage_animation_profile or args.stage_height_regression or args.focus_reflow_regression or args.stage_switch_regression) else "j/hymission-tiles-state"))
                 break
             except (ValueError, OSError):
                 time.sleep(0.1)
@@ -178,6 +182,10 @@ def main():
             run(request,root)
             assert child.poll() is None, "compositor exited during gesture regression"
             (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
+        if args.stage_switch_regression:
+            from tiles_stage_switch_regression import run
+            run(args.stage_switch_regression,args.stage_switch_observe,args.stage_switch_route,args.stage_switch_layout,request,root,env,runtime,processes,handles)
             return
         if args.relative_regression:
             from tiles_relative_regression import run
