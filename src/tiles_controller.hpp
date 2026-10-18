@@ -29,6 +29,8 @@ class TilesController {
     std::optional<View> view(const PHLWORKSPACE&) const;
     bool enabled(const PHLMONITOR&) const;
     bool available() const;
+    bool beginNativeStageSwipe(void* gesture,const PHLMONITOR&);
+    std::optional<tiles::Workspace> workspaceSwipeTarget(const PHLMONITOR&,tiles::Id,int step) const;
     PHLWINDOW monitorFullscreen(const PHLMONITOR&) const;
     void fail(std::string error);
     bool handleDivider(const IPointer::SButtonEvent&, Event::SCallbackInfo&);

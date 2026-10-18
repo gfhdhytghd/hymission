@@ -30,8 +30,9 @@ def main():
     ap.add_argument("--animation-regression", action="store_true")
     ap.add_argument("--stage-switch-regression",choices=("off","single","two","three"))
     ap.add_argument("--stage-switch-observe",action="store_true")
+    ap.add_argument("--stage-switch-empty-source",action="store_true")
     ap.add_argument("--stage-switch-layout",choices=("dwindle","scrolling"),default="dwindle")
-    ap.add_argument("--stage-switch-route",choices=("key","relative","card","swipe","strip"))
+    ap.add_argument("--stage-switch-route",choices=("key","relative","card","swipe","unified","strip"))
     ap.add_argument("--relative-regression",choices=("off","single","two","three"))
     ap.add_argument("--relative-observe",action="store_true")
     ap.add_argument("--presentation-regression",choices=("two","three"))
@@ -69,7 +70,7 @@ def main():
                LIBGL_ALWAYS_SOFTWARE="0")
     config = root / "hyprland.lua"
     config.write_text('hl.monitor({output="",mode="1920x1080@60",position="auto",scale="1"})\n'
-                      'hl.config({misc={disable_hyprland_logo=true,disable_splash_rendering=true},animations={enabled=false},xwayland={enabled=false},debug={enable_stdout_logs=true}})\n'
+                      'hl.config({misc={disable_hyprland_logo=true,disable_splash_rendering=true,disable_watchdog_warning=true},animations={enabled=false},xwayland={enabled=false},debug={enable_stdout_logs=true}})\n'
                       f'hl.plugin.load({json.dumps(str(Path(args.plugin).resolve()))})\n')
     if args.fixture:
         with config.open("a") as output:
@@ -185,7 +186,7 @@ def main():
             return
         if args.stage_switch_regression:
             from tiles_stage_switch_regression import run
-            run(args.stage_switch_regression,args.stage_switch_observe,args.stage_switch_route,args.stage_switch_layout,request,root,env,runtime,processes,handles)
+            run(args.stage_switch_regression,args.stage_switch_observe,args.stage_switch_route,args.stage_switch_layout,args.stage_switch_empty_source,request,root,env,runtime,processes,handles)
             return
         if args.relative_regression:
             from tiles_relative_regression import run
@@ -415,14 +416,15 @@ def main():
             stage=json.loads(request("j/hymission-stage-state"))
             (root/"same-column-before.json").write_text(json.dumps(stage,indent=2))
             sc,c,w=source_preview(stage)
-            # Stage card activation on a managed single tile must retain the
-            # native changeWorkspace animation, just like typed actions.
+            # Stage commits through native changeWorkspace while retaining Stage
+            # flight ownership, including a managed single tile (FB10).
             sx=w["x"]+w["width"]/2; sy=w["y"]+w["height"]/2
-            evaluate(f'hl.config({{animations={{enabled=true}},plugin={{hymission={{stage_transition_ms=220}}}}}}); hl.plugin.hymission_tiles_test.pointer("press",{sx},{sy}); hl.plugin.hymission_tiles_test.pointer("release",{sx},{sy}); local a=hl.plugin.hymission_tiles_test.workspace_animation("{original_ws}"); assert(a.animated and math.abs(a.x)>1)')
-            wait_json("j/activeworkspace",lambda ws:ws["id"]==original_ws,"single-tile-stage-native-click")
+            evaluate(f'hl.config({{animations={{enabled=true}},plugin={{hymission={{stage_transition_ms=220}}}}}}); hl.plugin.hymission_tiles_test.pointer("press",{sx},{sy}); hl.plugin.hymission_tiles_test.pointer("release",{sx},{sy}); local a=hl.plugin.hymission_tiles_test.workspace_animation("{original_ws}"); assert(not a.animated and math.abs(a.x)<.01)')
+            wait_json("j/activeworkspace",lambda ws:ws["id"]==original_ws,"single-tile-stage-integrated-click")
             time.sleep(.03)
-            evaluate(f'assert(hl.plugin.hymission_tiles_test.workspace_animation("{original_ws}").animated)')
-            assert all(sc["transition_windows"]==0 for sc in json.loads(request("j/hymission-stage-state"))["screens"])
+            evaluate(f'assert(not hl.plugin.hymission_tiles_test.workspace_animation("{original_ws}").animated)')
+            after=json.loads(request("j/hymission-stage-state")); (root/"same-column-after-click-animation.json").write_text(json.dumps(after,indent=2))
+            assert any(sc["transition_windows"]>0 and 0<sc["transition_progress"]<1 for sc in after["screens"])
             evaluate('hl.config({animations={enabled=false},plugin={hymission={stage_transition_ms=0}}}); hl.dispatch(hl.dsp.focus({workspace=77})); hl.plugin.hymission_tiles_test.refresh()')
             stage=wait_json("j/hymission-stage-state",lambda s:len(s["screens"])==1 and len(s["screens"][0]["cards"])>=2 and any(c.get("windows") for c in s["screens"][0]["cards"]),"same-column-after-click")
             time.sleep(.15)

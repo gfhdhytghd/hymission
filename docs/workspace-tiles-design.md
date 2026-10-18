@@ -246,6 +246,16 @@ Stage 缩略图可以跨列左右拖入另一 tile 的 active workspace，也可
 
 Tiles/Stage/overview 共用一个交互 owner（类型区分 resize、workspace swipe、overview drag、Stage transfer/split）。一个 drag 从按下到 release/cancel 固定 source ID、generation 和窗口引用，只有 owner 能消费按钮/驱动 flight；不同时触发原生 drag 和 overview ghost。预览、commit、settle 之间移交 owner，确保每个窗口每帧只被一个 controller 绘制一次。
 
+### 7.2 Stage 可见时的 workspace 集成动画（FB10）
+
+Stage 完全打开、未被 overview/special workspace 暂挂时，键盘 workspace action、相对 selector、Stage 卡片点击和 unified/四指 workspace swipe 都由 Stage 持有窗口动画：旧桌面收回本列卡片，新卡片展开到该 tile 桌面。activation 仍提交真实 workspace/history/归属事务；在首个渲染帧前同步准备 flight，原生 workspace slide/fade 不在其下同时运行。Stage 隐藏时保留原生 tile 动画；单 tile 和 tiles 关闭时沿用 pre-tiles Stage 曲线、时长、端点与跟手/松手逻辑，不额外强制原生滑动。
+
+每次 swipe 固定 monitor + tile ID，候选直接复用 §5.1 的归属/边界解析。Stage 初始化原生 gesture session 后保留唯一 `Swipe` owner，Tiles 不再为同一手势建立第二份 native slide。visual scene、卡片、frame state、commit/cancel/settle 都按这个 tile 选取，不因物理 monitor 相同而复用到其他列。新 workspace 的创建仍由 activation 提交；取消只回到原端点，不发布 binding。
+
+集中在左侧的本列 sidebar 与该 tile 的桌面区域共同构成 flight 绘制范围。来自中间/右侧 tile 的 flight 不穿过其他桌面/列绘制；未切换的 tile 不重置其位置动画，不获得 flight owner。Stage 仍共用整屏桌面缩放，普通切换不改变列宽/卡片高度。卡片消失（例如空旧 workspace 在 native 切换后销毁）只移除失效 flight，不能清空仍有效的新桌面入场；剩余卡片的终点随布局更新。
+
+overview 显示期间，strip 点击继续由 overview 的 workspace transition 持有可见动画；Stage 保持暂挂。退出时使用现有 prepared Stage 端点完成交接，不叠加第二次 Stage/native slide。此处保持 overview 的交互语义，strip 点击不会强行关闭 overview。多 tile strip 点击仍只提交对应列。详见 `workspace-tiles-feedback-round10.md` 的逐帧与邻区像素验证。
+
 ## 8. DSP、配置与 Lua API
 
 以下接口已实现。命名采用现有单层 `hl.plugin.hymission.*`，Lua 函数立即执行，错误沿用 Lua error / `SDispatchResult`。legacy parser 存在时注册对应 `hymission:*`；Lua 模式通过插件 API 调用，与 `src/main.cpp` 当前兼容分支一致。

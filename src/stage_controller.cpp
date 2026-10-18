@@ -316,6 +316,7 @@ struct StageController::Impl {
     struct Swipe {
         CUnifiedWorkspaceSwipeGesture* native = nullptr;
         PHLMONITORREF monitor;
+        tiles::Id tile = 0;
         PHLWORKSPACEREF origin;
         PHLWORKSPACEREF target;
         WorkspaceKey requestedTarget = WORKSPACE_INVALID;
@@ -717,13 +718,14 @@ struct StageController::Impl {
         auto* tiles=TilesController::get();
         const bool owns=self->ownsTransition(monitor?monitor->m_activeWorkspace:nullptr,true);
         if (owns && tiles && !tiles->acquire(TilesController::Owner::Swipe)) return false;
-        const bool began = self->swipeBeginOriginal(gesture, monitor);
+        const bool began = owns && tiles && tiles->enabled(monitor) ? tiles->beginNativeStageSwipe(gesture,monitor) : self->swipeBeginOriginal(gesture, monitor);
         if ((!began || !gesture->isGestureInProgress()) && owns && tiles) tiles->release(TilesController::Owner::Swipe);
         if (began && monitor && self->ownsTransition(monitor->m_activeWorkspace, true) && gesture->isGestureInProgress()) {
             ++self->swipeBegins;
             self->swipe.emplace();
             self->swipe->native = gesture;
             self->swipe->monitor = monitor;
+            self->swipe->tile = self->screenFor(monitor)->tile;
             self->swipe->origin = monitor->m_activeWorkspace;
         }
         return began;
@@ -741,7 +743,7 @@ struct StageController::Impl {
             workspace->m_monitor == self->swipe->monitor &&
             (workspace == self->swipe->origin || workspace == self->swipe->target);
         if (workspace && type == Animation::Workspace::ANIMATION_TYPE_IN) {
-            if (auto* screen = self->screenFor(workspace->m_monitor.lock()))
+            if (auto* screen = self->screenForWorkspace(workspace))
                 screen->revealFromBottom = left;
         }
         const auto monitor = workspace ? workspace->m_monitor.lock() : PHLMONITOR{};
@@ -941,10 +943,10 @@ bool StageController::Impl::ownsTransition(const PHLWORKSPACE& workspace, bool a
     if (!enabled || visibility != 1 || visibilityGesture || !workspace || (workspace->type() == Workspace::eWorkspaceType::SPECIAL) || blocked())
         return false;
     const auto monitor = workspace->m_monitor.lock();
-    if (TilesController::get() && TilesController::get()->enabled(monitor)) return false;
     if (!monitor || monitor->m_activeSpecialWorkspace)
         return false;
-    const auto screen = std::ranges::find_if(screens, [&](const auto& s) { return s.monitor == monitor; });
+    const auto tile=TilesController::get() && TilesController::get()->available()?TilesController::get()->preferredTile(workspace,monitor):0;
+    const auto screen = std::ranges::find_if(screens, [&](const auto& s) { return s.monitor == monitor && s.tile == tile; });
     if (screen == screens.end() || !screen->geometry.enabled() || (!allowCovered && screen->covered) || screen->suspended)
         return false;
     const auto targetMode = monitor->m_activeWorkspace ? Fullscreen::controller()->getFullscreenModes(monitor->m_activeWorkspace).internal : Fullscreen::FSMODE_NONE;
@@ -967,7 +969,11 @@ StageController::Impl::Screen* StageController::Impl::screenFor(const PHLMONITOR
 StageController::Impl::Screen* StageController::Impl::screenForWorkspace(const PHLWORKSPACE& workspace) {
     if (!workspace) return nullptr;
     const auto mon=workspace->m_monitor.lock();
-    if (auto* tiles=TilesController::get();tiles && tiles->available()) return screenFor(mon,tiles->preferredTile(workspace,mon));
+    if (auto* tiles=TilesController::get();tiles && tiles->available()) {
+        const auto id=tiles->preferredTile(workspace,mon);
+        if (swipe && swipe->prepared && swipe->monitor==mon && swipe->tile==id) return &swipe->visual;
+        return screenFor(mon,id);
+    }
     return screenFor(mon);
 }
 
@@ -985,6 +991,7 @@ StageController::Impl::Screen* StageController::Impl::visualScreenFor(const PHLM
     if (drawingScreen && drawingScreen->monitor==monitor) {
         if (overviewPhaseFor(monitor)==stage::OverviewPhase::Releasing || (sidebarProgress && sidebarProgress(monitor)))
             if (auto* prepared=preparedOverviewScreen(monitor,drawingScreen->tile)) return prepared;
+        if (swipe && swipe->prepared && swipe->monitor==monitor && swipe->tile==drawingScreen->tile) return &swipe->visual;
         return drawingScreen;
     }
     if (overviewPhaseFor(monitor) == stage::OverviewPhase::Releasing || (sidebarProgress && sidebarProgress(monitor)))
@@ -1016,7 +1023,7 @@ void StageController::Impl::clearSwipe() {
         swipe->native->cancel();
     const auto monitor = swipe->monitor.lock();
     if (swipe->prepared) {
-        if (auto* actual = screenFor(monitor)) {
+        if (auto* actual = screenFor(monitor,swipe->tile)) {
             actual->frameSampleStart = swipe->visual.frameSampleStart;
             actual->frameCount = swipe->visual.frameCount;
             actual->lastFrame = swipe->visual.lastFrame;
@@ -1034,7 +1041,7 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
         return;
     const auto monitor = swipe->monitor.lock();
     const auto origin = swipe->origin.lock();
-    const auto* source = screenFor(monitor);
+    const auto* source = screenFor(monitor,swipe->tile);
     if (!monitor || !origin || !source)
         return;
     swipe->prepared = false;
@@ -1052,10 +1059,12 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
     // A new workspace has no native object until the gesture commits. Build
     // its empty desktop now so outgoing windows still follow the finger.
     visual.active = target ? workspaceKey(target) : swipe->requestedTarget;
-    visual.right = smartisan ? !source->right : source->right;
+    visual.workspace=target;
+    visual.right = !clustered(*source) && smartisan ? !source->right : source->right;
     visual.cards.clear();
     for (const auto& workspace : State::workspaceState()->workspaces()) {
         if ((workspace->type() == Workspace::eWorkspaceType::SPECIAL) || workspace->m_monitor != monitor ||
+            (clustered(*source) && TilesController::get()->preferredTile(workspace.lock(),monitor)!=source->tile) ||
             (setting("stage_show_active", 0) == 0 && workspace == target) ||
             (!setting("stage_show_empty", 1) && workspace->getWindowCount(std::nullopt, false) == 0))
             continue;
@@ -1076,7 +1085,18 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
         return ida > 0 ? ida < idb :
             (a.workspace.lock() && b.workspace.lock() && a.workspace.lock()->displayName() < b.workspace.lock()->displayName());
     });
-    visual.geometry = stage::layout(visual.base.w, visual.base.h, visual.cards.size(), settingsForSide(visual.right), std::nullopt, monitor->m_size.x);
+    if (clustered(*source) && !tileCardOrder.empty())
+        std::ranges::stable_sort(visual.cards,[&](const Card& a,const Card& b) {
+            return std::ranges::find(tileCardOrder,cardID(a))-tileCardOrder.begin()<std::ranges::find(tileCardOrder,cardID(b))-tileCardOrder.begin();
+        });
+    visual.geometry = clustered(*source) ? source->geometry : stage::layout(visual.base.w, visual.base.h, visual.cards.size(), settingsForSide(visual.right), std::nullopt, monitor->m_size.x);
+    if (clustered(*source)) {
+        // Freeze the shared scale during a gesture, but allow a newly created
+        // workspace's outgoing card to extend this column's scroll range.
+        visual.geometry.count=visual.cards.size();
+        visual.geometry.maxScroll=visual.cards.empty()?0:std::max(0.0,visual.cards.size()*visual.geometry.cardHeight+
+            (visual.cards.size()-1)*visual.geometry.cardGap+visual.geometry.paddingTop+visual.geometry.paddingBottom-visual.geometry.height);
+    }
     visual.scroll = visual.geometry.clampScroll(visual.scroll);
     const auto tiledOffset = desktop(visual).pos() - desktop(*source).pos();
     for (std::size_t i = 0; i < visual.cards.size(); ++i) {
@@ -1093,7 +1113,7 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
     visual.paneTransition = visual.right != source->right;
     std::vector<std::pair<PHLWINDOWREF, CBox>> origins;
     for (const auto& window : Desktop::windowState()->windows())
-        if (window->m_monitor == monitor && window->mapped() && !window->isHidden() && !static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED))
+        if (window->m_monitor == monitor && (!clustered(*source) || window->m_workspace==origin || window->m_workspace==target) && window->mapped() && !window->isHidden() && !static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED))
             origins.emplace_back(window, setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() :
                 CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()});
     startFlights(visual, workspaceKey(origin), source->cards, source->geometry, source->scroll, source->right, origins, target, false);
@@ -1175,11 +1195,14 @@ void StageController::Impl::updateSwipe(double delta) {
     }
     const bool left = native->m_delta < 0;
     const bool useR = numberSetting("gestures:workspace_swipe_use_r", 0);
-    auto id = resolveWorkspaceKey(useR ? (left ? "r-1" : "r+1") : (left ? "m-1" : "m+1")).id;
+    auto* tiles=TilesController::get();
+    const bool tileOwned=tiles && tiles->enabled(monitor);
     const bool create = numberSetting("gestures:workspace_swipe_create_new", 1);
-    if (!left && id <= workspaceKey(swipe->origin) && create)
+    auto id = tileOwned?tiles->workspaceSwipeTarget(monitor,swipe->tile,left?-1:1).value_or(WORKSPACE_INVALID) :
+        resolveWorkspaceKey(useR ? (left ? "r-1" : "r+1") : (left ? "m-1" : "m+1")).id;
+    if (!tileOwned && !left && id <= workspaceKey(swipe->origin) && create)
         id = resolveWorkspaceKey("r+1").id;
-    if ((left && id >= workspaceKey(swipe->origin)) || id == WORKSPACE_INVALID || id == workspaceKey(swipe->origin)) {
+    if ((!tileOwned && left && id >= workspaceKey(swipe->origin)) || id == WORKSPACE_INVALID || id == workspaceKey(swipe->origin)) {
         native->m_delta = 0;
         swipe->progress = 0;
         return;
@@ -1250,7 +1273,7 @@ void StageController::Impl::endSwipe() {
         if (!swipe)
             return;
         if (swipe->prepared) {
-            auto* actual = screenFor(monitor);
+            auto* actual = screenFor(monitor,swipe->tile);
             if (!actual || actual->suspended) {
                 clearSwipe();
                 return;
@@ -1814,7 +1837,7 @@ void StageController::Impl::sync() {
         const auto oldGeometry = screen->geometry;
         const bool switching = screen->active != WORKSPACE_INVALID && activeWorkspace && screen->active != workspaceKey(activeWorkspace);
         const bool changedOutput = !sameBox(base, screen->base) || screen->scale != monitor->m_scale || screen->transform != static_cast<int>(monitor->m_transform);
-        if (!clustered(*screen) && visibility == 1 && !visibilityGesture && !finishingOverview && switching && !changedOutput && !changedPolicy && !reconfigure && !blocked() && !screen->covered && !screen->suspended) {
+        if (visibility == 1 && !visibilityGesture && !finishingOverview && switching && !changedOutput && !changedPolicy && !reconfigure && !blocked() && !screen->covered && !screen->suspended) {
             pendingFlights.push_back({monitor, view.id, screen->active, screen->cards, oldGeometry, screen->scroll, screen->right, {}});
             for (const auto& window : Desktop::windowState()->windows()) {
                 if (window->m_monitor == monitor && (!view.id || window->m_workspace==activeWorkspace || workspaceKey(window->m_workspace)==screen->active) && window->mapped() && !window->isHidden() && !static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED))
@@ -1909,8 +1932,17 @@ void StageController::Impl::sync() {
         }
         const bool changedSuspension = screen->suspended != suspended;
         screen->suspended = suspended;
-        if (suspended || cover || changedOutput || reconfigure || (!switching && (changedCards || changedGeometry)))
+        if (suspended || cover || changedOutput || reconfigure)
             screen->flights.clear();
+        else if (!switching && (changedCards || changedGeometry)) {
+            // An empty outgoing workspace can die after native activation. Its
+            // card disappearing must not erase the incoming workspace's flight.
+            std::erase_if(screen->flights,[&](const auto& flight) {
+                const auto window=flight.preview.window.lock();
+                return !window || !window->mapped() || window->isHidden() || window->m_monitor!=monitor ||
+                    (window->m_workspace!=activeWorkspace && std::ranges::none_of(screen->cards,[&](const auto& card) { return card.workspace==window->m_workspace; }));
+            });
+        }
         if (suspended || cover || changedOutput || reconfigure || changedMode || !screen->geometry.enabled()) {
             screen->paneTransition = false;
             screen->departingCards.clear();
@@ -2004,7 +2036,7 @@ void StageController::Impl::motion() {
     }
     if (swipe) {
         const auto monitor = swipe->monitor.lock();
-        auto* actual = screenFor(monitor);
+        auto* actual = screenFor(monitor,swipe->tile);
         const bool finishingStageSwipe = swipe->prepared && swipe->committed && swipe->released;
         if (!monitor || !actual || blocked() || (actual->covered && !finishingStageSwipe && !swipe->sourceCovered) || actual->suspended || (swipe->prepared && !sameBox(actual->base, swipe->visual.base)) ||
             (swipe->committed ? monitor->m_activeWorkspace != swipe->target : monitor->m_activeWorkspace != swipe->origin)) {
@@ -2932,7 +2964,7 @@ void StageController::Impl::renderStage(eRenderStage stage) {
         CBox bounds{{},monitor->m_size};
         if (!progress && !screen->tile && screen->flights.empty() && !screen->paneTransition && !dragHover)
             bounds=sidebar(*screen).translate(-monitor->m_position);
-        else if (!progress && clustered(*screen) && !dragHover && !TilesController::get()->transferDragging() && !(tileDragCandidate && reorderArmed)) {
+        else if (!progress && clustered(*screen) && !(swipe && swipe->prepared && swipe->monitor==monitor) && !dragHover && !TilesController::get()->transferDragging() && !(tileDragCandidate && reorderArmed)) {
             bool first=true,settled=true;
             CBox combined;
             for (const auto& column:screens) if (column.monitor==monitor) {
@@ -3289,12 +3321,13 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
                                        const stage::Geometry& oldGeometry, double oldScroll, bool oldRight,
                                        const std::vector<std::pair<PHLWINDOWREF, CBox>>& origins, PHLWORKSPACE visualActive, bool stopNative) {
     const auto monitor = screen.monitor.lock();
-    const auto activeWorkspace = visualActive ? visualActive : screenWorkspace(screen);
+    const auto activeWorkspace = visualActive ? visualActive : clustered(screen)?workspaceForKey(screen.active):screenWorkspace(screen);
     const double duration = std::clamp(setting("stage_transition_ms", 300), 0L, 2000L);
     if (!monitor || duration == 0 || numberSetting("animations:enabled", 1) == 0 || !oldGeometry.enabled() || !screen.geometry.enabled()) {
         screen.flights.clear();
         return;
     }
+    if (clustered(screen)) for (auto& card:screen.cards) updatePreviews(screen,card);
     const double oldProgress = flightProgress(screen);
     auto previousFlights = std::move(screen.flights);
     std::vector<PHLWORKSPACE> workspaces;
@@ -3316,9 +3349,10 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
         const double scale = geometry.cardWidth / geometry.desktopWidth;
         const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - it->shiftStart).count();
         const double shift = it->shift * (1 - stage::transitionProgress(elapsed, duration));
-        const auto band = stage::sidebarArea({screen.base.x, screen.base.y, screen.base.w, screen.base.h}, geometry, right);
-        const auto area = stage::desktopArea({screen.base.x, screen.base.y, screen.base.w, screen.base.h}, geometry, right);
-        if (cached) {
+        auto endpoint=screen; endpoint.geometry=geometry; endpoint.right=right;
+        const auto band = clustered(screen)?rect(sidebar(endpoint)):stage::sidebarArea(rect(screen.base), geometry, right);
+        const auto area = clustered(screen)?rect(desktop(endpoint)):stage::desktopArea(rect(screen.base), geometry, right);
+        if (cached || clustered(screen)) {
             const auto preview = std::ranges::find_if(it->previews, [&](const Preview& preview) { return preview.window == window; });
             if (preview != it->previews.end())
                 return preview->target.copy().translate(Vector2D{band.x + geometry.padding,
@@ -3334,6 +3368,8 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
     for (const auto& workspace : workspaces) {
         Screen capture;
         capture.monitor = monitor;
+        capture.tile = screen.tile;
+        capture.workspace = workspace;
         capture.base = screen.base;
         capture.geometry = screen.geometry;
         capture.right = screen.right;
@@ -3372,7 +3408,8 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
             }
             if (scrollingTiled(window)) {
                 const auto miniatureView = [&](const std::vector<Card>& cards, const stage::Geometry& geometry, double scroll, bool right) -> std::optional<stage::EdgeViewport> {
-                    const auto area = stage::desktopArea(rect(screen.base), geometry, right);
+                    auto endpoint=screen; endpoint.geometry=geometry; endpoint.right=right;
+                    const auto area = clustered(screen)?rect(desktop(endpoint)):stage::desktopArea(rect(screen.base), geometry, right);
                     const auto view = miniature(workspace, box(area), cards, geometry, scroll, right, window, false);
                     return view ? std::optional{cardViewport(screen,*view)} : std::nullopt;
                 };
@@ -3380,7 +3417,8 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
                     flight.fromViewport = flightFrame(*old, oldProgress, monitor).second;
                 if (!flight.fromViewport) {
                     if (workspaceKey(workspace) == previous) {
-                        const auto area = stage::desktopArea(rect(screen.base), oldGeometry, oldRight);
+                        auto endpoint=screen; endpoint.geometry=oldGeometry; endpoint.right=oldRight;
+                        const auto area = clustered(screen)?rect(desktop(endpoint)):stage::desktopArea(rect(screen.base), oldGeometry, oldRight);
                         const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 32) * visibility : 0;
                         flight.fromViewport = stage::edgeViewport(area, oldRight ? 0 : width, oldRight ? width : 0);
                     } else
@@ -3738,7 +3776,7 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
             flight.to = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() : CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
             if (flight.toViewport)
                 flight.toViewport = desktopViewport(screen);
-        } else if (flight.dropToCard) {
+        } else if (flight.dropToCard || (!flight.edgeTransfer && !flight.desktopDecorations && window->m_workspace!=screenWorkspace(screen))) {
             const auto card = std::ranges::find_if(screen.cards, [&](const auto& c) { return c.workspace == window->m_workspace; });
             if (card != screen.cards.end()) {
                 const auto preview = std::ranges::find_if(card->previews, [&](const auto& p) { return p.window == window; });
@@ -3757,7 +3795,15 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
         const CBox drawClip = !screen.tile && flight.desktopDecorations ? CBox{0, 0, monitor->m_size.x * monitor->m_scale, monitor->m_size.y * monitor->m_scale} : clip;
         const double radius = flight.desktopDecorations ? window->presentation().rounding() :
             flight.fromRadius + (flight.toRadius - flight.fromRadius) * stage::transitionProgress(p, 1);
-        drawPreview(window, monitor, box(frame), drawClip, radius, viewport, nullptr, flight.desktopDecorations);
+        if (clustered(screen) && !flight.edgeTransfer && !flight.dropToCard) {
+            // The moving column owns only its desktop and its left-side band.
+            // A flight from a right-hand tile must not paint through its neighbors.
+            for (auto region:{desktop(screen),sidebar(screen)}) {
+                region.translate(-monitor->m_position).scale(monitor->m_scale);
+                const auto ownClip=region.intersection(drawClip);
+                if (ownClip.w>0 && ownClip.h>0) drawPreview(window,monitor,box(frame),ownClip,radius,viewport,nullptr,flight.desktopDecorations);
+            }
+        } else drawPreview(window, monitor, box(frame), drawClip, radius, viewport, nullptr, flight.desktopDecorations);
     }
     renderContext().m_data.clipBox = previousClip;
 }
@@ -3965,7 +4011,7 @@ std::string StageController::Impl::stateJson() const {
         const auto monitor = screen.monitor.lock();
         if (!monitor)
             continue;
-        const auto& rendered = swipe && swipe->prepared && swipe->monitor == monitor ? swipe->visual : screen;
+        const auto& rendered = swipe && swipe->prepared && swipe->monitor == monitor && swipe->tile==screen.tile ? swipe->visual : screen;
         if (enabled && !blocked() && !renderBlocked(monitor) && !rendered.covered && !rendered.suspended &&
             !monitor->m_activeSpecialWorkspace && rendered.shown > 0) {
             const auto geometryJson = [](const CBox& r) {
@@ -4005,6 +4051,12 @@ std::string StageController::Impl::stateJson() const {
         if (prepared != overviewExitScreens.end())
             for (const auto& card : prepared->cards)
                 preparedCards.push_back(cardID(card));
+        nlohmann::json flights=nlohmann::json::array();
+        const auto geometryJson=[](const CBox& b) { return nlohmann::json{{"x",b.x},{"y",b.y},{"width",b.w},{"height",b.h}}; };
+        for (const auto& flight:rendered.flights) if (auto window=flight.preview.window.lock()) {
+            const auto sample=flightFrame(flight,flightProgress(rendered),monitor);
+            flights.push_back({{"workspace",workspaceKey(window->m_workspace)},{"from",geometryJson(flight.from)},{"to",geometryJson(flight.to)},{"frame",geometryJson(box(sample.first))}});
+        }
         result["screens"].push_back({{"monitor", monitor->m_name},{"tile_id",screen.tile},{"active_workspace",screen.active},{"base",{{"x",screen.base.x},{"y",screen.base.y},{"width",screen.base.w},{"height",screen.base.h}}}, {"card_width", screen.geometry.cardWidth}, {"card_height", screen.geometry.cardHeight},
                                      {"overview_render_owner", owner == stage::OverviewRenderOwner::Overview ? "overview" :
                                          owner == stage::OverviewRenderOwner::PreparedStage ? "prepared_stage" : "stage"},
@@ -4014,9 +4066,9 @@ std::string StageController::Impl::stateJson() const {
                                      {"background_ready", !!(screen.background && screen.background->isAllocated())},
                                      {"background_error", screen.backgroundError},
                                      {"sidebar_side", screen.right ? "right" : "left"}, {"sidebar_transition", screen.paneTransition},
-                                     {"swipe_active", swipe && swipe->monitor == monitor},
-                                     {"swipe_progress", swipe && swipe->monitor == monitor ? swipe->progress : 0},
-                                     {"transition_windows", rendered.flights.size()}, {"transition_progress", rendered.flights.empty() ? 1.0 : flightProgress(rendered)},
+                                     {"swipe_active", swipe && swipe->monitor == monitor && swipe->tile==screen.tile},
+                                     {"swipe_progress", swipe && swipe->monitor == monitor && swipe->tile==screen.tile ? swipe->progress : 0},
+                                     {"flights",flights},{"transition_windows", rendered.flights.size()}, {"transition_progress", rendered.flights.empty() ? 1.0 : flightProgress(rendered)},
                                      {"sidebar",{{"x",sidebar(screen).x},{"y",sidebar(screen).y},{"width",sidebar(screen).w},{"height",sidebar(screen).h}}},{"desktop_geometry",{{"x",desktop(screen).x},{"y",desktop(screen).y},{"width",desktop(screen).w},{"height",desktop(screen).h}}},{"desktop_width", desktop(screen).w}, {"desktop_height", desktop(screen).h}, {"reservation", screen.geometry.reservation},
                                      {"scroll", screen.scroll}, {"max_scroll", screen.geometry.maxScroll}, {"covered", screen.covered}, {"suspended", screen.suspended},
                                      {"cards", cards}});
@@ -4159,7 +4211,11 @@ void StageController::endVisibilityGesture(bool cancelled) {
 }
 
 void StageController::initialize() { m_impl->initialize(); }
-void StageController::handleTilesChange() { m_impl->request(); }
+void StageController::handleTilesChange() {
+    m_impl->request();
+    // Tile activation must prepare Stage's flights before its first rendered frame.
+    if (m_impl->enabled && !m_impl->blocked() && !m_impl->syncing) m_impl->sync();
+}
 void StageController::renderInViewport(const PHLMONITOR& monitor, const stage::EdgeViewport& viewport, const Rect& clip, const std::function<void()>& render) {
     if (auto* self = Impl::instance)
         self->captureWindowPasses(g_pHyprRenderer.get(), monitor, viewport, render, clip);

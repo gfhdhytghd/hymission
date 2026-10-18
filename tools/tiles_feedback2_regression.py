@@ -79,7 +79,7 @@ def run(case,request,root,env,runtime,processes,handles):
             evaluate('hl.plugin.hymission_tiles_test.trackpad("cancel")')
             wait('j/hymission-stage-state',lambda s:not s['screens'][0]['swipe_active'])
         evaluate('hl.plugin.hymission.stage_close(); hl.config({plugin={hymission={stage_enabled=0}}})')
-        evaluate('hl.dispatch(hl.dsp.focus({workspace=601})); hl.plugin.hymission.tile_add({workspace="603"}); hl.plugin.hymission.tile_add({workspace="604"}); hl.plugin.hymission.tile_focus("left"); hl.plugin.hymission.tile_focus("left"); hl.config({plugin={hymission={stage_enabled=1,stage_transition_ms=0,stage_show_active=1}}}); hl.plugin.hymission.stage_open()')
+        evaluate('hl.dispatch(hl.dsp.focus({workspace=601})); hl.plugin.hymission.tile_add({workspace="603"}); hl.plugin.hymission.tile_add({workspace="604"}); hl.plugin.hymission.tile_focus("left"); hl.plugin.hymission.tile_focus("left"); hl.config({plugin={hymission={stage_enabled=1,stage_transition_ms=300,stage_show_active=1}}}); hl.plugin.hymission.stage_open()')
         wait('j/hymission-stage-state',lambda s:s['enabled'] and len(s['screens'])==3 and s['visibility_progress']==1)
         evaluate('hl.config({animations={enabled=true}})')
         snapshots=[]
@@ -94,24 +94,30 @@ def run(case,request,root,env,runtime,processes,handles):
             evaluate('hl.plugin.hymission_tiles_test.animation_report('+json.dumps(str(path))+')')
             frame=json.loads(path.read_text());snapshots.append(frame)
             assert state()['interaction_owner']==2,state()
-            assert abs(frame['601']['value'][0])<.01 and abs(frame['601']['value'][1]+i*40/300*desk['height'])<.1,('vertical input not following fingers',i,frame)
+            assert frame['601']['value']==[0,0],('native slide underneath Stage flight',i,frame)
+            visual=json.loads(request('j/hymission-stage-state'))
+            own=next(sc for sc in visual['screens'] if sc['tile_id']==focused['id'])
+            assert own['swipe_active'] and abs(own['swipe_progress']-i*40/300)<.001 and own['transition_windows']>=2,own
+            assert all(sc['transition_windows']==0 and not sc['swipe_active'] for sc in visual['screens'] if sc['tile_id']!=focused['id']),visual
+            (root/f'trackpad-stage-{i}.json').write_text(json.dumps(visual,indent=2))
             assert abs(frame['602']['alpha']-1)<.01
             for ws in ('603','604'):assert frame[ws]['value']==[0,0] and abs(frame[ws]['alpha']-1)<.01,frame
             image=capture(f'trackpad-{i}')
-            focused=next(t for t in state()['tiles'] if t['focused'])
-            x=int(desk.get('x',focused['x'])+desk.get('width',focused['width'])*.8)
-            expected=desk['y']+(1-i*40/300)*desk['height']
-            red=[y for y in range(max(80,int(expected-70)),image.height) if (lambda p:p[0]>120 and p[1]<70 and p[2]<70)(image.getpixel((x,y)))]
-            assert red,('offset state changed but no incoming header in the rendered middle frame',i,x)
-            assert abs(min(red)-expected)<80,('rendered header did not follow input',i,min(red),expected)
-            outside=list(range(80,max(80,int(desk['y'])-4)))+list(range(min(image.height,int(desk['y']+desk['height'])+4),image.height))
-            assert not any((lambda p:p[0]>120 or p[1]>120)(image.getpixel((x,y))) for y in outside),('swipe painted outside the common Stage scene',i)
+            incoming=next(f['frame'] for f in own['flights'] if f['workspace']==602)
+            areas=(own['sidebar'],own['desktop_geometry'])
+            red=[]
+            for area in areas:
+                x0=max(int(area['x']),int(incoming['x']));x1=min(int(area['x']+area['width']),int(incoming['x']+incoming['width']))
+                y0=max(int(area['y']),int(incoming['y']));y1=min(int(area['y']+area['height']),int(incoming['y']+80))
+                red.extend((x,y) for y in range(max(0,y0),min(image.height,y1)) for x in range(max(0,x0),min(image.width,x1),3)
+                           if (lambda p:p[0]>120 and p[1]<70 and p[2]<70)(image.getpixel((x,y))))
+            assert red,('Stage incoming header missing at its sampled flight geometry',i,incoming)
             time.sleep(.02)
         evaluate('hl.plugin.hymission_tiles_test.trackpad("end")')
         wait('j/hymission-tiles-state',lambda s:s['interaction_owner']==0)
         wait('j/activeworkspace',lambda s:s['id']==602)
         (root/'trackpad-samples.json').write_text(json.dumps(snapshots,indent=2))
-        print('PASS: four-finger vertical InputManager -> TrackpadGestures -> Hymission wrapper -> unified tile swipe, five following-finger middle frames and stable neighbors')
+        print('PASS: four-finger vertical InputManager -> TrackpadGestures -> Hymission wrapper -> Stage tile flights, five following-finger middle frames and stable neighbors')
         return
     if case=='overview':
         for ws in (701,702,703):

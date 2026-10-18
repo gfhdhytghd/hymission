@@ -52,14 +52,12 @@ def run(request,root,env,runtime,processes,handles):
     evaluate('hl.config({animations={workspace_wraparound=false}})')
     evaluate('hl.config({animations={enabled=false},plugin={hymission={tiles_enabled=1,tile_min_width=120}}}); hl.dispatch(hl.dsp.focus({workspace=501})); hl.plugin.hymission_tiles_test.refresh()')
     wait('j/hymission-tiles-state',lambda s:s['enabled'])
-    evaluate('hl.plugin.hymission.tile_add({workspace="503"}); hl.plugin.hymission.tile_add({workspace="504"}); hl.plugin.hymission.tile_focus("left"); hl.plugin.hymission.tile_focus("left"); hl.config({plugin={hymission={stage_enabled=1,stage_transition_ms=220,stage_show_active=1}}}); hl.plugin.hymission.stage_open()')
-    wait('j/hymission-stage-state',lambda s:s['enabled'] and s['visibility_progress']==1 and len(s['screens'])==3)
-    tiles=json.loads(request('j/hymission-tiles-state'))['tiles']; focused=next(t for t in tiles if t['focused'])
-    stage=json.loads(request('j/hymission-stage-state'))
-    screen=next(sc for sc in stage['screens'] if sc['tile_id']==focused['id'])
-    scene_scale=screen['desktop_width']/screen['base']['width']
-    vertical_scale=screen['desktop_height']/screen['base']['height']
-    width=focused['width']*scene_scale;height=focused['height']*vertical_scale
+    # FB10: native workspace motion is the Stage-hidden policy. Stage-visible
+    # card/desktop flights are verified by tiles_stage_switch_regression.py.
+    evaluate('hl.plugin.hymission.tile_add({workspace="503"}); hl.plugin.hymission.tile_add({workspace="504"}); hl.plugin.hymission.tile_focus("left"); hl.plugin.hymission.tile_focus("left"); hl.plugin.hymission.stage_close(); hl.config({plugin={hymission={stage_enabled=0}}})')
+    tiles=json.loads(request('j/hymission-tiles-state'))['tiles'];focused=next(t for t in tiles if t['focused'])
+    scene_scale=vertical_scale=1.0
+    width=focused['width'];height=focused['height']
     for style in styles:
         configure(style)
         neighbors=sample(root/'neighbors.json')
@@ -90,7 +88,7 @@ def run(request,root,env,runtime,processes,handles):
             for ws in ('503','504'):
                 assert f[ws]['value']==neighbors[ws]['value'] and abs(f[ws]['alpha']-neighbors[ws]['alpha'])<.001,(style,ws,f[ws])
         stage=json.loads(request('j/hymission-stage-state'))
-        assert all(s['transition_windows']==0 for s in stage['screens']),stage
+        assert not stage['enabled'] and all(s['transition_windows']==0 for s in stage['screens']),stage
     configure('slide')
     evaluate('hl.dispatch(hl.dsp.focus({workspace=502}))');time.sleep(.6)
     evaluate('hl.dispatch(hl.dsp.focus({workspace=501}))')

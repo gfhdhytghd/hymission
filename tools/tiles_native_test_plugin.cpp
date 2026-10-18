@@ -49,6 +49,7 @@ namespace {
 struct CapturedFrame { int width,height; std::vector<unsigned char> pixels; nlohmann::json state; };
 bool recordingFrames=false;
 std::string captureMonitor;
+CHyprSignalListener captureDamageListener;
 std::vector<CapturedFrame> capturedFrames;
 template<class Framebuffer>
 bool readFramePixels(Framebuffer& fb,std::vector<uint8_t>& bytes) {
@@ -80,6 +81,9 @@ class CaptureFramePass final:public IPassElement {
         if (!fb) throw std::runtime_error("private capture requires native GL framebuffer");
         const auto size=fb->m_size;
         CapturedFrame frame{static_cast<int>(size.x),static_cast<int>(size.y),{}, {}};
+        // Sample animation phase before synchronous GPU readback advances time.
+        const auto stageBeforeReadback=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-stage-state","","j"));
+        const auto readbackStart=std::chrono::steady_clock::now();
         std::vector<uint8_t> rgba(frame.width*frame.height*4);
         if (!readFramePixels(*fb,rgba)) throw std::runtime_error("private framebuffer readback failed");
         frame.pixels.resize(frame.width*frame.height*3);
@@ -90,7 +94,8 @@ class CaptureFramePass final:public IPassElement {
         frame.state["monitor"]=ctx.m_data.pMonitor->m_name;
         frame.state["framebuffer"]={{"current",fb->getFBID()},{"main",dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.mainFB)->getFBID()},{"damage",nlohmann::json::array()}};
         ctx.m_data.damage.forEachRect([&](const auto& rect) { frame.state["framebuffer"]["damage"].push_back({rect.x1,rect.y1,rect.x2,rect.y2}); });
-        frame.state["stage"]=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-stage-state","","j"));
+        frame.state["stage"]=stageBeforeReadback;
+        frame.state["readback_ms"]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-readbackStart).count();
         frame.state["native"]=nlohmann::json::array();
         for (const auto& window:Desktop::windowState()->windows()) {
             if (!window->mapped() || !window->m_workspace) continue;
@@ -98,7 +103,7 @@ class CaptureFramePass final:public IPassElement {
             frame.state["native"].push_back({{"address",std::format("0x{:x}",reinterpret_cast<uintptr_t>(window.get()))},
                 {"size",{window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT).x,window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT).y}},{"workspace",ws->displayName()},{"offset",{offset.x,offset.y}},
                 {"floating_offset",{window->presentation().floatingOffset().x,window->presentation().floatingOffset().y}},
-                {"workspace_alpha",ws->m_alpha->value()},{"visible",ws->visible()},{"forced",ws->m_forceRendering},
+                {"workspace_alpha",ws->m_alpha->value()},{"workspace_animated",ws->m_renderOffset->isBeingAnimated()},{"workspace_alpha_animated",ws->m_alpha->isBeingAnimated()},{"visible",ws->visible()},{"forced",ws->m_forceRendering},
                 {"alpha",window->presentation().alphaTotal()},{"fullscreen_alpha",window->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN)},
                 {"position",{window->positionAnimation()->value().x,window->positionAnimation()->value().y}}});
         }
@@ -463,6 +468,9 @@ int pointer(lua_State* L) {
 APICALL EXPORT std::string PLUGIN_API_VERSION() { return HYPRLAND_API_VERSION; }
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     fixtureHandle=handle;
+    captureDamageListener=Event::bus()->m_events.render.preChecks.listen([](PHLMONITOR monitor) {
+        if (recordingFrames && (captureMonitor.empty() || captureMonitor==monitor->m_name)) g_pHyprRenderer->damageMonitor(monitor);
+    });
     frameListener=Event::bus()->m_events.render.stage.listen([](Event::SRenderStageEvent event) { frameProfile.stage(event);
         if (recordingFrames && event.stage==RENDER_LAST_MOMENT && event.context) event.context->get().m_pass.add(makeUnique<CaptureFramePass>()); });
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","profile",profile);
@@ -485,7 +493,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     return {"hymission_tiles_test","private native gesture/input test fixture","hymission","1"};
 }
 APICALL EXPORT void PLUGIN_EXIT() {
-    recordingFrames=false;capturedFrames.clear();frameProfile.active=false;frameListener.reset();focusResizeListener.reset();
+    recordingFrames=false;capturedFrames.clear();frameProfile.active=false;captureDamageListener.reset();frameListener.reset();
+    focusResizeListener.reset();
     if (profileLayoutHook) HyprlandAPI::removeFunctionHook(fixtureHandle,profileLayoutHook);
     if (profileSymbolsHook) HyprlandAPI::removeFunctionHook(fixtureHandle,profileSymbolsHook);
     g_pUnifiedWorkspaceSwipe->cancel();

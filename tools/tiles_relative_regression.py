@@ -117,11 +117,12 @@ def run(case,observe,request,root,env,runtime,processes,handles):
     # Native four-finger event path, both m and r candidate policy, Stage off/on.
     evaluate('hl.gesture({fingers=4,direction="vertical",action="workspace"}); hl.animation({leaf="workspaces",enabled=true,speed=8,bezier="default",style="slidevert"}); hl.config({gestures={workspace_swipe_invert=false,workspace_swipe_distance=300,workspace_swipe_cancel_ratio=.05,workspace_swipe_min_speed_to_force=0,workspace_swipe_forever=false,workspace_swipe_create_new=false}})')
     for stage in (0,1):
-        evaluate(f'hl.config({{plugin={{hymission={{stage_enabled={stage},stage_transition_ms=0}}}}}}); hl.plugin.hymission.stage_'+('open' if stage else 'close')+'()')
+        evaluate('hl.config({plugin={hymission={stage_enabled=%d,stage_transition_ms=%d}}}); hl.plugin.hymission.stage_%s()' % (stage,250 if stage else 0,'open' if stage else 'close'))
+        if stage:wait('j/hymission-stage-state',lambda s:s['visibility_progress']==1)
         for use_r in (False,True):
             evaluate(f'hl.config({{gestures={{workspace_swipe_use_r={str(use_r).lower()}}}}})')
             for a,b in pairs:
-                home_focus(a);time.sleep(.2);evaluate('hl.config({animations={enabled=true}})')
+                home_focus(a);time.sleep(.35);evaluate('hl.config({animations={enabled=true}})')
                 neighbors={i:w for i,w in bindings().items() if w!=a};samples=[]
                 evaluate('hl.plugin.hymission_tiles_test.trackpad("begin")')
                 for n in range(1,5):
@@ -131,10 +132,17 @@ def run(case,observe,request,root,env,runtime,processes,handles):
                         path=root/f'swipe-{stage}-{use_r}-{a}-native.json'
                         evaluate('hl.plugin.hymission_tiles_test.animation_report('+json.dumps(str(path))+')')
                         native=json.loads(path.read_text())
-                        check(str(b) in native and abs(native[str(b)]['value'][1])>1,'four-finger previews owned target')
+                        if stage:
+                            visual=read('j/hymission-stage-state')
+                            check(any(f['workspace']==b and abs(f['frame']['width']-f['from']['width'])>1 for sc in visual['screens'] for f in sc.get('flights',[])),'four-finger Stage flight previews owned target')
+                        else:check(str(b) in native and abs(native[str(b)]['value'][1])>1,'four-finger previews owned target')
                         subprocess.run(['grim','-o',read('j/monitors')[0]['name'],str(path.with_suffix('.png'))],env=child,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
                 (root/f'swipe-{stage}-{use_r}-{a}.json').write_text(json.dumps(samples,indent=2))
-                check(any(any(abs(t['renderOffset'][1])>1 for t in s['tiles'] if t['activeWorkspace']['id']==a) for s in samples),'four-finger vertical intermediate motion')
+                if stage:
+                    visual=read('j/hymission-stage-state')
+                    check(any(sc['swipe_active'] and 0<sc['swipe_progress']<1 and sc['transition_windows']>0 for sc in visual['screens']),'four-finger Stage integrated intermediate motion')
+                    check(all(t['renderOffset']==[0,0] for t in state()['tiles']),'Stage owns motion without native tile slide')
+                else:check(any(any(abs(t['renderOffset'][1])>1 for t in s['tiles'] if t['activeWorkspace']['id']==a) for s in samples),'four-finger vertical intermediate motion')
                 check(all(all(abs(t['renderOffset'][1])<.01 for t in s['tiles'] if t['id'] in neighbors) for s in samples),'four-finger stable neighbors')
                 evaluate('hl.plugin.hymission_tiles_test.trackpad("end")');time.sleep(.4)
                 (root/f'swipe-{stage}-{use_r}-{a}-after.json').write_text(json.dumps(dict(current=current(),tiles=state()),indent=2))

@@ -1005,20 +1005,24 @@ struct TilesController::Impl {
         reinterpret_cast<decltype(&swapPhysical)>(swapHook->m_original)(p,a,b);
         for (const auto& mon : {a,b}) if (self->ready && self->output(mon) && mon->m_activeWorkspace) { auto* o=self->output(mon); (void)o->model.activate(workspaceKey(mon->m_activeWorkspace)); self->apply(*o); }
     }
-    PHLWORKSPACE swipeTarget(Output& o, int step) {
-        const auto mon = o.monitor.lock();
+    std::optional<WorkspaceKey> swipeKey(Output& o,tiles::Id tile,int step) const {
+        const auto index=o.model.index(tile);
+        if (!index || o.model.state().focused!=tile || (step!=-1 && step!=1)) return {};
         static auto useRelative=CConfigValue<Config::INTEGER>("gestures:workspace_swipe_use_r");
         static auto create=CConfigValue<Config::INTEGER>("gestures:workspace_swipe_create_new");
-        const auto candidates=owned(o,swipe->tile);
-        if (candidates.empty()) return nullptr;
-        const auto it=std::ranges::find(candidates,workspaceKey(swipe->source));
-        if (it==candidates.end()) return nullptr;
-        if (step<0 && it==candidates.begin()) return nullptr; // Native swipes do not wrap off the left edge.
-        const bool last=it+1==candidates.end();
-        std::optional<WorkspaceKey> key;
-        if (*useRelative || (*create && step>0 && last)) key=relative(o,step>0?"r+1":"r-1");
-        else key=tiles::relativeTarget(step>0?"m+1":"m-1",*it,candidates);
-        if (!key || *key==workspaceKey(swipe->source)) return nullptr;
+        const auto candidates=owned(o,tile);
+        const auto source=o.model.state().tiles[*index].workspace;
+        const auto it=std::ranges::find(candidates,source);
+        if (it==candidates.end() || (step<0 && it==candidates.begin())) return {};
+        const auto key=*useRelative || (*create && step>0 && it+1==candidates.end()) ? relative(o,step>0?"r+1":"r-1") :
+            tiles::relativeTarget(step>0?"m+1":"m-1",source,candidates);
+        return key && *key!=source?key:std::nullopt;
+    }
+    PHLWORKSPACE swipeTarget(Output& o, int step) {
+        const auto mon = o.monitor.lock();
+        static auto create=CConfigValue<Config::INTEGER>("gestures:workspace_swipe_create_new");
+        const auto key=swipeKey(o,swipe->tile,step);
+        if (!key) return nullptr;
         auto ws=workspaceForKey(*key);
         if (!ws) {
             if (!*create || swipe->createdEmpty) return nullptr;
@@ -1031,6 +1035,8 @@ struct TilesController::Impl {
 
     static bool swipeBegin(CUnifiedWorkspaceSwipeGesture* gesture, PHLMONITOR mon) {
         if (!self->active(mon) || locked() || (self->overview && self->overview())) return reinterpret_cast<decltype(&swipeBegin)>(swipeBeginHook->m_original)(gesture,mon);
+        const auto stageNative=reinterpret_cast<bool(*)(void*,PHLMONITOR)>(hooks::nativeOriginal(swipeBeginHook->group->native));
+        if (const auto began=StageController::beginWorkspaceSwipe(gesture,mon,stageNative)) return *began;
         if (self->interaction != Owner::None || mon->m_activeSpecialWorkspace) return false;
         const auto native=reinterpret_cast<decltype(&swipeBegin)>(hooks::nativeOriginal(swipeBeginHook->group->native));
         if (!native(gesture,mon)) return false;
@@ -1427,6 +1433,14 @@ std::vector<TilesController::View> TilesController::views(const PHLMONITOR& mon)
 }
 bool TilesController::enabled(const PHLMONITOR& mon) const { return m->active(mon); }
 PHLWINDOW TilesController::monitorFullscreen(const PHLMONITOR& mon) const { return m->whole(mon); }
+bool TilesController::beginNativeStageSwipe(void* gesture,const PHLMONITOR& monitor) {
+    return m->active(monitor) && Impl::swipeBeginHook &&
+        reinterpret_cast<bool(*)(void*,PHLMONITOR)>(hooks::nativeOriginal(Impl::swipeBeginHook->group->native))(gesture,monitor);
+}
+std::optional<tiles::Workspace> TilesController::workspaceSwipeTarget(const PHLMONITOR& monitor,tiles::Id tile,int step) const {
+    auto* output=m->output(monitor);
+    return m->active(monitor) && output?m->swipeKey(*output,tile,step):std::nullopt;
+}
 bool TilesController::available() const { return m->ready && m->initError.empty(); }
 bool TilesController::handleDivider(const IPointer::SButtonEvent& event,Event::SCallbackInfo& info) { return m->dividerButton(event,info); }
 void TilesController::fail(std::string error) { m->initError="tiles disabled: "+std::move(error); m->request(); }
