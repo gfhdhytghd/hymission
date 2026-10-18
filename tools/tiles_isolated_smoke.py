@@ -38,6 +38,10 @@ def main():
     ap.add_argument("--feedback4-regression",choices=("shadow","close","switch"))
     ap.add_argument("--feedback4-observe",action="store_true")
     ap.add_argument("--feedback4-three",action="store_true")
+    ap.add_argument("--focus-reflow-regression", choices=("off", "single", "two", "three"))
+    ap.add_argument("--focus-reflow-observe", action="store_true")
+    ap.add_argument("--focus-reflow-expand", action="store_true")
+    ap.add_argument("--focus-reflow-bisect", action="store_true")
     ap.add_argument("--feedback3-regression",choices=("hover","workspace","stage","stage-multi","stage-perf","stage-adaptive","drag"))
     ap.add_argument("--feedback2-regression",choices=("panel","gesture","overview","stage"))
     ap.add_argument("--plugin", required=True)
@@ -133,7 +137,7 @@ def main():
 
         for _ in range(100):
             try:
-                state = json.loads(request("j/hymission-stage-state" if (args.default_off_regression or args.stage_animation_profile or args.stage_height_regression) else "j/hymission-tiles-state"))
+                state = json.loads(request("j/hymission-stage-state" if (args.default_off_regression or args.stage_animation_profile or args.stage_height_regression or args.focus_reflow_regression) else "j/hymission-tiles-state"))
                 break
             except (ValueError, OSError):
                 time.sleep(0.1)
@@ -150,6 +154,12 @@ def main():
         if args.stage_height_regression:
             from tiles_stage_height_regression import run
             run(args.stage_height_regression,args.stage_height_observe,request,root,env,runtime,processes,handles)
+            (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
+        if args.focus_reflow_regression:
+            from overview_focus_reflow_regression import run
+            run(args.focus_reflow_regression, args.focus_reflow_observe, request, root, env, runtime, processes, handles,
+                args.focus_reflow_expand, args.focus_reflow_bisect)
             (root/"configerrors.txt").write_text(request("/configerrors"))
             return
         if args.stage_animation_profile:
@@ -709,6 +719,8 @@ def main():
         (root / "configerrors.txt").write_text(request("/configerrors"))
         print("PASS: private nested compositor, default-off, add/max-three/focus/resize/remove and state geometry")
     finally:
+        if (runtime / "hymission-debug.log").exists():
+            shutil.copyfile(runtime / "hymission-debug.log", root / "hymission-debug.log")
         for proc in reversed(processes):
             if proc.poll() is None:
                 proc.terminate()

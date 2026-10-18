@@ -8141,7 +8141,9 @@ void OverviewController::handleTilesChange() {
         m_tilesRebuild.reset();
         if ((m_state.phase!=Phase::Active && m_state.phase!=Phase::Opening) || sessionLocked()) return;
         clearStripWindowDragState();
-        rebuildVisibleState(selectedWindow(),true);
+        // Tile notifications also include focus changes. Reuse the opening
+        // layout unless the scene's membership or content bounds changed.
+        rebuildVisibleState(selectedWindow());
         damageOwnedMonitors();
     });
 }
@@ -12986,7 +12988,14 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
             const auto* previousManaged = previousManagedForItem(managed);
             return previousManaged && previousManaged->slot.rowGroup == managed.slot.rowGroup;
         });
-    const bool sameLayoutShape = sameWindowSet && sameMonitorSet && sameRowGroups;
+    const bool sameTileLayouts = next.tileLayouts.size() == m_state.tileLayouts.size() &&
+        std::ranges::all_of(next.tileLayouts, [&](const State::TileLayout& tile) {
+            return std::ranges::any_of(m_state.tileLayouts, [&](const State::TileLayout& previous) {
+                return tile.monitor == previous.monitor && tile.id == previous.id && tile.workspace == previous.workspace &&
+                    rectApproxEqual(tile.content, previous.content, 0.001);
+            });
+        });
+    const bool sameLayoutShape = sameWindowSet && sameMonitorSet && sameRowGroups && sameTileLayouts;
     const bool selectionRelayoutForced = forceRelayout && expandSelectedWindowEnabled();
     const bool freezeExistingLayout = sameLayoutShape && !forceRelayout;
 
@@ -15904,6 +15913,17 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
     state.participatingMonitors = std::move(activeParticipatingMonitors);
     buildWorkspaceStripEntries(state);
+    if (auto* tiles = TilesController::get()) {
+        for (const auto& candidate : state.participatingMonitors) {
+            if (!tiles->enabled(candidate))
+                continue;
+            const auto* override = overrideForMonitor(candidate);
+            for (const auto& view : tiles->views(candidate)) {
+                const auto workspace = override && override->tileId == view.id ? override->workspace : view.workspace;
+                state.tileLayouts.push_back({candidate, view.id, workspace, tileContentRect(candidate, view.id, state)});
+            }
+        }
+    }
     applyOffscreenOpenAnimationEndpoints(state);
 
     const auto selectionTarget = preferredSelectedWindow ? preferredSelectedWindow : focusedWindow;

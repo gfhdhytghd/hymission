@@ -27,6 +27,8 @@
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/supplementary/DragController.hpp>
 #include <hyprland/src/layout/space/Space.hpp>
+#include <hyprland/src/layout/algorithm/Algorithm.hpp>
+#include <hyprland/src/layout/algorithm/TiledAlgorithm.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
@@ -45,6 +47,7 @@ namespace {
 // from the performance profiler and is never enabled in a host session.
 struct CapturedFrame { int width,height; std::vector<unsigned char> pixels; nlohmann::json state; };
 bool recordingFrames=false;
+std::string captureMonitor;
 std::vector<CapturedFrame> capturedFrames;
 template<class Framebuffer>
 bool readFramePixels(Framebuffer& fb,std::vector<uint8_t>& bytes) {
@@ -70,7 +73,8 @@ bool readFramePixels(Framebuffer& fb,std::vector<uint8_t>& bytes) {
 class CaptureFramePass final:public IPassElement {
  public:
     std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override {
-        if (!recordingFrames || capturedFrames.size()>=180 || !ctx.m_data.currentFB) return {};
+        if (!recordingFrames || capturedFrames.size()>=180 || !ctx.m_data.currentFB ||
+            (!captureMonitor.empty() && ctx.m_data.pMonitor->m_name!=captureMonitor)) return {};
         const auto fb=dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.currentFB);
         if (!fb) throw std::runtime_error("private capture requires native GL framebuffer");
         const auto size=fb->m_size;
@@ -79,8 +83,10 @@ class CaptureFramePass final:public IPassElement {
         if (!readFramePixels(*fb,rgba)) throw std::runtime_error("private framebuffer readback failed");
         frame.pixels.resize(frame.width*frame.height*3);
         for (size_t i=0;i<frame.pixels.size()/3;++i) std::copy_n(rgba.data()+i*4,3,frame.pixels.data()+i*3);
-        frame.state={{"overview",nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-overview-state","","j"))},
-                     {"tiles",nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-tiles-state","","j"))}};
+        auto tiles=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-tiles-state","","j"),nullptr,false);
+        if (tiles.is_discarded()) tiles={{"enabled",false},{"tiles",nlohmann::json::array()}};
+        frame.state={{"overview",nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-overview-state","","j"))}, {"tiles",tiles}};
+        frame.state["monitor"]=ctx.m_data.pMonitor->m_name;
         frame.state["framebuffer"]={{"current",fb->getFBID()},{"main",dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.mainFB)->getFBID()},{"damage",nlohmann::json::array()}};
         ctx.m_data.damage.forEachRect([&](const auto& rect) { frame.state["framebuffer"]["damage"].push_back({rect.x1,rect.y1,rect.x2,rect.y2}); });
         frame.state["stage"]=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-stage-state","","j"));
@@ -88,7 +94,8 @@ class CaptureFramePass final:public IPassElement {
         for (const auto& window:Desktop::windowState()->windows()) {
             if (!window->mapped() || !window->m_workspace) continue;
             const auto ws=window->m_workspace;const auto offset=ws->m_renderOffset->value();
-            frame.state["native"].push_back({{"workspace",ws->displayName()},{"offset",{offset.x,offset.y}},
+            frame.state["native"].push_back({{"address",std::format("0x{:x}",reinterpret_cast<uintptr_t>(window.get()))},
+                {"size",{window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT).x,window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT).y}},{"workspace",ws->displayName()},{"offset",{offset.x,offset.y}},
                 {"floating_offset",{window->presentation().floatingOffset().x,window->presentation().floatingOffset().y}},
                 {"workspace_alpha",ws->m_alpha->value()},{"visible",ws->visible()},{"forced",ws->m_forceRendering},
                 {"alpha",window->presentation().alphaTotal()},{"fullscreen_alpha",window->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN)},
@@ -104,7 +111,7 @@ class CaptureFramePass final:public IPassElement {
 };
 int frameCapture(lua_State* L) {
     const std::string action=luaL_checkstring(L,1);
-    if (action=="begin") { capturedFrames.clear();recordingFrames=true; }
+    if (action=="begin") { capturedFrames.clear();captureMonitor=luaL_optstring(L,2,"");recordingFrames=true; }
     else if (action=="end") {
         recordingFrames=false;const std::string prefix=luaL_checkstring(L,2);
         nlohmann::json states=nlohmann::json::array();
@@ -315,6 +322,12 @@ int window(lua_State* L) {
     for (const auto& w:Desktop::windowState()->windows()) if (std::format("0x{:x}",reinterpret_cast<uintptr_t>(w.get()))==address) window=w;
     if (!window) return luaL_error(L,"test window not found");
     if (action=="focus") Desktop::focusState()->fullWindowFocus(window,Desktop::FOCUS_REASON_KEYBIND);
+    else if (action=="reset_width") {
+        Desktop::focusState()->fullWindowFocus(window,Desktop::FOCUS_REASON_KEYBIND);
+        const auto algorithm=window->layoutTarget()->space()->algorithm();
+        if (!algorithm || !algorithm->tiledAlgo() || !algorithm->tiledAlgo()->layoutMsg("colresize all 0.32"))
+            return luaL_error(L,"native scrolling width reset failed");
+    }
     else if (action=="fullscreen" || action=="maximize" || action=="normal") {
         const auto mode=action=="fullscreen"?Fullscreen::FSMODE_FULLSCREEN:action=="maximize"?Fullscreen::FSMODE_MAXIMIZED:Fullscreen::FSMODE_NONE;
         Fullscreen::controller()->setFullscreenMode(window,mode,mode,false);
@@ -378,11 +391,25 @@ int swipe(lua_State* L) {
     else return luaL_error(L,"unknown test swipe action");
     return 0;
 }
+// Controlled focus-dependent native layout resize, confined to private tests.
+CHyprSignalListener focusResizeListener;
+int focusResize(lua_State* L) {
+    focusResizeListener.reset();
+    if (lua_toboolean(L,1)) focusResizeListener=Event::bus()->m_events.window.active.listen([](PHLWINDOW w,Desktop::eFocusReason) {
+        if (!w || !w->layoutTarget() || !w->layoutTarget()->space()) return;
+        const auto algorithm=w->layoutTarget()->space()->algorithm();
+        const auto width=w->size(Desktop::View::IGeometric::GEOMETRIC_GOAL).x;
+        const auto area=w->layoutTarget()->space()->workArea();
+        if (algorithm && algorithm->tiledAlgo()) (void)algorithm->tiledAlgo()->layoutMsg(width < area.w*.5 ? "colresize 0.65" : "colresize 0.35");
+    });
+    return 0;
+}
 int pointer(lua_State* L) {
     const std::string action=luaL_checkstring(L,1);
     Event::SCallbackInfo info;
-    if (action=="escape") {
-        IKeyboard::SKeyEvent e{.keycode=KEY_ESC,.state=WL_KEYBOARD_KEY_STATE_PRESSED};
+    if (action=="escape" || action=="tab" || action=="right" || action=="left") {
+        const uint32_t key=action=="escape"?KEY_ESC:action=="tab"?KEY_TAB:action=="right"?KEY_RIGHT:KEY_LEFT;
+        IKeyboard::SKeyEvent e{.keycode=key,.state=WL_KEYBOARD_KEY_STATE_PRESSED};
         Event::bus()->m_events.input.keyboard.key.emit(e,info);
     } else {
         const Vector2D pos{luaL_checknumber(L,2),luaL_checknumber(L,3)};
@@ -404,6 +431,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         if (recordingFrames && event.stage==RENDER_LAST_MOMENT && event.context) event.context->get().m_pass.add(makeUnique<CaptureFramePass>()); });
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","profile",profile);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","frame_capture",frameCapture);
+    HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","focus_resize",focusResize);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","trackpad",trackpad);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","drag",drag);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","animation_report",animationReport);
@@ -419,7 +447,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     return {"hymission_tiles_test","private native gesture/input test fixture","hymission","1"};
 }
 APICALL EXPORT void PLUGIN_EXIT() {
-    recordingFrames=false;capturedFrames.clear();frameProfile.active=false;frameListener.reset();
+    recordingFrames=false;capturedFrames.clear();frameProfile.active=false;frameListener.reset();focusResizeListener.reset();
     if (profileLayoutHook) HyprlandAPI::removeFunctionHook(fixtureHandle,profileLayoutHook);
     if (profileSymbolsHook) HyprlandAPI::removeFunctionHook(fixtureHandle,profileSymbolsHook);
     g_pUnifiedWorkspaceSwipe->cancel();

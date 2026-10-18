@@ -318,6 +318,12 @@ class OverviewController {
     };
 
     struct State {
+        struct TileLayout {
+            PHLMONITOR   monitor;
+            uint64_t     id = 0;
+            PHLWORKSPACE workspace;
+            Rect         content;
+        };
         Phase                                  phase = Phase::Inactive;
         PHLMONITOR                             ownerMonitor;
         PHLWORKSPACE                           ownerWorkspace;
@@ -326,6 +332,7 @@ class OverviewController {
         bool                                   suppressWorkspaceStrip = false;
         std::vector<PHLMONITOR>                participatingMonitors;
         std::vector<PHLWORKSPACE>              managedWorkspaces;
+        std::vector<TileLayout>                tileLayouts;
         std::vector<WorkspaceStripEntry>       stripEntries;
         std::vector<FullscreenWorkspaceBackup> fullscreenBackups;
         PHLWINDOW                              focusBeforeOpen;
