@@ -174,8 +174,11 @@ def run(case,request,root,env,runtime,processes,handles):
             s=json.loads(request('j/hymission-stage-state'));frames.append(s)
             screens=s['screens']
             if len(screens)==3 and all(sc['card_width'] for sc in screens):
-                ratios=[sc['card_width']/sc['card_height'] for sc in screens]
-                assert all(abs(r-1920/1080)<.001 for r in ratios),('card ratio uses tile aspect',ratios)
+                combined=sum(sc['card_width'] for sc in screens)/screens[0]['card_height']
+                assert abs(combined-1920/1080)<.001,('combined tile cards lost monitor aspect',screens)
+                assert sum(sc['sidebar']['width'] for sc in screens)<1920*.25,('sidebar width budget repeated per tile',screens)
+                for sc in screens:
+                    assert abs(sc['card_width']/sc['card_height']-sc['base']['width']/sc['base']['height'])<.001,('tile letterboxed into a full-monitor card',sc)
                 assert max(sc['card_height'] for sc in screens)-min(sc['card_height'] for sc in screens)<.01,('unequal card heights',screens)
                 if all('desktop_geometry' in sc for sc in screens):
                     scales=[sc['desktop_geometry']['width']/sc['base']['width'] for sc in screens]
@@ -188,7 +191,7 @@ def run(case,request,root,env,runtime,processes,handles):
         for sc in s['screens']:
             desk=sc['desktop_geometry'];original=next(c for c in before if c['workspace']['id']==sc['active_workspace']);current=next(c for c in after if c['address']==original['address'])
             ratio=desk['width']/sc['base']['width']
-            assert ratio<.8 and abs(current['size'][0]/original['size'][0]-ratio)<.03 and abs(current['size'][1]/original['size'][1]-ratio)<.04,('real desktop not compressed on both axes',original,current,sc)
+            assert ratio<=.8+1e-6 and abs(current['size'][0]/original['size'][0]-ratio)<.03 and abs(current['size'][1]/original['size'][1]-ratio)<.04,('real desktop not compressed on both axes',original,current,sc)
             x=desk['x']+desk['width']/2;y=desk['y']+desk['height']/2
             evaluate(f'hl.plugin.hymission_tiles_test.pointer("native",{x},{y})')
             assert json.loads(request('j/activewindow'))['address']==current['address'],('mapped input hit wrong tile',sc)
@@ -207,6 +210,6 @@ def run(case,request,root,env,runtime,processes,handles):
         evaluate('hl.plugin.hymission.stage_close()')
         wait('j/hymission-stage-state',lambda s:s['visibility_progress']==0)
         time.sleep(.5);capture('stage-global-closed')
-        print('PASS: monitor-aspect equal-height Stage cards; uniform whole-output tile scaling in middle frames, real windows and mapped input')
+        print('PASS: shared Stage column geometry; uniform whole-output tile scaling in middle frames, real windows and mapped input')
         return
     raise AssertionError('case not implemented: '+case)

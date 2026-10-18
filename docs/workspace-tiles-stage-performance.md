@@ -1,5 +1,8 @@
 # Stage 卡顿与重复卡片复查
 
+> 本文记录历史修复。卡片比例和多列尺寸规则已由 [多列共用自适应尺寸](workspace-tiles-stage-adaptive-columns.md) 更正：以 workspace 最多的一列为共同基准。
+
+
 输入截图 Screenshot-2026-10-17-192056-kitty-SuperPower-Plugin.png 只读、未提交。
 本机仅查询了现有状态；未打开/关闭 Stage，未注入输入、reload 或运行 hyprpm update。
 延续已确认规则：显示器比例的卡片，只展示该 tile 当前可见区域。

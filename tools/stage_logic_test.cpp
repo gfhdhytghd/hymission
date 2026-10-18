@@ -17,6 +17,31 @@ bool near(double a, double b) { return std::abs(a - b) < 1e-7; }
 int main() {
     using namespace hymission::stage;
     bool ok = true;
+    for (const auto& widths:std::vector<std::vector<double>>{{1536,1536},{900,1200,972},{600,2472}}) {
+        double total=0,commonHeight=0,bands=0;
+        for (size_t i=0;i<widths.size();++i) {
+            const auto g=tileLayout(3072,1670,widths[i],widths.size(),i?0:4,4,{});
+            total+=g.cardWidth; bands+=g.bandWidth;
+            if (!i) commonHeight=g.cardHeight;
+            ok &= expect(near(g.cardHeight,commonHeight),"all tile columns share one thumbnail height, including empty columns");
+            ok &= expect(near(g.cardWidth/g.cardHeight,widths[i]/1670),"tile card has its viewport aspect without artificial letterboxing");
+        }
+        ok &= expect(near(total/commonHeight,3072.0/1670),"combined tile thumbnails retain the output aspect");
+        ok &= expect(near(total,3072.0/5) && bands<3072*.25,"thumbnail width is budgeted once for the whole scene");
+    }
+    {
+        const Settings adaptive{.padding=10,.cardGap=12,.paddingTop=10,.paddingBottom=10,.evenSpacing=true};
+        const auto most=tileLayout(3072,1670,1536,2,9,9,adaptive);
+        const auto fewer=tileLayout(3072,1670,1536,2,3,9,adaptive);
+        const auto changed=tileLayout(3072,1670,1536,2,3,5,adaptive);
+        ok &= expect(near(most.cardHeight,fewer.cardHeight) && near(most.cardGap,fewer.cardGap),"maximum workspace count supplies the shared adaptive size and spacing");
+        ok &= expect(near(most.cardTop(8,0)+most.cardHeight,1660),"longest workspace column fits available height using adaptive width");
+        ok &= expect(most.maxScroll==0 && changed.cardHeight>most.cardHeight,"removing workspaces from the longest column resizes all columns together");
+        ok &= expect(near(tileLayout(3072,1670,1536,2,0,0,adaptive).desktopWidth,3072),"no workspace cards leave the desktop unreserved");
+        const auto narrowTile=tileLayout(3072,1670,120,2,30,30,adaptive);
+        const auto wideTile=tileLayout(3072,1670,2952,2,2,30,adaptive);
+        ok &= expect(near(narrowTile.cardHeight,wideTile.cardHeight) && near(narrowTile.cardWidth/narrowTile.cardHeight,120.0/1670),"narrow tile keeps the shared scale when scene minimum width requires scrolling");
+    }
     for (const auto base:std::vector<hymission::Rect>{{0,0,1920,1080},{-1920,80,1920,976}}) {
         for (double progress:{0.,.25,.6,1.}) {
             const auto a=scaleDesktopRect({base.x,base.y,960,base.height},base,600,progress);

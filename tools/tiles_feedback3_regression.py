@@ -101,7 +101,7 @@ def run(case,request,root,env,runtime,processes,handles):
                     assert pixel[1]>120 and pixel[0]<90,('target workspace is visually blank after ws strip exit',stage,side,finish,pixel,client,tile)
         print('PASS: both tile strip switches survive ws overview teardown with visible rendered clients, Stage off/on and Esc/close')
         return
-    if case in ('stage','stage-multi','stage-perf'):
+    if case in ('stage','stage-multi','stage-perf','stage-adaptive'):
         evaluate('hl.monitor({output="",mode="6144x3456@60",position="auto",scale="2",reserved={top=58,right=0,bottom=0,left=0}}); hl.config({general={layout="scrolling"},scrolling={column_width=.85,fullscreen_on_one_column=true,focus_fit_method=1},plugin={hymission={niri_mode=0,stage_transition_ms=0}}})')
         wait('j/monitors',lambda ms:ms[0]['scale']==2 and ms[0]['width']==6144)
         for ws in (501,502,503,504):
@@ -115,6 +115,32 @@ def run(case,request,root,env,runtime,processes,handles):
         s=wait('j/hymission-stage-state',lambda s:s['visibility_progress']==1 and len(s['screens'])==2 and all(sc['cards'] and all(c.get('windows') for c in sc['cards']) for sc in s['screens']))
         time.sleep(.2);s=read('j/hymission-stage-state')
         image=capture('stage-hidpi-scrolling')
+        assert abs(sum(sc['card_width'] for sc in s['screens'])/s['screens'][0]['card_height']-3072/1670)<.001,('combined Stage aspect must describe the whole output',s)
+        assert sum(sc['sidebar']['width'] for sc in s['screens'])<3072*.25,('Stage reserves its width once for the complete scene',s)
+        if case=='stage-adaptive':
+            evaluate('hl.config({plugin={hymission={stage_show_empty=0}}}); hl.plugin.hymission.tile_focus("left")')
+            extras=[spawn(ws) for ws in range(505,512)]
+            adaptive=wait('j/hymission-stage-state',lambda s:len(s['screens'])==2 and max(len(sc['cards']) for sc in s['screens'])>=8)
+            time.sleep(.2);adaptive=read('j/hymission-stage-state');capture('stage-adaptive-most-workspaces')
+            longest=max(adaptive['screens'],key=lambda sc:len(sc['cards']))
+            shortest=min(adaptive['screens'],key=lambda sc:len(sc['cards']))
+            height=longest['card_height']
+            assert abs(height-shortest['card_height'])<.01 and height<220,('short column selected its own scale',adaptive)
+            bottom=max(c['y']+c['height'] for c in longest['cards'])
+            assert longest['base']['y']+longest['base']['height']-50<bottom<=longest['base']['y']+longest['base']['height']+1,('longest column did not adapt to available height',adaptive)
+            assert longest['max_scroll']<.01,('adaptive column unnecessarily scrolls',adaptive)
+            evaluate('hl.plugin.hymission.tile_focus("right")');time.sleep(.1)
+            assert all(abs(sc['card_height']-height)<.01 for sc in read('j/hymission-stage-state')['screens']),('focus changed adaptive reference',adaptive)
+            (root/'stage-adaptive-most.json').write_text(json.dumps(adaptive,indent=2))
+            for client in extras:
+                next(p for p in processes if p.pid==client['pid']).terminate()
+            wait('j/clients',lambda cs:not any(c['pid'] in {e['pid'] for e in extras} for c in cs))
+            reduced=wait('j/hymission-stage-state',lambda s:len(s['screens'])==2 and max(len(sc['cards']) for sc in s['screens'])<=2 and all(sc['card_height']>height*1.2 for sc in s['screens']))
+            assert max(sc['card_height'] for sc in reduced['screens'])-min(sc['card_height'] for sc in reduced['screens'])<.01,reduced
+            capture('stage-adaptive-fewer-workspaces')
+            (root/'stage-adaptive-fewer.json').write_text(json.dumps(reduced,indent=2))
+            print('PASS: maximum workspace count sets shared adaptive width/height, fits the longest stack, survives focus changes and resizes all columns after removal')
+            return
         if case=='stage-perf':
             frames=[];latencies=[]
             for i in range(35):
@@ -171,6 +197,7 @@ def run(case,request,root,env,runtime,processes,handles):
                 desk=sc['desktop_geometry']
                 for c in sc['cards']:
                     z=min(c['width']/desk['width'],c['height']/desk['height'])
+                    assert abs(desk['width']*z-c['width'])<.01 and abs(desk['height']*z-c['height'])<.01,('artificial letterbox inside a tile column',sc,c)
                     left=c['x']+(c['width']-desk['width']*z)/2
                     right=left+desk['width']*z
                     assert any(w['x']+w['width']>left+2 and w['x']<right-2 for w in c['windows']),('occupied Stage workspace completely outside its own viewport',sc['tile_id'],c)
@@ -201,6 +228,7 @@ def run(case,request,root,env,runtime,processes,handles):
                     desk=sc['desktop_geometry']
                     for c in sc['cards']:
                         z=min(c['width']/desk['width'],c['height']/desk['height'])
+                        assert abs(desk['width']*z-c['width'])<.01 and abs(desk['height']*z-c['height'])<.01,('resized tile lost shared scene scale',sc,c)
                         left=c['x']+(c['width']-desk['width']*z)/2;right=left+desk['width']*z
                         assert any(w['x']+w['width']>left+2 and w['x']<right-2 for w in c['windows']),('scroll camera lost workspace during tile resize',width,sc,c)
             fresh=read('j/hymission-stage-state')

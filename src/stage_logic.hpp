@@ -110,6 +110,8 @@ struct Geometry {
 };
 
 Settings normalize(Settings settings);
+// Multi-tile columns share the adaptive scale selected by the largest card count.
+Geometry tileLayout(double outputWidth, double outputHeight, double tileWidth, std::size_t tileCount, std::size_t cardCount, std::size_t referenceCount, Settings settings);
 Geometry layout(double width, double height, std::size_t count, Settings settings,
                 std::optional<double> frozenCardWidth = std::nullopt, double outputWidth = 0);
 std::vector<WindowSlot> arrangeWindows(const std::vector<WindowInput>& windows, const Geometry& geometry, const Rect& desktop);

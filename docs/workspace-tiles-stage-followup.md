@@ -1,5 +1,8 @@
 # Stage 多窗口截图复查
 
+> 本文记录历史修复。卡片比例和多列尺寸规则已由 [多列共用自适应尺寸](workspace-tiles-stage-adaptive-columns.md) 更正：以 workspace 最多的一列为共同基准。
+
+
 输入截图：Screenshot-2026-10-17-190531-kitty-SuperPower-Plugin.png（只读，未提交）。
 用户确认的呈现规则：**保持显示器比例，只展示该 tile 当前可见区域**。
 本轮继续纯插件、默认关闭、本地提交，不 push、不 reload。

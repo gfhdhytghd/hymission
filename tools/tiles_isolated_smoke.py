@@ -29,7 +29,7 @@ def main():
     ap.add_argument("--top-clip-regression", action="store_true")
     ap.add_argument("--animation-regression", action="store_true")
     ap.add_argument("--gesture-lifecycle-regression", action="store_true")
-    ap.add_argument("--feedback3-regression",choices=("hover","workspace","stage","stage-multi","stage-perf","drag"))
+    ap.add_argument("--feedback3-regression",choices=("hover","workspace","stage","stage-multi","stage-perf","stage-adaptive","drag"))
     ap.add_argument("--feedback2-regression",choices=("panel","gesture","overview","stage"))
     ap.add_argument("--plugin", required=True)
     ap.add_argument("--output", required=True)

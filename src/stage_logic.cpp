@@ -64,6 +64,41 @@ Geometry layout(double width, double height, std::size_t count, Settings setting
     return result;
 }
 
+Geometry tileLayout(double outputWidth, double outputHeight, double tileWidth, std::size_t tileCount, std::size_t cardCount, std::size_t referenceCount, Settings settings) {
+    if (outputWidth<=0 || outputHeight<=0 || tileWidth<=0 || !tileCount) return {};
+    auto s=normalize(settings);
+    s.padding=std::min(s.padding,outputWidth/(20*tileCount));
+    s.paddingRight=std::min(s.paddingRight,outputWidth/(20*tileCount));
+    const double padding=tileCount*(s.padding+s.paddingRight);
+    const double limit=outputWidth*.5-padding-s.desktopGap;
+    if (limit<8*tileCount) return {};
+    // The setting describes the whole thumbnail scene, not each tile column.
+    // One scale maps all tile viewports; their combined aspect is the output's.
+    const double maximum=std::min(s.maxWidth>0?s.maxWidth:outputWidth/5,limit);
+    const double minimum=std::min(std::max(s.minWidth,8.0*tileCount),maximum);
+    const auto count=std::max(size_t{1},referenceCount);
+    const double available=outputHeight-s.paddingTop-s.paddingBottom-(count-1)*s.cardGap;
+    const double fit=std::max(0.0,available)*outputWidth/(count*outputHeight);
+    const double totalWidth=std::clamp(fit,minimum,maximum);
+    const double scale=totalWidth/outputWidth;
+    s.minWidth=s.maxWidth=tileWidth*scale;
+    auto g=layout(outputWidth,outputHeight,std::max(size_t{1},cardCount),s,std::nullopt,outputWidth);
+    if (!g.enabled()) return g;
+    // The minimum setting constrains the whole scene. A narrow tile's share
+    // can be smaller than layout()'s single-card floor without changing scale.
+    g.cardWidth=tileWidth*scale;
+    g.bandWidth=g.cardWidth+s.padding+s.paddingRight;
+    g.reservation=g.bandWidth+s.desktopGap;
+    g.cardHeight=outputHeight*scale;
+    g.desktopWidth=referenceCount?outputWidth-totalWidth-padding-s.desktopGap:outputWidth;
+    g.count=cardCount;
+    g.cardGap=s.cardGap;
+    if (s.evenSpacing && count>1)
+        g.cardGap=std::max(s.cardGap,(outputHeight-s.paddingTop-s.paddingBottom-count*g.cardHeight)/(count-1));
+    g.maxScroll=cardCount?std::max(0.0,cardCount*g.cardHeight+(cardCount-1)*g.cardGap+s.paddingTop+s.paddingBottom-outputHeight):0;
+    return g;
+}
+
 double Geometry::clampScroll(double scroll) const { return std::clamp(sane(scroll, 0), 0.0, maxScroll); }
 double Geometry::cardTop(std::size_t index, double scroll) const { return paddingTop + static_cast<double>(index) * (cardHeight + cardGap) - clampScroll(scroll); }
 
