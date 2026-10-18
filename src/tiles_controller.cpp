@@ -148,8 +148,8 @@ struct TilesController::Impl {
     Vector2D inputPosition(PHLMONITOR mon,const Vector2D& point) const {
         const CBox output{mon->m_position,mon->m_size};
         if (const auto mapped=StageController::tilePresentation(mon,output)) {
-            const double scale=mapped->w/output.w;
-            return output.pos()+(point-mapped->pos())/scale;
+            const auto [x,y]=stage::desktopInputPosition({output.x,output.y,output.w,output.h},{mapped->x,mapped->y,mapped->w,mapped->h},point.x,point.y);
+            return {x,y};
         }
         return point;
     }
@@ -901,7 +901,7 @@ struct TilesController::Impl {
         const auto b=o->model.box(*o->model.index(s.tile));
         static auto gap=CConfigValue<Config::INTEGER>("general:gaps_workspaces");
         const auto allocation=StageController::tilePresentation(mon,box(b)).value_or(box(b));
-        const double scale=allocation.w/b.width;
+        const double scale=s.vertical?allocation.h/b.height:allocation.w/b.width;
         const double travel=(s.vertical?allocation.h:allocation.w)+*gap*scale;
         s.source->m_alpha->setValueAndWarp(1.F);
         if (s.target) s.target->m_alpha->setValueAndWarp(1.F);
@@ -1069,9 +1069,10 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp, bool i
                 static auto workspaceGap=CConfigValue<Config::INTEGER>("general:gaps_workspaces");
                 const auto style=ws->m_animationStyle.value_or(w->m_renderOffset->getStyle());
                 const double gap=style.starts_with("slidefade")?0.0:static_cast<double>(*workspaceGap);
-                const double tileGap=gap*allocation.w/logicalAllocation.w;
-                const double sx=(allocation.w+tileGap)/std::max(1.0,mon->m_size.x+gap);
-                const double sy=(allocation.h+tileGap)/std::max(1.0,mon->m_size.y+gap);
+                const double tileGapX=gap*allocation.w/logicalAllocation.w;
+                const double tileGapY=gap*allocation.h/logicalAllocation.h;
+                const double sx=(allocation.w+tileGapX)/std::max(1.0,mon->m_size.x+gap);
+                const double sy=(allocation.h+tileGapY)/std::max(1.0,mon->m_size.y+gap);
                 w->m_renderOffset->setValue({value.x*sx,value.y*sy});
                 *w->m_renderOffset=Vector2D{goal.x*sx,goal.y*sy};
                 if (instant) w->m_renderOffset->warp();

@@ -224,14 +224,14 @@ monitor 的 scale/transform/尺寸/CM/目标格式变化后完整替换附件并
 - ws-only 的目标语义：展示可见分块及各自 workspace 缩略图/标签，标明 focused tile；strip 切换作用于所选 tile，其他 tile 的已占用目标可见并能聚焦对应 tile。当前 strip-only 空窗口路径同样必须维持 tile chrome，空 workspace 仍有可点击区域。这里定义行为，不声称已有 `ws-only` 字符串入口；后续若需新增显式入口另在评审中确认。
 - `WorkspaceOverride`、`WorkspaceStripEntry`、window slot/drag target、`WorkspaceTransition` 增加 `(monitor, tileId)`，不能再按 monitor 唯一 ownerWorkspace 推导端点。native/ws overview hit box 使用同一 tile clip，all overview 使用物理输出范围；预览跨 tile drop 有明确目标 workspace。
 - overview 退出按**当前 topology + generation**恢复可见集合/alpha；不能把“非 `m_activeWorkspace`”全部隐藏，也不能用打开时快照覆盖期间的 resize、断屏或真实切换。flight 的目的地取当前 workspace 对应 viewport，取消时不把全部工作区退回打开前状态。
-- Stage 的 sidebar/desktop、scroll camera、smartisan 左右切换、flights、fullscreen covered 状态以 tile 为 scope。可见 sidebar 按 tile 顺序集中在整屏最左侧，整块输出共享一个等比缩放/平移，所有 tile 一起为集中列带让位。overview 暂挂 Stage 时保留每 tile Stage 状态，由单一 owner 绘制/接管动画。
+- Stage 的 sidebar/desktop、scroll camera、smartisan 左右切换、flights、fullscreen covered 状态以 tile 为 scope。可见 sidebar 按 tile 顺序集中在整屏最左侧，整块输出共享一个水平缩放/平移，保持原生纵向占用，所有 tile 一起为集中列带让位。overview 暂挂 Stage 时保留每 tile Stage 状态，由单一 owner 绘制/接管动画。
 - 每 tile 的 Stage desktop viewport 再与 tile clip 合并后交给共享 edge service；小 tile 放不下 sidebar 时按 Stage 几何规则收缩/隐藏该 sidebar，并报告状态，不能挤占相邻 tile。Stage 内部选择也走共同 activation 事务。
 
 ### 7.1 已采纳的分组与拖拽协同（需求更新 2）
 
 workspace strip 按 tile 从左到右各一列，集中在整屏最左侧，focused tile 有独立描边；点击 workspace 时捕获该列 tile ID，不能按当前全局 focus 猜测。仅 onlycurrentworkspace 的主窗口区域在每个 tile 的 allocation/layout 区域内分别调用布局引擎；all/forceall 在物理输出内统一布局所有窗口。空 tile 仍保留 strip 列。
 
-Stage 采用 **每个 tile 一列、所有列集中在整个 monitor 最左侧**。以实际展示 workspace 最多的一列为自适应基准，所有列共享卡片高度、缩放和间距，列宽按 tile 可用宽度分配；不能为每列重复整屏比例卡片和整屏宽度预算。整组继续受原宽度限制约束。所有 tile 共用同一个桌面仿射变换，保持相邻边界连续，整体等比缩放并向右平移、垂直居中。列顺序对应所属 tile，状态查询包含 tile ID；active 卡片是否显示遵循 stage_show_active。单 tile 仍可从可见缩略图直接拖出 Split View。
+Stage 采用 **每个 tile 一列、所有列集中在整个 monitor 最左侧**。以实际展示 workspace 最多的一列为自适应基准，所有列共享卡片高度、缩放和间距，列宽按 tile 可用宽度分配；不能为每列重复整屏比例卡片和整屏宽度预算。整组继续受原宽度限制约束。所有 tile 共用同一个桌面仿射变换，保持相邻边界连续，仅水平压缩并向右平移，纵向位置、高度和原生 work-area 间隙不变。列顺序对应所属 tile，状态查询包含 tile ID；active 卡片是否显示遵循 stage_show_active。单 tile 仍可从可见缩略图直接拖出 Split View。
 
 Stage 缩略图可以跨列左右拖入另一 tile 的 active workspace，也可以落在其桌面区域；单窗口缩略图移动窗口，workspace/stage 组缩略图移动组内全部成员，保持组关系。目标为空白/已呈现 workspace 的区别在预览阶段确定。source workspace 不被销毁，未移动的窗口保持原位。
 
@@ -408,8 +408,9 @@ stage_card_max_width 的宽度限制，超过限制时沿用滚动。在同一�
 自行放大。workspace 增删后重新计算 M，所有列同步更新；达到宽度上限时尺寸可保持，焦点变化不改变基准。
 原来的默认输出相对宽度是自适应的上限，不是固定宽度，也不乘以 tile 数。
 列 padding/gap 额外计入 sidebar 实际总宽，不重复计算整屏卡片宽度。
-各 tile 内容使用同一等比取景，因此整组内容与输出可用区域比例相近；bar / padding /
-gap 参与布局，外框无精确 16:9 要求。
+各 tile 缩略图对实际 Stage desktop viewport 等比取景；桌面本身只做共享水平压缩，不能为保持原显示器比例而缩短高度。
+缩略图整组比例由压缩后的桌面宽度与原高度决定；bar / padding / gap 参与布局，无精确 16:9 要求。
+以最多 workspace 列为基准，沿用原 Stage 的耦合求解：缩略图宽度、侧栏预留和实际桌面宽度共同决定卡片高度，避免引入横向留白。
 窗口按所属 tile 的当前 desktop viewport 使用同一个场景缩放映射，保持相对位置，
 没有为改变单列比例而制造的横向留白。背景、blur/fade、命中、拖放及 flight 端点
 使用同一块 tile viewport。桌面部分的

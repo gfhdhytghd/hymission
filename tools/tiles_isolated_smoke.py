@@ -28,6 +28,8 @@ def main():
     ap.add_argument("--default-off-regression", action="store_true")
     ap.add_argument("--top-clip-regression", action="store_true")
     ap.add_argument("--animation-regression", action="store_true")
+    ap.add_argument("--stage-height-regression",choices=("off","single","two","three"))
+    ap.add_argument("--stage-height-observe",action="store_true")
     ap.add_argument("--stage-animation-profile", action="store_true")
     ap.add_argument("--stage-profile-fp16-mirror", action="store_true")
     ap.add_argument("--stage-profile-case", choices=("off","single","two","three"), default="off")
@@ -131,7 +133,7 @@ def main():
 
         for _ in range(100):
             try:
-                state = json.loads(request("j/hymission-stage-state" if (args.default_off_regression or args.stage_animation_profile) else "j/hymission-tiles-state"))
+                state = json.loads(request("j/hymission-stage-state" if (args.default_off_regression or args.stage_animation_profile or args.stage_height_regression) else "j/hymission-tiles-state"))
                 break
             except (ValueError, OSError):
                 time.sleep(0.1)
@@ -145,6 +147,11 @@ def main():
         else:
             raise RuntimeError("nested output did not appear")
         expected_width = monitors[0]["width"] / monitors[0].get("scale", 1)
+        if args.stage_height_regression:
+            from tiles_stage_height_regression import run
+            run(args.stage_height_regression,args.stage_height_observe,request,root,env,runtime,processes,handles)
+            (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
         if args.stage_animation_profile:
             from stage_animation_profile import run
             run(request,root,env,runtime,processes,handles,args.stage_profile_case,args.stage_profile_order,args.stage_profile_fp16_mirror)

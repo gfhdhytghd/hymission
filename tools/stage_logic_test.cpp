@@ -18,29 +18,32 @@ int main() {
     using namespace hymission::stage;
     bool ok = true;
     for (const auto& widths:std::vector<std::vector<double>>{{1536,1536},{900,1200,972},{600,2472}}) {
-        double total=0,commonHeight=0,bands=0;
+        double total=0,commonHeight=0,bands=0,desktopWidth=0;
         for (size_t i=0;i<widths.size();++i) {
             const auto g=tileLayout(3072,1670,widths[i],widths.size(),i?0:4,4,{});
-            total+=g.cardWidth; bands+=g.bandWidth;
+            total+=g.cardWidth; bands+=g.bandWidth;desktopWidth=g.desktopWidth;
             if (!i) commonHeight=g.cardHeight;
             ok &= expect(near(g.cardHeight,commonHeight),"all tile columns share one thumbnail height, including empty columns");
-            ok &= expect(near(g.cardWidth/g.cardHeight,widths[i]/1670),"tile card has its viewport aspect without artificial letterboxing");
+            ok &= expect(near(g.cardWidth/g.cardHeight,widths[i]/3072*g.desktopWidth/1670),"tile card has its viewport aspect without artificial letterboxing");
         }
-        ok &= expect(near(total/commonHeight,3072.0/1670),"combined tile thumbnails retain the output aspect");
-        ok &= expect(near(total,3072.0/5) && bands<3072*.25,"thumbnail width is budgeted once for the whole scene");
+        ok &= expect(near(total/commonHeight,desktopWidth/1670),"combined tile thumbnails retain the native horizontally reserved desktop aspect");
+        ok &= expect(total<=3072.0/5 && bands<3072*.25,"thumbnail width is budgeted once for the whole scene");
     }
     {
         const Settings adaptive{.padding=10,.cardGap=12,.paddingTop=10,.paddingBottom=10,.evenSpacing=true};
         const auto most=tileLayout(3072,1670,1536,2,9,9,adaptive);
         const auto fewer=tileLayout(3072,1670,1536,2,3,9,adaptive);
         const auto changed=tileLayout(3072,1670,1536,2,3,5,adaptive);
+        auto sceneSettings=normalize(adaptive);sceneSettings.padding*=2;sceneSettings.paddingRight*=2;
+        const auto nativeScene=layout(3072,1670,9,sceneSettings,std::nullopt,3072);
+        ok &= expect(near(most.cardWidth*2,nativeScene.cardWidth) && near(most.cardHeight,nativeScene.cardHeight) && near(most.desktopWidth,nativeScene.desktopWidth),"multi-tile stack uses the original Stage reserved-width/full-height sizing rule");
         ok &= expect(near(most.cardHeight,fewer.cardHeight) && near(most.cardGap,fewer.cardGap),"maximum workspace count supplies the shared adaptive size and spacing");
         ok &= expect(near(most.cardTop(8,0)+most.cardHeight,1660),"longest workspace column fits available height using adaptive width");
-        ok &= expect(most.maxScroll==0 && changed.cardHeight>most.cardHeight,"removing workspaces from the longest column resizes all columns together");
+        ok &= expect(near(most.maxScroll,0) && changed.cardHeight>most.cardHeight,"removing workspaces from the longest column resizes all columns together");
         ok &= expect(near(tileLayout(3072,1670,1536,2,0,0,adaptive).desktopWidth,3072),"no workspace cards leave the desktop unreserved");
         const auto narrowTile=tileLayout(3072,1670,120,2,30,30,adaptive);
         const auto wideTile=tileLayout(3072,1670,2952,2,2,30,adaptive);
-        ok &= expect(near(narrowTile.cardHeight,wideTile.cardHeight) && near(narrowTile.cardWidth/narrowTile.cardHeight,120.0/1670),"narrow tile keeps the shared scale when scene minimum width requires scrolling");
+        ok &= expect(near(narrowTile.cardHeight,wideTile.cardHeight) && near(narrowTile.cardWidth/narrowTile.cardHeight,120.0/3072*narrowTile.desktopWidth/1670),"narrow tile keeps the shared scale when scene minimum width requires scrolling");
     }
     for (const auto base:std::vector<hymission::Rect>{{0,0,1920,1080},{-1920,80,1920,976}}) {
         for (double progress:{0.,.25,.6,1.}) {
@@ -48,8 +51,13 @@ int main() {
             const auto b=scaleDesktopRect({base.x+960,base.y,640,base.height},base,600,progress);
             const auto c=scaleDesktopRect({base.x+1600,base.y,320,base.height},base,600,progress);
             ok &= expect(near(a.x+a.width,b.x) && near(b.x+b.width,c.x),"global Stage transform keeps unequal tile borders contiguous");
-            ok &= expect(near(a.width/960,b.width/640) && near(a.width/960,c.width/320) && near(a.height/base.height,a.width/960),"all Stage tile axes share one scale");
-            ok &= expect(near(c.x+c.width,base.x+base.width) && near(a.y,a.height==base.height?base.y:base.y+(base.height-a.height)/2),"global Stage scene remains output anchored and vertically centered");
+            ok &= expect(near(a.width/960,b.width/640) && near(a.width/960,c.width/320) && near(a.height,base.height) && near(b.height,base.height) && near(c.height,base.height),"tiles share one horizontal scale and retain native vertical extent");
+            ok &= expect(near(c.x+c.width,base.x+base.width) && near(a.y,base.y) && near(b.y,base.y) && near(c.y,base.y),"Stage stays right anchored without a vertical translation");
+            const auto whole=scaleDesktopRect(base,base,600,progress);
+            const auto point=desktopInputPosition(base,whole,whole.x+whole.width*.37,whole.y+whole.height*.93);
+            ok &= expect(near(point.first,base.x+base.width*.37) && near(point.second,base.y+base.height*.93),"presentation input maps horizontal compression without scaling native y");
+            const auto gap=scaleDesktopRect({base.x+12,base.y+23,base.width-36,base.height-51},base,600,progress);
+            ok &= expect(near(gap.y,base.y+23) && near(gap.height,base.height-51),"native vertical work-area gaps survive Stage reservation");
         }
     }
     const std::vector<hymission::Rect> clickCards{{20, 20, 160, 100}, {20, 140, 160, 100}};

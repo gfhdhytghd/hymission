@@ -115,7 +115,7 @@ def run(case,request,root,env,runtime,processes,handles):
         s=wait('j/hymission-stage-state',lambda s:s['visibility_progress']==1 and len(s['screens'])==2 and all(sc['cards'] and all(c.get('windows') for c in sc['cards']) for sc in s['screens']))
         time.sleep(.2);s=read('j/hymission-stage-state')
         image=capture('stage-hidpi-scrolling')
-        assert abs(sum(sc['card_width'] for sc in s['screens'])/s['screens'][0]['card_height']-3072/1670)<.001,('combined Stage aspect must describe the whole output',s)
+        assert abs(sum(sc['card_width'] for sc in s['screens'])/s['screens'][0]['card_height']-sum(sc['desktop_width'] for sc in s['screens'])/1670)<.001,('combined Stage aspect must describe the native full-height reserved desktop',s)
         assert sum(sc['sidebar']['width'] for sc in s['screens'])<3072*.25,('Stage reserves its width once for the complete scene',s)
         if case=='stage-adaptive':
             evaluate('hl.config({plugin={hymission={stage_show_empty=0}}}); hl.plugin.hymission.tile_focus("left")')

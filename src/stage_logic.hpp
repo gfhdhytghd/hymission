@@ -28,13 +28,19 @@ inline Rect reservedWorkArea(Rect area, double reservation, double progress, boo
     return area;
 }
 
-// One affine scene for every tile: reserve the common sidebar once, shrink
-// both axes uniformly and keep the desktop vertically centered on its output.
+// Reserve the common sidebar once and map tile widths as one output scene.
+// Native Stage keeps the desktop height and vertical gaps unchanged.
 inline Rect scaleDesktopRect(const Rect& area,const Rect& base,double reservation,double progress) {
     const double amount=std::clamp(reservation,0.0,std::max(0.0,base.width-1))*std::clamp(progress,0.0,1.0);
     const double scale=1-amount/std::max(1.0,base.width);
-    return {base.x+amount+(area.x-base.x)*scale,base.y+base.height*(1-scale)*.5+(area.y-base.y)*scale,
-            area.width*scale,area.height*scale};
+    return {base.x+amount+(area.x-base.x)*scale,area.y,area.width*scale,area.height};
+}
+
+// Invert the actual presentation on each axis. Horizontal-only reservation
+// must not turn a pointer's vertical coordinate into the old uniform scale.
+inline std::pair<double,double> desktopInputPosition(const Rect& output,const Rect& mapped,double x,double y) {
+    return {output.x+(x-mapped.x)*output.width/std::max(1.0,mapped.width),
+            output.y+(y-mapped.y)*output.height/std::max(1.0,mapped.height)};
 }
 
 // Extend the actual Stage reservation through output/bar gaps to the physical

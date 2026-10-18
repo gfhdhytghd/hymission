@@ -73,12 +73,16 @@ Geometry tileLayout(double outputWidth, double outputHeight, double tileWidth, s
     const double limit=outputWidth*.5-padding-s.desktopGap;
     if (limit<8*tileCount) return {};
     // The setting describes the whole thumbnail scene, not each tile column.
-    // One scale maps all tile viewports; their combined aspect is the output's.
+    // One thumbnail scale maps the actual reserved desktop across all columns.
     const double maximum=std::min(s.maxWidth>0?s.maxWidth:outputWidth/5,limit);
     const double minimum=std::min(std::max(s.minWidth,8.0*tileCount),maximum);
     const auto count=std::max(size_t{1},referenceCount);
     const double available=outputHeight-s.paddingTop-s.paddingBottom-(count-1)*s.cardGap;
-    const double fit=std::max(0.0,available)*outputWidth/(count*outputHeight);
+    // Match native Stage's coupled solve: reserving thumbnail width narrows
+    // the desktop but keeps its height. Fit the longest stack against that
+    // actual desktop aspect, rather than a uniformly shrunken output.
+    const double availableWidth=outputWidth-padding-s.desktopGap;
+    const double fit=std::max(0.0,available)*availableWidth/(count*outputHeight+std::max(0.0,available));
     const double totalWidth=std::clamp(fit,minimum,maximum);
     const double scale=totalWidth/outputWidth;
     s.minWidth=s.maxWidth=tileWidth*scale;
@@ -89,8 +93,8 @@ Geometry tileLayout(double outputWidth, double outputHeight, double tileWidth, s
     g.cardWidth=tileWidth*scale;
     g.bandWidth=g.cardWidth+s.padding+s.paddingRight;
     g.reservation=g.bandWidth+s.desktopGap;
-    g.cardHeight=outputHeight*scale;
     g.desktopWidth=referenceCount?outputWidth-totalWidth-padding-s.desktopGap:outputWidth;
+    g.cardHeight=totalWidth*outputHeight/g.desktopWidth;
     g.count=cardCount;
     g.cardGap=s.cardGap;
     if (s.evenSpacing && count>1)
