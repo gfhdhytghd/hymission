@@ -386,6 +386,22 @@ int drag(lua_State* L) {
 // Emit device-level swipe events on the private nested compositor pointer.
 // PointerManager -> InputManager -> EventBus -> matching -> trackpad wrapper;
 // it deliberately does not call the unified swipe or any dispatcher directly.
+int resolveWorkspace(lua_State* L) {
+    const auto target=State::Workspace::resolver()->getWorkspaceTargetFromString(luaL_checkstring(L,1),Desktop::focusState()->monitor());
+    const auto key=target.valid()?hymission::workspaceKey(target):hymission::WORKSPACE_INVALID;
+    if (lua_gettop(L)>1) { std::ofstream output(luaL_checkstring(L,2)); output<<key<<"\n"; }
+    lua_pushinteger(L,key);
+    return 1;
+}
+int key(lua_State* L) {
+    const auto keyboard=g_pSeatManager->m_keyboard.lock();
+    if (!keyboard) return luaL_error(L,"private keyboard unavailable");
+    static uint32_t time=100;
+    const uint32_t code=luaL_checkinteger(L,1);
+    keyboard->m_keyboardEvents.key.emit({.timeMs=time++,.keycode=code,.state=WL_KEYBOARD_KEY_STATE_PRESSED});
+    keyboard->m_keyboardEvents.key.emit({.timeMs=time++,.keycode=code,.state=WL_KEYBOARD_KEY_STATE_RELEASED});
+    return 0;
+}
 int trackpad(lua_State* L) {
     const std::string action=luaL_checkstring(L,1);
     static uint32_t time=1;
@@ -453,6 +469,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","frame_capture",frameCapture);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","focus_resize",focusResize);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","trackpad",trackpad);
+    HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","key",key);
+    HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","resolve_workspace",resolveWorkspace);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","drag",drag);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","animation_report",animationReport);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","symbol_report",symbolReport);

@@ -28,6 +28,8 @@ def main():
     ap.add_argument("--default-off-regression", action="store_true")
     ap.add_argument("--top-clip-regression", action="store_true")
     ap.add_argument("--animation-regression", action="store_true")
+    ap.add_argument("--relative-regression",choices=("off","single","two","three"))
+    ap.add_argument("--relative-observe",action="store_true")
     ap.add_argument("--presentation-regression",choices=("two","three"))
     ap.add_argument("--presentation-observe",action="store_true")
     ap.add_argument("--stage-drop-regression",choices=("off","single","two","three"))
@@ -176,6 +178,10 @@ def main():
             run(request,root)
             assert child.poll() is None, "compositor exited during gesture regression"
             (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
+        if args.relative_regression:
+            from tiles_relative_regression import run
+            run(args.relative_regression,args.relative_observe,request,root,env,runtime,processes,handles)
             return
         if args.presentation_regression:
             from tiles_presentation_regression import run

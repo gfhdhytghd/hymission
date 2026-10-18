@@ -43,6 +43,7 @@
 #include <hyprland/src/state/workspace/PlacementController.hpp>
 #include <hyprutils/utils/ScopeGuard.hpp>
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <map>
 #include <sstream>
@@ -74,6 +75,7 @@ struct TilesController::Impl {
     struct Output {
         PHLMONITORREF monitor;
         tiles::Model model;
+        tiles::Ownership ownership;
         std::vector<PHLWORKSPACE> held;
         std::vector<View> outgoing;
         std::map<tiles::Id,PHLWORKSPACE> bindings;
@@ -92,7 +94,6 @@ struct TilesController::Impl {
     bool ready = false, applying = false, frameFanout = false, stopping = false;
     std::string initError, edgeFailure;
     bool softEdgeDrawn=false, nativeDropCancelled=false, collapsing=false;
-    std::map<WorkspaceKey,std::pair<PHLMONITORREF,tiles::Id>> homes;
     Owner interaction = Owner::None;
     struct Swipe {
         PHLMONITORREF monitor;
@@ -259,7 +260,9 @@ struct TilesController::Impl {
             for (size_t i=0;i<windows.size();++i) if (windows[i]->mapped()) Desktop::globalWindowController()->moveWindowToWorkspace(windows[i],origins[i]);
             applying=false; return false;
         }
+        o.ownership.sync(o.model.state());
         o.model=std::move(draft);
+        o.ownership.sync(o.model.state());
         applying=false;
         apply(o,focus,warp);
         return true;
@@ -868,7 +871,7 @@ struct TilesController::Impl {
         auto ws = State::workspaceState()->find(target);
         static auto back = CConfigValue<Config::INTEGER>("binds:workspace_back_and_forth");
         if (ws == mon->m_activeWorkspace && *back) {
-            if (const auto previous = self->output(mon)->model.previous()) target = workspaceTarget(*previous);
+            if (const auto previous = self->previousOwned(*self->output(mon),self->output(mon)->model.state().focused)) target = workspaceTarget(*previous);
             ws = State::workspaceState()->find(target);
         }
         if (!ws) ws = State::workspaceState()->create(target, mon);
@@ -876,11 +879,52 @@ struct TilesController::Impl {
     }
     static Action stringAction(const std::string& s) { return actionString(s, false); }
     static Action stringCurrent(const std::string& s) { return actionString(s, true); }
+    std::vector<WorkspaceKey> owned(Output& o, tiles::Id id) const {
+        std::vector<WorkspaceKey> named, numbered;
+        const auto mon=o.monitor.lock();
+        for (const auto& ws:State::workspaceState()->workspacesCopy())
+            if (ws->m_monitor==mon && ws->type()!=Workspace::eWorkspaceType::SPECIAL &&
+                o.ownership.owner(o.model.state(),workspaceKey(ws))==id)
+                (ws->numberedID()?numbered:named).push_back(workspaceKey(ws));
+        std::ranges::reverse(named);
+        std::ranges::sort(numbered);
+        named.insert(named.end(),numbered.begin(),numbered.end());
+        return named;
+    }
+    std::optional<WorkspaceKey> previousOwned(Output& o, tiles::Id id) const {
+        return o.ownership.previous(o.model.state(),id,owned(o,id));
+    }
+    std::optional<WorkspaceKey> relative(Output& o,const std::string& selector) const {
+        const auto mon=o.monitor.lock();
+        const auto id=o.model.state().focused;
+        const auto candidates=owned(o,id);
+        std::set<WorkspaceKey> unavailable;
+        for (const auto& ws:State::workspaceState()->workspacesCopy()) if (ws->numberedID() &&
+            (ws->m_monitor!=mon || ws->type()==Workspace::eWorkspaceType::SPECIAL ||
+             o.ownership.owner(o.model.state(),workspaceKey(ws))!=id)) unavailable.insert(workspaceKey(ws));
+        for (const auto& rule:Config::workspaceRuleMgr()->getAllWorkspaceRules()) {
+            if (!rule->isEnabled()) continue;
+            const auto& value=rule->m_workspaceString;
+            uint32_t number=0;
+            const auto [end,error]=std::from_chars(value.data(),value.data()+value.size(),number);
+            if (error!=std::errc{} || end!=value.data()+value.size() || !number) continue;
+            const auto bound=State::monitorState()->query().relativeTo(mon).configString(rule->m_monitor).run();
+            if (bound && bound!=mon) unavailable.insert(number);
+        }
+        return tiles::relativeTarget(selector,o.model.state().tiles[*o.model.index(id)].workspace,candidates,unavailable);
+    }
     static State::Workspace::STarget resolve(State::Workspace::CWorkspaceResolver* resolver, const std::string& selector, std::optional<PHLMONITOR> base) {
         const auto mon = base.value_or(Desktop::focusState()->monitor());
-        if (self->active(mon) && (selector == "prev" || selector == "previous" || selector == "previous_per_monitor")) {
-            if (const auto prev = self->output(mon)->model.previous()) return workspaceTarget(*prev);
-            return {};
+        if (self->active(mon) && !self->applying && !locked() && !mon->m_activeSpecialWorkspace) {
+            auto* o=self->output(mon);
+            if (selector == "prev" || selector == "previous" || selector == "previous_per_monitor") {
+                if (const auto prev=self->previousOwned(*o,o->model.state().focused)) return workspaceTarget(*prev);
+                return {};
+            }
+            if (tiles::relativeSelector(selector)) {
+                if (const auto target=self->relative(*o,selector)) return workspaceTarget(*target);
+                return {};
+            }
         }
         return reinterpret_cast<decltype(&resolve)>(resolverHook->m_original)(resolver, selector, base);
     }
@@ -890,7 +934,7 @@ struct TilesController::Impl {
         if (const auto v = self->view(ws)) {
             const auto* o = self->output(v->monitor);
             const auto i = o->model.index(v->id);
-            if (i) for (const auto key : o->model.state().tiles[*i].history) if (key != workspaceKey(ws)) return History::SHistoryEntry{workspaceForKey(key), v->monitor, workspaceTarget(key)};
+            if (i) if (const auto key=self->previousOwned(*self->output(v->monitor),v->id)) return History::SHistoryEntry{workspaceForKey(*key), v->monitor, workspaceTarget(*key)};
             return History::SHistoryEntry{};
         }
         return {};
@@ -963,41 +1007,28 @@ struct TilesController::Impl {
     }
     PHLWORKSPACE swipeTarget(Output& o, int step) {
         const auto mon = o.monitor.lock();
-        std::vector<PHLWORKSPACE> candidates;
         static auto useRelative=CConfigValue<Config::INTEGER>("gestures:workspace_swipe_use_r");
-        if (*useRelative) {
-            const auto count=State::workspaceState()->workspacesCopy().size()+tiles::maxTiles+1;
-            for (size_t n=1;n<=count;++n) {
-                const auto selector=std::string("r")+(step>0?"+":"-")+std::to_string(n);
-                const auto target=State::Workspace::resolver()->getWorkspaceTargetFromString(selector,mon);
-                if (!target.valid() || target.type==Workspace::eWorkspaceType::SPECIAL) return nullptr;
-                auto ws=State::workspaceState()->find(target);
-                if (ws && (ws==swipe->source || o.model.presented(workspaceKey(ws)) || ws->m_monitor!=mon)) continue;
-                if (!ws) {
-                    if (swipe->createdEmpty) return nullptr;
-                    ws=State::workspaceState()->create(target,mon); swipe->createdEmpty=!!ws;
-                }
-                return ws && ws->m_monitor==mon?ws:nullptr;
-            }
-            return nullptr;
-        }
-        rememberWorkspaceKeys();
-        for (const auto& w : State::workspaceState()->workspacesCopy()) if (w->m_monitor == mon && w->type() != Workspace::eWorkspaceType::SPECIAL && (!o.model.presented(workspaceKey(w)) || w == swipe->source)) candidates.push_back(w);
-        std::ranges::sort(candidates, {}, [](const auto& w) { return workspaceKey(w); });
-        const auto it=std::ranges::find(candidates,swipe->source);
-        const int i=it==candidates.end()?0:static_cast<int>(it-candidates.begin());
-        const int j=i+step;
-        if (j>=0 && j<static_cast<int>(candidates.size())) return candidates[j];
         static auto create=CConfigValue<Config::INTEGER>("gestures:workspace_swipe_create_new");
-        if (*create && step>0 && !swipe->createdEmpty) {
-            WorkspaceKey id=1;
-            for (const auto& w:State::workspaceState()->workspacesCopy()) if (w->numberedID()) id=std::max(id,workspaceKey(w)+1);
-            auto ws=id<=UINT32_MAX?createWorkspaceForKey(id,mon->m_id):nullptr;
-            swipe->createdEmpty=!!ws; return ws && ws->m_monitor==mon?ws:nullptr;
+        const auto candidates=owned(o,swipe->tile);
+        if (candidates.empty()) return nullptr;
+        const auto it=std::ranges::find(candidates,workspaceKey(swipe->source));
+        if (it==candidates.end()) return nullptr;
+        if (step<0 && it==candidates.begin()) return nullptr; // Native swipes do not wrap off the left edge.
+        const bool last=it+1==candidates.end();
+        std::optional<WorkspaceKey> key;
+        if (*useRelative || (*create && step>0 && last)) key=relative(o,step>0?"r+1":"r-1");
+        else key=tiles::relativeTarget(step>0?"m+1":"m-1",*it,candidates);
+        if (!key || *key==workspaceKey(swipe->source)) return nullptr;
+        auto ws=workspaceForKey(*key);
+        if (!ws) {
+            if (!*create || swipe->createdEmpty) return nullptr;
+            ws=createWorkspaceForKey(*key,mon->m_id);
+            swipe->createdEmpty=!!ws;
+            if (ws) o.ownership.claim(*key,swipe->tile);
         }
-        if (candidates.size()>1) return step>0?candidates.front():candidates.back();
-        return nullptr;
+        return ws && ws->m_monitor==mon && o.ownership.owner(o.model.state(),*key)==swipe->tile?ws:nullptr;
     }
+
     static bool swipeBegin(CUnifiedWorkspaceSwipeGesture* gesture, PHLMONITOR mon) {
         if (!self->active(mon) || locked() || (self->overview && self->overview())) return reinterpret_cast<decltype(&swipeBegin)>(swipeBeginHook->m_original)(gesture,mon);
         if (self->interaction != Owner::None || mon->m_activeSpecialWorkspace) return false;
@@ -1179,12 +1210,13 @@ void TilesController::Impl::apply(Output& o, bool focusWindow, bool warp, bool i
     // A physical fullscreen owns keyboard and pointer focus until its workspace
     // stops being displayed. Other tile bindings can still change independently.
     if (const auto fullscreen=whole(mon)) (void)o.model.activate(workspaceKey(fullscreen->m_workspace));
+    o.ownership.sync(o.model.state());
     const auto old = mon->m_activeWorkspace;
     auto held = std::move(o.held);
     auto previous=std::move(o.bindings);
     auto constraintGuard=g_pInputManager->pointerConstraints().suspend();
     for (const auto& t : o.model.state().tiles) if (auto ws = workspaceForKey(t.workspace)) {
-        homes[t.workspace]={mon,t.id};
+        o.ownership.claim(t.workspace,t.id);
         o.bindings[t.id]=ws;
         o.held.push_back(ws); ws->setVisible(true);
         const auto prior=previous.find(t.id);
@@ -1337,7 +1369,11 @@ void TilesController::initialize() {
         m->endResize(true); m->cancelSwipe(); finishTransfer(false); m->request();
     }));
     m->listeners.emplace_back(e.monitor.removed.listen([this](PHLMONITOR) { finishTransfer(false); m->request(); }));
-    m->listeners.emplace_back(e.workspace.created.listen([this](PHLWORKSPACEREF) { m->request(); }));
+    m->listeners.emplace_back(e.workspace.created.listen([this](PHLWORKSPACEREF ref) {
+        if (const auto ws=ref.lock(); ws && m->active(ws->m_monitor.lock()) && ws->type()!=Workspace::eWorkspaceType::SPECIAL)
+            if (auto* o=m->output(ws->m_monitor.lock())) o->ownership.claim(workspaceKey(ws),o->model.state().focused);
+        m->request();
+    }));
     m->listeners.emplace_back(e.workspace.active.listen([this](PHLWORKSPACE) { m->request(); }));
     m->listeners.emplace_back(e.workspace.removed.listen([this](PHLWORKSPACEREF) { finishTransfer(false); m->request(); }));
     m->listeners.emplace_back(e.workspace.moveToMonitor.listen([this](PHLWORKSPACE, PHLMONITOR) { finishTransfer(false); m->request(); }));
@@ -1397,17 +1433,7 @@ void TilesController::fail(std::string error) { m->initError="tiles disabled: "+
 tiles::Id TilesController::preferredTile(const PHLWORKSPACE& ws, const PHLMONITOR& mon) const {
     auto* o=m->output(mon);
     if (!m->ready || !o) return 0;
-    if (ws) {
-        if (const auto i=o->model.presented(workspaceKey(ws))) return o->model.state().tiles[*i].id;
-        if (const auto it=m->homes.find(workspaceKey(ws));it!=m->homes.end() && it->second.first==mon && o->model.index(it->second.second)) return it->second.second;
-        size_t rank=SIZE_MAX; tiles::Id id=0;
-        for (const auto& t:o->model.state().tiles) {
-            auto it=std::ranges::find(t.history,workspaceKey(ws));
-            if (it!=t.history.end() && static_cast<size_t>(it-t.history.begin())<rank) { rank=it-t.history.begin(); id=t.id; }
-        }
-        if (id) return id;
-    }
-    return o->model.state().tiles.front().id;
+    return o->ownership.owner(o->model.state(), ws ? workspaceKey(ws) : 0);
 }
 std::optional<TilesController::View> TilesController::view(const PHLWORKSPACE& w) const { return m->view(w); }
 bool TilesController::presented(const PHLWORKSPACE& w) const { return m->view(w).has_value(); }
@@ -1454,11 +1480,10 @@ bool TilesController::moveWorkspace(const PHLWORKSPACE& ws,const PHLMONITOR& mon
     for (auto& tile:state.tiles) std::erase(tile.history,key);
     state.tiles[*target].history.insert(state.tiles[*target].history.begin(),key);
     if (!draft.restore(state,draft.state().generation)) return false;
-    const auto previous=m->homes.find(key);
-    const auto saved=previous==m->homes.end()?std::optional<std::pair<PHLMONITORREF,tiles::Id>>{}:previous->second;
-    m->homes[key]={mon,id};
+    const auto saved=o->ownership;
+    o->ownership.claim(key,id);
     if (m->publish(*o,std::move(draft),{},nullptr,false)) return true;
-    if (saved) m->homes[key]=*saved; else m->homes.erase(key);
+    o->ownership=saved;
     return false;
 }
 bool TilesController::moveWindows(const std::vector<PHLWINDOW>& windows,const PHLMONITOR& mon,tiles::Id id,const PHLWORKSPACE& destination,bool focusTile) {
@@ -1470,13 +1495,11 @@ bool TilesController::moveWindows(const std::vector<PHLWINDOW>& windows,const PH
         if (!draft.restore(state,draft.state().generation)) return false;
     }
     const auto key=workspaceKey(destination);
-    const auto previous=m->homes.find(key);
-    const auto saved=previous==m->homes.end()?std::optional<std::pair<PHLMONITORREF,tiles::Id>>{}:previous->second;
-    m->homes[key]={mon,id};
-    // Preserve actual keyboard focus; only move the compatibility workspace/tile
-    // with a focused floating window. Do not select another destination candidate.
+    const auto saved=o->ownership;
+    o->ownership.claim(key,id);
+    // Preserve actual keyboard focus during live floating rehoming.
     if (m->publish(*o,std::move(draft),windows,destination,false)) return true;
-    if (saved) m->homes[key]=*saved; else m->homes.erase(key);
+    o->ownership=saved;
     return false;
 }
 bool TilesController::busy() const { return m->interaction != Owner::None; }

@@ -64,6 +64,46 @@ int main() {
             for (size_t j=0;j<i;++j) { const auto& b=grid[j]; check(a.x+a.width<=b.x || b.x+b.width<=a.x || a.y+a.height<=b.y || b.y+b.height<=a.y); }
         }
     }
+    Model navigation({0,0,1920,1080},1,100);
+    Ownership homes;
+    homes.sync(navigation.state());
+    check(navigation.add(3).has_value()); homes.sync(navigation.state());
+    const auto right=navigation.state().focused;
+    homes.claim(7,1); homes.claim(8,right);
+    check(homes.owner(navigation.state(),7)==1 && homes.owner(navigation.state(),8)==right);
+    check(navigation.activate(8).has_value()); homes.sync(navigation.state());
+    check(homes.previous(navigation.state(),right,{1,3,7,8})==3);
+    homes.claim(3,1); // FB6 hidden workspace transfer invalidates stale history.
+    check(!homes.previous(navigation.state(),right,{1,3,7,8}));
+    homes.claim(3,right);
+    check(!homes.previous(navigation.state(),right,{1,7,8})); // destroyed history is not recreated
+    check(navigation.add(5).has_value()); homes.sync(navigation.state());
+    const auto third=navigation.state().focused; homes.claim(9,third);
+    check(navigation.remove().has_value()); homes.sync(navigation.state());
+    check(homes.owner(navigation.state(),9)==right); // third merges left, not first
+    check(navigation.focus(-1).has_value());
+    check(navigation.remove().has_value()); homes.sync(navigation.state());
+    check(homes.owner(navigation.state(),7)==right); // left edge merges right
+    const std::vector<Workspace> owned{-1001,-1000,1,7,12};
+    for (const std::string prefix:{"m","e","r",""}) {
+        check(relativeTarget(prefix+"+1",1,owned)==7);
+        check(relativeTarget(prefix+"-1",7,owned)==1);
+        check(relativeTarget(prefix+"+2",1,owned)==12);
+    }
+    check(relativeTarget("m+1",12,owned)==-1001);
+    check(relativeTarget("e-1",-1001,owned)==12);
+    check(relativeTarget("m-7",1,owned)==-1001);
+    check(relativeTarget("m~99",1,owned)==12 && relativeTarget("e~1",12,owned)==-1001);
+    check(relativeTarget("r-1",-1001,owned)==-1001);
+    check(relativeTarget("r+1",12,owned,{13,14,17})==15);
+    check(relativeTarget("+3",7,owned,{13,14,17})==16);
+    check(relativeTarget("r~7",1,owned,{13,14,17})==16);
+    check(relativeTarget("next",1,owned)==7);
+    check(!relativeTarget("r+4294967296",1,owned));
+    check(!relativeTarget("m+garbage",1,owned));
+    check(!relativeTarget("r+1",UINT32_MAX,{UINT32_MAX}));
+    check(relativeTarget("m+0",7,owned)==7);
+    check(!relativeSelector("name:foo") && !relativeSelector("3"));
     std::mt19937_64 rng(0x74696c6573);
     Model random({0, 0, 3840, 2160}, 1, 100);
     for (int round = 0; round < 40000; ++round) {

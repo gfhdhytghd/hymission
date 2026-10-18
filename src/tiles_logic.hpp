@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <expected>
 #include <optional>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -58,6 +60,22 @@ class Model {
     State m_state;
     Result publish(State draft);
 };
+// One ownership table per physical output, shared by presentation and navigation.
+class Ownership {
+  public:
+    Id owner(const State&, Workspace) const;
+    void claim(Workspace workspace, Id tile) { m_homes[workspace] = tile; }
+    void forget(Workspace workspace) { m_homes.erase(workspace); }
+    void sync(const State&);
+    std::optional<Workspace> previous(const State&, Id, const std::vector<Workspace>& alive) const;
+  private:
+    std::map<Workspace, Id> m_homes;
+    std::vector<Id> m_order;
+};
+bool relativeSelector(const std::string&);
+// Ordered existing owned workspaces; unavailable also includes physical monitor rules.
+std::optional<Workspace> relativeTarget(const std::string&, Workspace current, const std::vector<Workspace>& ordered,
+                                       const std::set<Workspace>& unavailable = {});
 class DividerDrag {
   public:
     static std::expected<DividerDrag, std::string> begin(const Model&, size_t left, double pointerX);

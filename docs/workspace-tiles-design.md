@@ -138,11 +138,16 @@ TileInteraction {
 | 点击另一 tile 的窗口/空白 | 按 input box 先选 tile；更新 active 投影与事件，再聚焦该窗口/空白；不对原 tile 运行 workspace-out 动画或迁移 pinned |
 | 仅鼠标经过另一 tile | 遵循原 `input:follow_mouse`；关闭时不偷键盘焦点，开启时先切 tile 再 native focus；不能仅凭 pointer 所在位置决定随后键盘 dispatcher 的目标 |
 | 直接 focuswindow / urgent / toplevel activation | 已呈现窗口聚焦其所属 tile；隐藏窗口在当前 tile 激活其 workspace，再聚焦；显式 focusmonitor 保留其原用途 |
-| 相对 `m/r/e/+/-`、named、previous/back-and-forth | 保留已支持的 selector 语法和排序基础，解析上下文改为 tile；相对浏览遵循同屏 tile 的多屏策略，swipe 的候选跳过其他 tile 已呈现 workspace；previous 从该 tile 历史取未被占用的有效目标；无目标按原 create/wrap 配置或取消，不循环卡死 |
+| 所属 workspace 集合 | Stage、ws overview strip、selector、swipe 共用同一份每输出归属表；已呈现 workspace 属于对应 tile；隐藏 workspace 保留最后归属，不能由历史或全屏 active 投影重新推断。启用前未分配的已有 workspace 默认归首列；多 tile 下新建 workspace 默认归 focused tile |
+| 相对 `m±N/e±N/r±N/±N/next`、`m/e/r~N` | 只遍历发起 monitor 的 focused tile 所属集合；named 按原生逆创建顺序排在 numbered 前，numbered 按 ID 排序。`m/e` 在已有集合循环，`~` 为集合内索引；`r/±/next` 先按该顺序移动，正向越界从本集合最大 numbered ID 后创建，跳过其他 tile/monitor 的已占用编号及绑定其他 monitor 的规则保留编号；反向到边界停在首项，非法/溢出 selector 失败 |
+| 四指 workspace swipe | 使用同一所属集合和排序；`workspace_swipe_use_r` 选择 r 或 m 策略，`workspace_swipe_create_new` 决定右边界创建；关闭创建时 m 向右可循环、r 不创建。原生左边界停止、方向锁、跟手与取消/forever 策略保持，其他 tile 不参与预览 |
+| previous/back-and-forth | 从本 tile 历史依次取仍存在且仍属于本 tile 的 workspace；忽略已跨列转移、删除或其他 tile 呈现的条目，无有效项时不离开本 tile |
 | 目标已在当前 tile | no-op；back-and-forth 另按当前 tile 历史处理 |
 | 明确点名的目标已在另一 tile / 另一 monitor 呈现 | 普通 workspace 请求聚焦该 workspace 所在 tile，不克隆；`on_current_monitor` 请求按原生多屏语义交换两个 tile 的 active workspace，更新各自历史和区域；strip 同样路由 |
-| 目标是其他 monitor 的隐藏 workspace | 普通切换聚焦目标的真实 monitor 并在其 focused tile 激活，不隐式迁移；同屏隐藏 workspace 可激活。显式 monitor-placement 操作走下述独立管理事务 |
+| 目标是其他 monitor 的隐藏 workspace | 普通切换聚焦目标的真实 monitor 并在其 focused tile 激活，不隐式迁移；同屏隐藏 workspace 可在当前 tile 激活并归入该 tile。显式 monitor-placement 操作走下述独立管理事务 |
 | 显式 move/swap workspace、窗口跨 monitor | 属于有意改变归属的管理操作；走 topology-aware placement 事务，补齐源空缺 workspace，保留其他 binding。on-current-monitor 对另一 tile 的可见 workspace 使用有意的 active-workspace swap |
+
+删除 tile 时，其隐藏 workspace 与原显示 workspace 的归属一起并入相邻 tile（优先左邻，否则右邻）；已有窗口和新窗口的 workspace 选择仍走原生规则，归属表不主动搬动窗口。单 tile 与 tiles 关闭时 selector/swipe 完全走原生。
 
 每 tile 尽量表现为独立 monitor：普通切换到已呈现 workspace 聚焦其 tile，on-current-monitor 则交换源/目标 tile 的 active workspace；遵循原生 focus/warp 配置。物理 monitor 绑定规则仍匹配真实输出，不伪造输出协议对象；在匹配输出内根据 focused tile 定位。单 tile 且未启用时严格保持原行为。
 

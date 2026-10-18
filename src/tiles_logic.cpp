@@ -173,6 +173,69 @@ std::optional<Workspace> Model::previous() const {
     for (const auto w : m_state.tiles[*index(m_state.focused)].history) if (w != m_state.tiles[*index(m_state.focused)].workspace) return w;
     return {};
 }
+Id Ownership::owner(const State& state, Workspace workspace) const {
+    for (const auto& tile : state.tiles) if (tile.workspace == workspace) return tile.id;
+    if (const auto it = m_homes.find(workspace); it != m_homes.end())
+        for (const auto& tile : state.tiles) if (tile.id == it->second) return tile.id;
+    return state.tiles.front().id;
+}
+void Ownership::sync(const State& state) {
+    const auto survives = [&](Id id) { return std::ranges::any_of(state.tiles, [id](const auto& tile) { return tile.id == id; }); };
+    for (auto& [workspace, id] : m_homes) if (!survives(id)) {
+        // Removal merges into the nearest surviving left neighbor, otherwise right.
+        const auto it = std::ranges::find(m_order, id);
+        auto left = it;
+        Id replacement = 0;
+        while (left != m_order.begin()) { --left; if (survives(*left)) { replacement = *left; break; } }
+        if (!replacement) for (auto right = it; right != m_order.end(); ++right)
+            if (survives(*right)) { replacement = *right; break; }
+        id = replacement ? replacement : state.tiles.front().id;
+    }
+    m_order.clear();
+    for (const auto& tile : state.tiles) { m_order.push_back(tile.id); claim(tile.workspace, tile.id); }
+}
+std::optional<Workspace> Ownership::previous(const State& state, Id id, const std::vector<Workspace>& alive) const {
+    for (const auto& tile : state.tiles) if (tile.id == id)
+        for (const auto workspace : tile.history)
+            if (workspace != tile.workspace && owner(state, workspace) == id && std::ranges::find(alive, workspace) != alive.end()) return workspace;
+    return {};
+}
+bool relativeSelector(const std::string& selector) {
+    return selector == "next" || (!selector.empty() && (selector[0] == '+' || selector[0] == '-')) ||
+        (selector.size() > 1 && (selector[0] == 'm' || selector[0] == 'r' || selector[0] == 'e') &&
+         (selector[1] == '+' || selector[1] == '-' || selector[1] == '~'));
+}
+std::optional<Workspace> relativeTarget(const std::string& selector, Workspace current, const std::vector<Workspace>& ordered,
+                                      const std::set<Workspace>& unavailable) {
+    if (!relativeSelector(selector) || ordered.empty()) return {};
+    const bool prefixed = selector[0] == 'm' || selector[0] == 'e' || selector[0] == 'r';
+    const bool wrap = prefixed && selector[0] != 'r';
+    const bool absolute = prefixed && selector[1] == '~';
+    std::string_view number = selector == "next" ? "1" : std::string_view(selector).substr(prefixed ? (absolute ? 2 : 1) : 0);
+    if (number.starts_with('+')) number.remove_prefix(1);
+    int64_t offset = 0;
+    const auto [end, error] = std::from_chars(number.data(), number.data() + number.size(), offset);
+    if (error != std::errc{} || end != number.data() + number.size() || offset < -int64_t(UINT32_MAX) || offset > UINT32_MAX) return {};
+    if (absolute && !wrap && offset <= 0) return {};
+    const auto it = std::ranges::find(ordered, current);
+    if (it == ordered.end()) return {};
+    int64_t index = absolute ? offset - 1 : (it - ordered.begin()) + offset;
+    if (wrap) {
+        index = absolute ? std::clamp(index, int64_t{0}, int64_t(ordered.size() - 1)) : (index % int64_t(ordered.size()) + int64_t(ordered.size())) % int64_t(ordered.size());
+        return ordered[index];
+    }
+    if (index < 0) return ordered.front();
+    if (index < int64_t(ordered.size())) return ordered[index];
+    // Positive overflow creates after the highest owned numbered workspace,
+    // skipping occupied foreign IDs and native monitor-bound reservations.
+    Workspace last = 0;
+    for (const auto workspace : ordered) if (workspace > 0) last = std::max(last, workspace);
+    uint64_t result = uint64_t(last) + uint64_t(index - ordered.size() + 1);
+    if (result > UINT32_MAX) return {};
+    for (const auto blocked : unavailable) if (blocked > last && uint64_t(blocked) <= result)
+        if (++result > UINT32_MAX) return {};
+    return Workspace(result);
+}
 std::expected<double, std::string> length(const std::string& s, double total, bool delta) {
     if (s.empty() || !std::isfinite(total) || total <= 0) return std::unexpected("invalid length");
     auto end = s.data() + s.size();
