@@ -54,7 +54,7 @@ def verify_existing(root, observe=False):
     print(('OBSERVED' if observe else 'PASS')+': incoming/outgoing foreign-region coverage, held swipe and restored endpoint clips')
 
 
-def run(case, observe, route_filter, layout, request, root, env, runtime, processes, handles):
+def run(case, observe, route_filter, layout, request, root, env, runtime, processes, handles, handoff=False):
     def evaluate(code):
         value = request('/eval '+code)
         assert value.strip() == 'ok', (code, value)
@@ -81,6 +81,8 @@ def run(case, observe, route_filter, layout, request, root, env, runtime, proces
     binary = root/'marker'
     subprocess.run(['cc',str(Path(__file__).with_name('tiles_top_marker_client.c')),str(root/'xdg-shell-protocol.c'),'-I'+str(root),*flags,'-o',str(binary)],check=True)
     evaluate('hl.monitor({output="",mode="1280x720@60",position="auto",scale="1"}); hl.config({general={layout="'+layout+'"},scrolling={column_width=.85,fullscreen_on_one_column=false,focus_fit_method=1},animations={enabled=false},input={follow_mouse=0},decoration={shadow={enabled=false}},plugin={hymission={stage_enabled=0,niri_mode=0,stage_show_active=0,stage_empty_slots=0,stage_transition_ms=650,stage_window_rounding=0,stage_scrolling_preview_edge_width=0,stage_scrolling_desktop_edge_width=0}}})')
+    if handoff:
+        evaluate('hl.monitor({output="",mode="1280x720@60",position="auto",scale="1",reserved={top=40,bottom=20,left=0,right=0}})')
     total = 0
     for i,pair in enumerate(pairs):
         for j,ws in enumerate(pair):
@@ -91,11 +93,14 @@ def run(case, observe, route_filter, layout, request, root, env, runtime, proces
             total += 1
             wait('j/clients', lambda cs:len(cs)==total)
     focus(101)
+    if handoff:
+        evaluate('hl.workspace_rule({workspace="100",persistent=true}); hl.dispatch(hl.dsp.focus({workspace=100})); hl.dispatch(hl.dsp.focus({workspace=101}))')
     if case != 'off':
         evaluate('hl.config({plugin={hymission={tiles_enabled=1,tile_min_width=120}}}); hl.plugin.hymission_tiles_test.refresh()')
         wait('j/hymission-tiles-state',lambda s:s['enabled'])
         for source,target in pairs[1:]:
-            evaluate(f'hl.plugin.hymission.tile_add({{workspace="{source}"}})'); focus(target); focus(source)
+            evaluate(f'hl.plugin.hymission.tile_add({{workspace="{source}"}})')
+            focus(target); focus(source)
         focus(101)
     evaluate('hl.config({animations={enabled=true},plugin={hymission={stage_enabled=1}}}); hl.plugin.hymission.stage_open(); hl.gesture({fingers=4,direction="vertical",action="workspace"}); hl.config({gestures={workspace_swipe_invert=false,workspace_swipe_create_new=false,workspace_swipe_use_r=false,workspace_swipe_distance=300,workspace_swipe_cancel_ratio=.05,workspace_swipe_min_speed_to_force=0,workspace_swipe_forever=false}})')
     wait('j/hymission-stage-state',lambda s:len(s['screens'])==count and s['visibility_progress']==1)

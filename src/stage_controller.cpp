@@ -3455,8 +3455,10 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
             const double toRadius = workspace == activeWorkspace ? nativeRadius : radius(*to);
             screen.flights.push_back({std::move(preview), *from, *to, static_cast<float>(fromRadius), static_cast<float>(toRadius)});
             auto& flight = screen.flights.back();
-            flight.nativeDestination = window->isFloating() && workspace == activeWorkspace;
-            if (flight.nativeDestination && old == previousFlights.end()) {
+            // Tile-native gaps can differ from the output's gaps_out. Fitting
+            // either endpoint to the latter moves the window at the handoff.
+            flight.nativeDestination = clustered(screen) || (window->isFloating() && workspace == activeWorkspace);
+            if (window->isFloating() && workspace == activeWorkspace && old == previousFlights.end()) {
                 // Preserve the sidebar's bounded starting frame, but never fit
                 // the real desktop destination. Interrupted flights are already sampled.
                 flight.from = box(stage::transitionBoxWithin(rect(flight.from), rect(flight.from), 0, flightBounds(monitor)));
@@ -3464,6 +3466,19 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
             if (scrollingTiled(window)) {
                 const auto miniatureView = [&](const std::vector<Card>& cards, const stage::Geometry& geometry, double scroll, bool right) -> std::optional<stage::EdgeViewport> {
                     auto endpoint=screen; endpoint.geometry=geometry; endpoint.right=right;
+                    if (clustered(screen)) {
+                        const auto it=std::ranges::find_if(cards,[&](const Card& card) { return card.workspace==workspace; });
+                        if (it==cards.end()) return std::nullopt;
+                        const double elapsed=std::chrono::duration<double,std::milli>(Clock::now()-it->shiftStart).count();
+                        const double shift=it->shift*(1-stage::transitionProgress(elapsed,duration));
+                        // A window thumbnail is not the workspace aperture.
+                        // Use the same complete slot as stationary card drawing,
+                        // including its centered tile viewport and current shift.
+                        const CBox slot{sidebar(endpoint).x+geometry.padding,
+                            screen.base.y+geometry.cardTop(std::distance(cards.begin(),it),scroll)+shift,
+                            geometry.cardWidth,geometry.cardHeight};
+                        return cardViewport(endpoint,slot);
+                    }
                     const auto area = clustered(screen)?rect(desktop(endpoint)):stage::desktopArea(rect(screen.base), geometry, right);
                     const auto view = miniature(workspace, box(area), cards, geometry, scroll, right, window, false);
                     return view ? std::optional{cardViewport(screen,*view)} : std::nullopt;
@@ -3819,7 +3834,7 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
         return;
     const auto previousClip = renderContext().m_data.clipBox;
     const double p = flightProgress(screen);
-    const auto bounds = flightBounds(monitor);
+    const auto bounds = clustered(screen) ? rect(CBox{monitor->m_position,monitor->m_size}) : flightBounds(monitor);
     const CBox clip{(bounds.x - monitor->m_position.x) * monitor->m_scale,
                     (bounds.y - monitor->m_position.y) * monitor->m_scale,
                     bounds.width * monitor->m_scale, bounds.height * monitor->m_scale};
