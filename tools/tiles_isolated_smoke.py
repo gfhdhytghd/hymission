@@ -37,6 +37,9 @@ def main():
     ap.add_argument("--relative-observe",action="store_true")
     ap.add_argument("--presentation-regression",choices=("two","three"))
     ap.add_argument("--presentation-observe",action="store_true")
+    ap.add_argument("--stage-device-layout",choices=("dwindle","scrolling"),default="dwindle")
+    ap.add_argument("--stage-device-hide-active",action="store_true")
+    ap.add_argument("--stage-device-drop-regression",choices=("off","single","two","three"))
     ap.add_argument("--stage-drop-regression",choices=("off","single","two","three"))
     ap.add_argument("--stage-drop-observe",action="store_true")
     ap.add_argument("--stage-height-regression",choices=("off","single","two","three"))
@@ -196,6 +199,10 @@ def main():
             from tiles_presentation_regression import run
             run(args.presentation_regression,args.presentation_observe,request,root,env,runtime,processes,handles)
             (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
+        if args.stage_device_drop_regression:
+            from tiles_stage_device_drop_regression import run
+            run(args.stage_device_drop_regression,args.stage_drop_observe,request,root,env,runtime,processes,handles,args.stage_device_layout,args.stage_device_hide_active)
             return
         if args.stage_drop_regression:
             from tiles_stage_drop_regression import run
@@ -534,8 +541,10 @@ def main():
             sc,c,w=source_preview(stage)
             target=next(a for a in stage["screens"] if a["tile_id"]!=sc["tile_id"])
             target_card=next(b for b in target["cards"] if b["workspace"]==target["active_workspace"])
-            # Column-to-column move; the source must cease owning the moved client.
+            # Meta explicitly moves a window; an ordinary card drag now transfers workspace ownership.
+            evaluate('hl.plugin.hymission_tiles_test.meta(true)')
             drag_from(sc,c,w,target_card["x"]+target_card["width"]/2,target_card["y"]+target_card["height"]/2)
+            evaluate('hl.plugin.hymission_tiles_test.meta(false)')
             clients=wait_json("j/clients",lambda cs:any(v["address"]==w["address"] and v["workspace"]["id"]==target_card["workspace"] for v in cs),"cross-column")
             assert len(tiles_state())==3
             # At the limit a blank part of a stage card moves the entire stage.

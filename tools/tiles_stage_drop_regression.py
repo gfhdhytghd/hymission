@@ -77,11 +77,14 @@ def run(case,observe,request,root,env,runtime,processes,handles):
         check(membership()==before,'whole-workspace transfer never merges windows')
         check(card(1102)[0]['tile_id']==target['tile_id'],'workspace card adopts destination column')
         check(card(1102)[0]['cards'][-1]['workspace']==1102,'cross-column blank inserts card at end')
-        # A single preview moved to an empty column region uses that tile's desktop.
+        # Meta explicitly moves an individual preview into an existing card.
         target=stage()["screens"][-1];band=target["sidebar"];destination=target["active_workspace"]
         source=1101;before=membership();address=next(a for a,w in before.items() if w==source)
-        drag(source,(band['x']+1,band['y']+band['height']-3),'window-cross-column-padding',True)
-        check(membership()[address]==destination,'single-window empty-column target is column active workspace')
+        _,c=card(destination)
+        evaluate('hl.plugin.hymission_tiles_test.meta(true)')
+        drag(source,(c['x']+c['width']/2,c['y']+c['height']/2),'meta-window-cross-column-card',True)
+        evaluate('hl.plugin.hymission_tiles_test.meta(false)')
+        check(membership()[address]==destination,'explicit Meta window gesture targets destination card')
         # Workspace card onto desktop carries its members, with pointer-derived target.
         sc,c=card(1104);desktop=stage()['screens'][0]['desktop_geometry']
         before=membership();members=[a for a,w in before.items() if w==1104]

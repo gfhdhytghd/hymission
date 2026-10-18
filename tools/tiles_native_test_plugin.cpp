@@ -447,6 +447,18 @@ int focusResize(lua_State* L) {
 }
 int pointer(lua_State* L) {
     const std::string action=luaL_checkstring(L,1);
+    if (action.starts_with("device_")) {
+        const auto device=g_pInputManager->m_pointers.empty()?nullptr:g_pInputManager->m_pointers.front();
+        if (!device) return luaL_error(L,"private pointer unavailable");
+        static uint32_t time=1000;
+        const Vector2D pos{luaL_checknumber(L,2),luaL_checknumber(L,3)};
+        if (action=="device_move") {
+            const auto delta=pos-g_pInputManager->getMouseCoordsInternal();
+            device->m_pointerEvents.motion.emit({.timeMs=time++,.delta=delta,.unaccel=delta,.mouse=true,.device=device});
+        } else device->m_pointerEvents.button.emit({.timeMs=time++,.button=BTN_LEFT,
+            .state=action=="device_press"?WL_POINTER_BUTTON_STATE_PRESSED:WL_POINTER_BUTTON_STATE_RELEASED,.mouse=true});
+        lua_pushboolean(L,g_layoutManager->dragController()->target()!=nullptr); return 1;
+    }
     Event::SCallbackInfo info;
     if (action=="escape" || action=="tab" || action=="right" || action=="left") {
         const uint32_t key=action=="escape"?KEY_ESC:action=="tab"?KEY_TAB:action=="right"?KEY_RIGHT:KEY_LEFT;

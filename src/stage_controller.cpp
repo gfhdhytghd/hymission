@@ -489,6 +489,14 @@ struct StageController::Impl {
         return createWorkspaceForKey(id, monitor->m_id, "", true);
     }
 
+    static WorkspaceKey blankWorkspaceKey() {
+        WorkspaceKey highest=0;
+        for (const auto& workspace:State::workspaceState()->workspacesCopy())
+            if (workspace->type()!=Workspace::eWorkspaceType::SPECIAL)
+                highest=std::max(highest,workspaceKey(workspace));
+        return highest<std::numeric_limits<WorkspaceKey>::max()?highest+1:WORKSPACE_INVALID;
+    }
+
     // Nearest card to a sidebar point, gaps included: stretched spacing would
     // otherwise leave dead zones where a reorder drop is ignored.
     std::optional<std::size_t> reorderTargetIndex(const Screen& screen, const Vector2D& point) const {
@@ -2390,26 +2398,25 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
         const auto point=g_pInputManager->getMouseCoordsInternal();
         if (auto* column=tileColumn(point)) {
             auto* controller=TilesController::get();
+            const auto targetMonitor=column->monitor.lock();
+            const auto targetTile=column->tile;
             if (tileDragPending) controller->finishTransfer(false);
             if (legacyTileOwner) controller->release(TilesController::Owner::StageDrag);
             auto workspace=tileDragWorkspace.lock();
             bool success=false;
             if (workspace && !cancelDrop) {
                 const bool crossing=column->tile!=tileDragSource || column->monitor!=tileDragMonitor;
-                if (crossing && tileDragClicked) {
-                    const auto index=cardHit(*column,point);
-                    auto destination=index?column->cards[*index].workspace.lock():screenWorkspace(*column);
-                    if (!destination && index && column->cards[*index].syntheticId>0)
-                        destination=ensureWorkspace(column->monitor.lock(),column->cards[*index].syntheticId);
-                    std::vector<PHLWINDOW> members;
-                    for (auto& ref:tileDragMembers) if (auto w=ref.lock()) members.push_back(w);
-                    success=controller->moveWindows(members,column->monitor.lock(),column->tile,destination);
-                } else {
-                    success=!crossing || controller->moveWorkspace(workspace,column->monitor.lock(),column->tile);
-                    if (success) orderTileCard(workspace,*column,point);
-                }
+                // An unmodified press owns the workspace card even when it
+                // starts over a window preview. Meta is the individual-window
+                // gesture. Existing cards are insertion targets, never merges.
+                // Resolve insertion against the geometry the user dropped on:
+                // publish synchronously rebuilds screens and their shared scale.
+                const auto savedOrder=tileCardOrder;
+                orderTileCard(workspace,*column,point);
+                success=!crossing || controller->moveWorkspace(workspace,targetMonitor,targetTile);
+                if (!success) tileCardOrder=savedOrder;
             }
-            dropTrace={{{"event","tile_sidebar_drop"},{"success",success},{"tile",column->tile},{"workspace",workspace?workspaceKey(workspace):0}}};
+            dropTrace={{{"event","tile_sidebar_drop"},{"success",success},{"tile",targetTile},{"workspace",workspace?workspaceKey(workspace):0}}};
             tileDragPending=tileDragCandidate=legacyTileOwner=false; tileDragMembers.clear();
             tileDragWorkspace.reset(); tileDragClicked.reset(); pressed.reset(); pressedSyntheticId=0; reorderArmed=false;
             swallowedButtons.erase(event.button); info.cancelled=true; forceRefresh=true; request(); return;
@@ -2760,7 +2767,9 @@ bool StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
     // With a zero threshold, motion never sets it again: dragging is immediate.
     const bool thresholdReached = numberSetting("binds:drag_threshold", 0) <= 0 || drag->dragThresholdReached();
     if (enabled && !cancelDrop && drag->mode() == MBIND_MOVE && thresholdReached && drag->target()) {
-        const auto [screen, index] = hit(g_pInputManager->getMouseCoordsInternal());
+        const auto point=g_pInputManager->getMouseCoordsInternal();
+        auto [screen, index] = hit(point);
+        if (auto* column=tileColumn(point)) { screen=column; index=cardHit(*column,point); }
         if (screen && index) {
             destination = screen->cards[*index].workspace.lock();
             if (!destination && screen->cards[*index].syntheticId > 0) {
@@ -2794,6 +2803,18 @@ bool StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
                     {band.x + geometry.padding, screen->base.y + cardTop(*screen, *index), geometry.cardWidth, geometry.cardHeight},
                     {area.x, area.y, area.w, area.h}, placement.x, placement.y);
                 floatingCenter = Vector2D{center.first, center.second};
+            }
+        } else if (screen && screen->tile) {
+            // The entire column, including its unused lower half, accepts a
+            // native Super+move drop. Allocate only on successful release.
+            window=drag->target()->window();
+            destination=ensureWorkspace(screen->monitor.lock(),blankWorkspaceKey());
+            const auto area=desktop(*screen);
+            dropPoint=area.middle();
+            if (window) {
+                dropOrigin=CBox{window->positionAnimation()->value(),window->sizeAnimation()->value()};
+                dropRadius=window->presentation().rounding();
+                floatingCenter=area.middle();
             }
         }
     }
@@ -2830,8 +2851,14 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
             silentDropStart = Clock::now();
         }
         traceDrop("move_window", window, destination);
-        if (!sameWorkspace)
-            Desktop::globalWindowController()->moveWindowToWorkspace(window, destination);
+        if (!sameWorkspace) {
+            auto* tiles=TilesController::get();
+            auto* column=tileColumn(g_pInputManager->getMouseCoordsInternal());
+            if (tiles && tiles->available() && column && column->monitor==monitor) {
+                if (!tiles->moveWindows({window},monitor,column->tile,destination)) return;
+            } else
+                Desktop::globalWindowController()->moveWindowToWorkspace(window, destination);
+        }
         traceDrop("place_window", window, destination);
         if (const auto target = window->layoutTarget(); target && target->space() == destination->space()) {
             if (target->floating()) {
