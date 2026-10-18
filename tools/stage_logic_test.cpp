@@ -123,23 +123,21 @@ int main() {
                  hymission::normalizeHymissionDispatcher("hymission.stage_toggle") == "hymission:stage_toggle" &&
                  hymission::normalizeHymissionDispatcher("hymission:stage_toggle") == "hymission:stage_toggle",
                  "Lua Stage action names route to the continuous Stage gesture dispatcher");
-    ok &= expect(!preserveScrollingWidth(true, 1) && preserveScrollingWidth(true, 2) && preserveScrollingWidth(true, 0) &&
-                 !preserveScrollingWidth(false, 1), "only a native single scrolling column uses the resized desktop viewport");
     for (const double progress : {0.0, 0.25, 0.5, 1.0, 0.5, 0.0}) {
         const hymission::Rect native{-1440, 30, 1440, 842};
-        const auto scrolling = reservedWorkArea(native, 240, progress, false, true);
-        ok &= expect(near(scrolling.width, native.width) && near(scrolling.height, native.height) &&
-                     near(scrolling.x, native.x + 240 * progress), "scrolling tape translates on advance and reversal without changing its sizing viewport");
+        const auto scrolling = reservedWorkArea(native, 240, progress, false);
+        ok &= expect(near(scrolling.width, native.width - 240 * progress) && near(scrolling.height, native.height) &&
+                     near(scrolling.x, native.x + 240 * progress), "scrolling viewport narrows on advance and restores on reversal");
         for (const bool sidebarRight : {false, true}) {
-            const auto single = reservedWorkArea(native, 240, progress, sidebarRight, preserveScrollingWidth(true, 1));
+            const auto single = reservedWorkArea(native, 240, progress, sidebarRight);
             ok &= expect(near(single.width, native.width - 240 * progress) && near(single.height, native.height) &&
                          near(single.x, native.x + (sidebarRight ? 0 : 240 * progress)),
                          "single-column sizing follows Stage on either side throughout opening, closing and reversal");
         }
-        const auto tiled = reservedWorkArea(native, 240, progress, false, false);
+        const auto tiled = reservedWorkArea(native, 240, progress, false);
         ok &= expect(near(tiled.x + tiled.width, native.x + native.width), "ordinary tiled layout retains its right desktop edge");
-        const auto right = reservedWorkArea(native, 240, progress, true, true);
-        ok &= expect(near(right.x, native.x) && near(right.width, native.width), "right sidebar clips scrolling columns without resizing them");
+        const auto right = reservedWorkArea(native, 240, progress, true);
+        ok &= expect(near(right.x, native.x) && near(right.width, native.width - 240 * progress), "right sidebar also narrows the scrolling sizing viewport");
     }
     // Lifecycle regression: A's old sidebar must never cover B's predicted
     // sidebar during the zero-progress frame or deferred overview teardown.

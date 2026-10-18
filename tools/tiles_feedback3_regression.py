@@ -166,6 +166,14 @@ def run(case,request,root,env,runtime,processes,handles):
             evaluate('hl.config({plugin={hymission={tiles_enabled=1}}}); hl.plugin.hymission_tiles_test.refresh()')
             wait('j/hymission-tiles-state',lambda s:s['enabled'])
             evaluate('hl.plugin.hymission.tile_add({workspace="503"}); hl.plugin.hymission.tile_focus("left")')
+            # Re-enabling Tiles rebuilds workspace homes (FB9). Restore 504's
+            # intended column explicitly through the Stage card gesture.
+            fresh=wait('j/hymission-stage-state',lambda s:len(s['screens'])==2 and any(c['workspace']==504 for sc in s['screens'] for c in sc['cards']))
+            column,card=next((sc,c) for sc in fresh['screens'] for c in sc['cards'] if c['workspace']==504)
+            target=fresh['screens'][1];band=target['sidebar']
+            if column['tile_id']!=target['tile_id']:
+                sx=card['x']+.5;sy=card['y']+.5;dx=band['x']+band['width']/2;dy=band['y']+band['height']-5
+                pointer('press',sx,sy);pointer('move',dx,dy);pointer('release',dx,dy)
             wait('j/hymission-stage-state',lambda s:len(s['screens'])==2 and all(sc['cards'] for sc in s['screens']))
             time.sleep(.3);ordered=read('j/hymission-stage-state')['render_metrics']
             assert ordered['effect_alias_calls']==0 and ordered['nested_captures']==0,ordered
@@ -184,13 +192,16 @@ def run(case,request,root,env,runtime,processes,handles):
             w=max(visible,key=lambda w:min(w['x']+w['width'],source['x']+source['width'])-max(w['x'],source['x']))
             x=(max(w['x'],source['x'])+min(w['x']+w['width'],source['x']+source['width']))/2;y=w['y']+w['height']/2
             dx=band['x']+band['width']/2;dy=band['y']+100
+            membership={c['address']:c['workspace']['id'] for c in read('j/clients')}
             (root/'empty-column-before.json').write_text(json.dumps(stage,indent=2))
             pointer('press',x,y);pointer('move',dx,dy)
             (root/'empty-column-held.json').write_text(request('j/hymission-stage-state'))
             pointer('release',dx,dy)
             (root/'empty-column-after.json').write_text(request('j/hymission-stage-state'))
-            target=right['active_workspace']
-            wait('j/clients',lambda cs:next(c for c in cs if c['address']==w['address'])['workspace']['id']==target)
+            # FB11: a plain card/body press transfers its whole workspace; Meta
+            # is the explicit window-merge gesture. Empty columns still accept it.
+            wait('j/hymission-stage-state',lambda s:any(sc['tile_id']==right['tile_id'] and any(c['workspace']==source['workspace'] for c in sc['cards']) for sc in s['screens']))
+            assert {c['address']:c['workspace']['id'] for c in read('j/clients')}==membership
             assert len(tiles())==2
             print('PASS: active workspace cards hidden, bounded preview work, no nested/aliased effects, empty-column transfer')
             return

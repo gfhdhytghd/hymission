@@ -424,7 +424,7 @@ struct TilesController::Impl {
         auto* scrolling=ws && ws->type()!=Workspace::eWorkspaceType::SPECIAL && space->algorithm() ?
             dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(space->algorithm()->tiledAlgo().get()):nullptr;
         auto* controller=scrolling && scrolling->m_scrollingData?scrolling->m_scrollingData->controller.get():nullptr;
-        const bool remap=controller && self->ready && (self->active(mon) || self->applying || self->collapsing);
+        const bool remap=controller && self->ready && (self->active(mon) || self->applying || self->collapsing || StageController::nativeDesktop(ws).has_value());
         const bool horizontal=controller && controller->isPrimaryHorizontal();
         const auto before=space->workArea();
         reinterpret_cast<decltype(&cameraArea)>(cameraAreaHook->m_original)(space);

@@ -425,15 +425,15 @@ stage_card_max_width 的宽度限制，超过限制时沿用滚动。在同一�
 自行放大。workspace 增删后重新计算 M，所有列同步更新；达到宽度上限时尺寸可保持，焦点变化不改变基准。
 原来的默认输出相对宽度是自适应的上限，不是固定宽度，也不乘以 tile 数。
 列 padding/gap 额外计入 sidebar 实际总宽，不重复计算整屏卡片宽度。
-各 tile 缩略图对实际 Stage desktop viewport 等比取景；桌面本身只做共享水平压缩，不能为保持原显示器比例而缩短高度。
+各 tile 缩略图对实际 Stage desktop viewport 等比取景；桌面布局区域共享水平预留，不能为保持原显示器比例而缩短高度。
 缩略图整组比例由压缩后的桌面宽度与原高度决定；bar / padding / gap 参与布局，无精确 16:9 要求。
 以最多 workspace 列为基准，沿用原 Stage 的耦合求解：缩略图宽度、侧栏预留和实际桌面宽度共同决定卡片高度，避免引入横向留白。
-窗口按所属 tile 的当前 desktop viewport 使用同一个场景缩放映射，保持相对位置，
+各 tile 的 native work area 按同一个水平映射分配剩余桌面宽度，真实窗口由原生布局重排，
 没有为改变单列比例而制造的横向留白。背景、blur/fade、命中、拖放及 flight 端点
 使用同一块 tile viewport。桌面部分的
-所有 tile 共用缩放和平移，输入命中、拖放预览、分割线命中和焦点 warp 使用同一变换
+所有 tile 的布局区域共用水平缩放和平移，输入命中、拖放预览、分割线命中和焦点 warp 使用同一变换
 的逆映射。tile 的持久 allocation/topology 不变，Stage 状态另暴露 desktop_geometry。
-单 tile 与 capability 关闭继续使用既有 Stage 几何与动画路径。
+单 tile 与 capability 关闭沿用 Stage 侧栏几何和动画曲线；scrolling 的所有列数都改为随侧栏预留缩窄 sizing viewport，原生列宽比例保持不变，相机 offset 按 viewport 尺寸比同步换算。关闭时恢复原 work area 和列几何。dwindle 等布局延续既有 work area 预留策略。详见 `workspace-tiles-feedback-round14.md`。
 
 
 ## 第三轮真机反馈后的输入与退出规则

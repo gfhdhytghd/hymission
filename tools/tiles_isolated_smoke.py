@@ -27,6 +27,9 @@ def main():
     ap.add_argument("--fixture")
     ap.add_argument("--integration", action="store_true")
     ap.add_argument("--default-off-regression", action="store_true")
+    ap.add_argument("--stage-viewport-regression",choices=("off","single","two","three"))
+    ap.add_argument("--stage-viewport-observe",action="store_true")
+    ap.add_argument("--stage-viewport-layout",choices=("scrolling","dwindle"),default="scrolling")
     ap.add_argument("--overview-reveal-regression",choices=("reference","off","single","two","three"))
     ap.add_argument("--overview-reveal-observe",action="store_true")
     ap.add_argument("--top-clip-regression", action="store_true")
@@ -178,6 +181,10 @@ def main():
         else:
             raise RuntimeError("nested output did not appear")
         expected_width = monitors[0]["width"] / monitors[0].get("scale", 1)
+        if args.stage_viewport_regression:
+            from tiles_stage_viewport_regression import run
+            run(args.stage_viewport_regression,args.stage_viewport_observe,args.stage_viewport_layout,request,root,env,runtime,processes,handles)
+            return
         if args.overview_reveal_regression:
             from tiles_overview_reveal_regression import run
             run(args.overview_reveal_regression,args.overview_reveal_observe,request,root,env,runtime,processes,handles)

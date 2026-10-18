@@ -103,14 +103,6 @@ bool scrollingWorkspace(const PHLWORKSPACE& workspace) {
         Layout::Supplementary::algoMatcher()->getNameForTiledAlgo(&typeid(*algorithm->tiledAlgo())) == "scrolling";
 }
 
-bool preservesScrollingWidth(const PHLWORKSPACE& workspace) {
-    if (!scrollingWorkspace(workspace))
-        return false;
-    auto* scrolling = dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(workspace->space()->algorithm()->tiledAlgo().get());
-    const std::size_t columns = scrolling && scrolling->m_scrollingData ? scrolling->m_scrollingData->columns.size() : 0;
-    return stage::preserveScrollingWidth(true, columns);
-}
-
 bool scrollingTiled(const PHLWINDOW& window) {
     return window && !window->isFloating() && !static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED) && scrollingWorkspace(window->m_workspace);
 }
@@ -290,7 +282,6 @@ struct StageController::Impl {
         Clock::time_point backgroundRendered{};
         std::optional<std::size_t> reorderHover;
         bool covered = false;
-        bool preserveScrollingWidth = false;
         bool suspended = false;
         bool revealFromBottom = false;
         double shown = 1;
@@ -643,8 +634,25 @@ struct StageController::Impl {
 
     static void recheckThunk(Layout::CSpace* space) {
         auto* self = instance;
+        const auto before=space?space->workArea():CBox{};
         reinterpret_cast<RecheckFn>(self->areaHook->m_original)(space);
         self->afterRecheck(space);
+        const auto workspace=space?space->workspace():nullptr;
+        auto* tiles=TilesController::get();
+        // Enabled Tiles owns its outer camera rebase, including one tile.
+        // Stage alone rebases the same pixel offset after reserving its band.
+        if (self->enabled && scrollingWorkspace(workspace) && !(tiles && tiles->available())) {
+            auto* scrolling=dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(space->algorithm()->tiledAlgo().get());
+            auto* camera=scrolling && scrolling->m_scrollingData?scrolling->m_scrollingData->controller.get():nullptr;
+            const auto after=space->workArea();
+            const bool horizontal=camera && camera->isPrimaryHorizontal();
+            const double from=horizontal?before.w:before.h,to=horizontal?after.w:after.h;
+            if (camera && from>1 && to>1 && std::abs(from-to)>.001) {
+                const double ratio=to/from;
+                camera->getScrollInhibitor().offsetWhenInhibited*=ratio;
+                camera->setOffset(camera->getOffset()*ratio);
+            }
+        }
     }
     static bool dragThunk(Layout::Supplementary::CDragStateController* drag) { return instance->endDrag(drag); }
     static void windowFocusThunk(Desktop::CFocusState* focus, PHLWINDOW window, Desktop::eFocusReason reason, SP<CWLSurfaceResource> surface) {
@@ -1659,13 +1667,12 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
         return;
     // Each invocation starts from the original recheckWorkArea output. Retain
     // workspace gaps, including float gaps, and never compound our reservation.
-    // Count native columns, including stacked/grouped targets in one column.
-    // A single column follows the visible desktop width; a multi-column tape
-    // keeps its sizing viewport and is only translated and clipped.
+    // Every native layout receives the remaining desktop width. Scrolling
+    // column fractions then resolve against that narrower viewport, just as
+    // other tiling algorithms do; no second raster-scale is applied.
     for (auto* box : {&space->m_workArea, &space->m_floatingWorkArea}) {
         const auto area = clustered(*screen) ? stage::scaleDesktopRect(rect(*box),rect(baseArea(monitor)),desktopReservation(*screen),visibility) :
-            stage::reservedWorkArea(rect(*box), desktopReservation(*screen), visibility, screen->right,
-                                   box == &space->m_workArea && preservesScrollingWidth(workspace));
+            stage::reservedWorkArea(rect(*box), desktopReservation(*screen), visibility, screen->right);
         *box = hymission::box(area);
     }
     if (!syncing && !sameBox(screen->base, screenBase(monitor,screen->tile)))
@@ -1933,9 +1940,6 @@ void StageController::Impl::sync() {
         }
         const WorkspaceKey active = activeWorkspace ? workspaceKey(activeWorkspace) : WORKSPACE_INVALID;
         const bool changedActive = screen->active != active;
-        const bool preserveWidth = preservesScrollingWidth(activeWorkspace);
-        const bool changedWidthPolicy = screen->preserveScrollingWidth != preserveWidth;
-        screen->preserveScrollingWidth = preserveWidth;
         screen->active = active;
         const auto mode = activeWorkspace ? Fullscreen::controller()->getFullscreenModes(activeWorkspace).internal : Fullscreen::FSMODE_NONE;
         const bool cover = (TilesController::get() && TilesController::get()->monitorFullscreen(monitor)) || stage::coversStrip(mode == Fullscreen::FSMODE_FULLSCREEN ? stage::CoverMode::Fullscreen :
@@ -1969,7 +1973,7 @@ void StageController::Impl::sync() {
             screen->paneTransition = false;
             screen->departingCards.clear();
         }
-        if (changedGeometry || changedPolicy || changedWidthPolicy || changedCover || reconfigure)
+        if (changedGeometry || changedPolicy || changedCover || reconfigure)
             relayout.push_back(monitor);
         for (auto& card : screen->cards) {
             if (changedGeometry) {

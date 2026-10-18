@@ -30,6 +30,7 @@
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
 #include <hyprland/src/layout/algorithm/TiledAlgorithm.hpp>
+#include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
@@ -72,6 +73,38 @@ bool readFramePixels(Framebuffer& fb,std::vector<uint8_t>& bytes) {
         return ok;
     }
 }
+nlohmann::json nativeLayoutState() {
+    nlohmann::json result=nlohmann::json::array();
+    const auto box=[](const CBox& b) { return nlohmann::json{{"x",b.x},{"y",b.y},{"width",b.w},{"height",b.h}}; };
+    for (const auto& ws:State::workspaceState()->workspacesCopy()) {
+        const auto space=ws->space();
+        if (!space || !space->algorithm()) continue;
+        nlohmann::json item{{"workspace",hymission::workspaceKey(ws)},{"work_area",box(space->workArea())}};
+        auto* scrolling=dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(space->algorithm()->tiledAlgo().get());
+        SP<Layout::Tiled::SScrollingData> data;
+        if (scrolling) for (const auto& window:Desktop::windowState()->windows()) {
+            if (!window->mapped() || window->m_workspace!=ws || window->isFloating()) continue;
+            const auto target=scrolling->dataFor(window->layoutTarget(),true);
+            const auto column=target?target->column.lock():nullptr;
+            if (column) { data=column->scrollingData.lock(); break; }
+        }
+        if (scrolling && data && data->controller) {
+            item["usable_area"]=box(scrolling->usableArea());
+            item["offset"]=data->controller->getOffset();
+            item["columns"]=nlohmann::json::array();
+            for (const auto& column:data->columns) {
+                nlohmann::json targets=nlohmann::json::array();
+                for (const auto& data:column->targetDatas) targets.push_back(box(data->layoutBox));
+                item["columns"].push_back({{"fraction",column->getColumnWidth()},{"targets",targets}});
+            }
+        }
+        result.push_back(std::move(item));
+    }
+    return result;
+}
+int layoutState(lua_State* L) {
+    std::ofstream output(luaL_checkstring(L,1)); output<<nativeLayoutState().dump(2);return 0;
+}
 class CaptureFramePass final:public IPassElement {
  public:
     std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override {
@@ -84,6 +117,7 @@ class CaptureFramePass final:public IPassElement {
         // Sample animation phase before synchronous GPU readback advances time.
         const auto stageBeforeReadback=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-stage-state","","j"));
         const auto overviewBeforeReadback=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-overview-state","","j"));
+        const auto layoutBeforeReadback=nativeLayoutState();
         const auto readbackStart=std::chrono::steady_clock::now();
         std::vector<uint8_t> rgba(frame.width*frame.height*4);
         if (!readFramePixels(*fb,rgba)) throw std::runtime_error("private framebuffer readback failed");
@@ -92,6 +126,7 @@ class CaptureFramePass final:public IPassElement {
         auto tiles=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-tiles-state","","j"),nullptr,false);
         if (tiles.is_discarded()) tiles={{"enabled",false},{"tiles",nlohmann::json::array()}};
         frame.state={{"overview",overviewBeforeReadback}, {"tiles",tiles}};
+        frame.state["layout"]=layoutBeforeReadback;
         frame.state["monitor"]=ctx.m_data.pMonitor->m_name;
         frame.state["framebuffer"]={{"current",fb->getFBID()},{"main",dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.mainFB)->getFBID()},{"damage",nlohmann::json::array()}};
         ctx.m_data.damage.forEachRect([&](const auto& rect) { frame.state["framebuffer"]["damage"].push_back({rect.x1,rect.y1,rect.x2,rect.y2}); });
@@ -488,6 +523,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         if (recordingFrames && event.stage==RENDER_LAST_MOMENT && event.context) event.context->get().m_pass.add(makeUnique<CaptureFramePass>()); });
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","profile",profile);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","frame_capture",frameCapture);
+    HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","layout_state",layoutState);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","focus_resize",focusResize);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","trackpad",trackpad);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","key",key);
