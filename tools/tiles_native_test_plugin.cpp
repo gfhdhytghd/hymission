@@ -4,6 +4,9 @@
 // Isolated-test fixture only. Not installed and never loaded in the host session.
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/render/Context.hpp>
+#include <hyprland/src/render/gl/GLFramebuffer.hpp>
+#include <hyprland/src/render/pass/PassElement.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
 #include <hyprland/src/pointer/PointerController.hpp>
@@ -38,6 +41,62 @@ extern "C" {
 #include <GLES3/gl3.h>
 #include <GLES2/gl2ext.h>
 namespace {
+// Private every-rendered-frame pixel recorder. Readback is deliberately excluded
+// from the performance profiler and is never enabled in a host session.
+struct CapturedFrame { int width,height; std::vector<unsigned char> pixels; nlohmann::json state; };
+bool recordingFrames=false;
+std::vector<CapturedFrame> capturedFrames;
+class CaptureFramePass final:public IPassElement {
+ public:
+    std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override {
+        if (!recordingFrames || capturedFrames.size()>=180 || !ctx.m_data.currentFB) return {};
+        const auto fb=dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.mainFB);
+        if (!fb) throw std::runtime_error("private capture requires native GL framebuffer");
+        const auto size=fb->m_size;
+        CapturedFrame frame{static_cast<int>(size.x),static_cast<int>(size.y),{}, {}};
+        std::vector<uint8_t> rgba(frame.width*frame.height*4);
+        if (!fb->readPixelsRGBA8(rgba)) throw std::runtime_error("private framebuffer readback failed");
+        frame.pixels.resize(frame.width*frame.height*3);
+        for (size_t i=0;i<frame.pixels.size()/3;++i) std::copy_n(rgba.data()+i*4,3,frame.pixels.data()+i*3);
+        frame.state={{"overview",nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-overview-state","","j"))},
+                     {"tiles",nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-tiles-state","","j"))}};
+        frame.state["stage"]=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-stage-state","","j"));
+        frame.state["native"]=nlohmann::json::array();
+        for (const auto& window:Desktop::windowState()->windows()) {
+            if (!window->mapped() || !window->m_workspace) continue;
+            const auto ws=window->m_workspace;const auto offset=ws->m_renderOffset->value();
+            frame.state["native"].push_back({{"workspace",ws->displayName()},{"offset",{offset.x,offset.y}},
+                {"floating_offset",{window->presentation().floatingOffset().x,window->presentation().floatingOffset().y}},
+                {"workspace_alpha",ws->m_alpha->value()},{"visible",ws->visible()},{"forced",ws->m_forceRendering},
+                {"alpha",window->presentation().alphaTotal()},{"fullscreen_alpha",window->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN)},
+                {"position",{window->positionAnimation()->value().x,window->positionAnimation()->value().y}}});
+        }
+        capturedFrames.push_back(std::move(frame));return {};
+    }
+    bool needsLiveBlur(Render::CRenderContext&) override { return false; }
+    bool needsPrecomputeBlur(Render::CRenderContext&) override { return false; }
+    bool undiscardable(Render::CRenderContext&) override { return true; }
+    const char* passName() override { return "private-frame-capture"; }
+    ePassElementType type() override { return EK_CUSTOM; }
+};
+int frameCapture(lua_State* L) {
+    const std::string action=luaL_checkstring(L,1);
+    if (action=="begin") { capturedFrames.clear();recordingFrames=true; }
+    else if (action=="end") {
+        recordingFrames=false;const std::string prefix=luaL_checkstring(L,2);
+        nlohmann::json states=nlohmann::json::array();
+        for (size_t i=0;i<capturedFrames.size();++i) {
+            const auto& frame=capturedFrames[i];const std::string path=prefix+"-"+std::to_string(i)+".ppm";
+            std::ofstream out(path,std::ios::binary);out<<"P6\n"<<frame.width<<" "<<frame.height<<"\n255\n";
+            // Native workbuffer projection stores logical top-to-bottom rows.
+            for (int y=0;y<frame.height;++y) out.write(reinterpret_cast<const char*>(frame.pixels.data()+y*frame.width*3),frame.width*3);
+            if (!out) return luaL_error(L,"private frame write failed");
+            auto state=frame.state;state["pixels"]=path;states.push_back(std::move(state));
+        }
+        std::ofstream out(prefix+".json");out<<states.dump(2)<<"\n";capturedFrames.clear();
+    } else return luaL_error(L,"unknown private frame capture action");
+    return 0;
+}
 using Clock=std::chrono::steady_clock;
 struct GLCounters { uint64_t uniform_lookups,integer_reads,texture_allocations,texture_pixels,framebuffer_allocations,clears,clear_pixels,draws,shader_links; };
 struct FrameProfile {
@@ -318,8 +377,10 @@ int pointer(lua_State* L) {
 APICALL EXPORT std::string PLUGIN_API_VERSION() { return HYPRLAND_API_VERSION; }
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     fixtureHandle=handle;
-    frameListener=Event::bus()->m_events.render.stage.listen([](Event::SRenderStageEvent event) { frameProfile.stage(event); });
+    frameListener=Event::bus()->m_events.render.stage.listen([](Event::SRenderStageEvent event) { frameProfile.stage(event);
+        if (recordingFrames && event.stage==RENDER_LAST_MOMENT && event.context) event.context->get().m_pass.add(makeUnique<CaptureFramePass>()); });
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","profile",profile);
+    HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","frame_capture",frameCapture);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","trackpad",trackpad);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","drag",drag);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","animation_report",animationReport);
@@ -335,7 +396,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     return {"hymission_tiles_test","private native gesture/input test fixture","hymission","1"};
 }
 APICALL EXPORT void PLUGIN_EXIT() {
-    frameProfile.active=false;frameListener.reset();
+    recordingFrames=false;capturedFrames.clear();frameProfile.active=false;frameListener.reset();
     if (profileLayoutHook) HyprlandAPI::removeFunctionHook(fixtureHandle,profileLayoutHook);
     if (profileSymbolsHook) HyprlandAPI::removeFunctionHook(fixtureHandle,profileSymbolsHook);
     g_pUnifiedWorkspaceSwipe->cancel();

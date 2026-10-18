@@ -33,6 +33,8 @@ def main():
     ap.add_argument("--stage-profile-case", choices=("off","single","two","three"), default="off")
     ap.add_argument("--stage-profile-order", choices=("tiles-first","stage-first"), default="tiles-first")
     ap.add_argument("--gesture-lifecycle-regression", action="store_true")
+    ap.add_argument("--feedback4-regression",choices=("shadow","close","switch"))
+    ap.add_argument("--feedback4-observe",action="store_true")
     ap.add_argument("--feedback3-regression",choices=("hover","workspace","stage","stage-multi","stage-perf","stage-adaptive","drag"))
     ap.add_argument("--feedback2-regression",choices=("panel","gesture","overview","stage"))
     ap.add_argument("--plugin", required=True)
@@ -151,6 +153,11 @@ def main():
             from tiles_gesture_lifecycle_regression import run
             run(request,root)
             assert child.poll() is None, "compositor exited during gesture regression"
+            (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
+        if args.feedback4_regression:
+            from tiles_feedback4_regression import run
+            run(args.feedback4_regression,args.feedback4_observe,request,root,env,runtime,processes,handles)
             (root/"configerrors.txt").write_text(request("/configerrors"))
             return
         if args.feedback3_regression:

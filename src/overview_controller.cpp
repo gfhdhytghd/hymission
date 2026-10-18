@@ -4481,7 +4481,7 @@ void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, co
         // Preserve the owner and map native shadow exclusion into the preview.
         // Stage submits this shadow outside its cropped window-content layer.
         // Other overview paths retain their existing rendering.
-        if (stageTransitionFrame(window, monitor)) {
+        if (stageTransitionFrame(window, monitor) || (TilesController::get() && TilesController::get()->enabled(monitor))) {
             cutoutWindow = window;
             cutoutSource = CBox{window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT),
                                window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)};
