@@ -28,6 +28,10 @@ def main():
     ap.add_argument("--default-off-regression", action="store_true")
     ap.add_argument("--top-clip-regression", action="store_true")
     ap.add_argument("--animation-regression", action="store_true")
+    ap.add_argument("--stage-animation-profile", action="store_true")
+    ap.add_argument("--stage-profile-fp16-mirror", action="store_true")
+    ap.add_argument("--stage-profile-case", choices=("off","single","two","three"), default="off")
+    ap.add_argument("--stage-profile-order", choices=("tiles-first","stage-first"), default="tiles-first")
     ap.add_argument("--gesture-lifecycle-regression", action="store_true")
     ap.add_argument("--feedback3-regression",choices=("hover","workspace","stage","stage-multi","stage-perf","stage-adaptive","drag"))
     ap.add_argument("--feedback2-regression",choices=("panel","gesture","overview","stage"))
@@ -74,6 +78,10 @@ def main():
         flags = subprocess.check_output(["pkg-config", "--cflags", "wayland-client"], text=True).split()
         subprocess.run(["cc", "-shared", "-fPIC", str(Path(__file__).with_name("tiles_wayland_test_shim.c")), *flags, "-ldl", "-o", str(shim)], check=True)
         env["LD_PRELOAD"] = str(shim)
+        if args.stage_animation_profile:
+            gl_shim=root/"stage-gl-profile-shim.so"
+            subprocess.run(["cc","-O2","-shared","-fPIC",str(Path(__file__).with_name("tiles_stage_gl_profile_shim.c")),"-ldl","-o",str(gl_shim)],check=True)
+            env["LD_PRELOAD"]=str(gl_shim)+":"+env["LD_PRELOAD"]
         if args.symbol_lookup_failure:
             lookup_shim=root/"symbol-lookup-test-shim.so"
             subprocess.run(["cc","-O2","-shared","-fPIC",str(Path(__file__).with_name("tiles_symbol_lookup_test_shim.c")),"-ldl","-o",str(lookup_shim)],check=True)
@@ -120,7 +128,7 @@ def main():
 
         for _ in range(100):
             try:
-                state = json.loads(request("j/hymission-stage-state" if args.default_off_regression else "j/hymission-tiles-state"))
+                state = json.loads(request("j/hymission-stage-state" if (args.default_off_regression or args.stage_animation_profile) else "j/hymission-tiles-state"))
                 break
             except (ValueError, OSError):
                 time.sleep(0.1)
@@ -134,6 +142,11 @@ def main():
         else:
             raise RuntimeError("nested output did not appear")
         expected_width = monitors[0]["width"] / monitors[0].get("scale", 1)
+        if args.stage_animation_profile:
+            from stage_animation_profile import run
+            run(request,root,env,runtime,processes,handles,args.stage_profile_case,args.stage_profile_order,args.stage_profile_fp16_mirror)
+            (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
         if args.gesture_lifecycle_regression:
             from tiles_gesture_lifecycle_regression import run
             run(request,root)

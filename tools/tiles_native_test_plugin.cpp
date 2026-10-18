@@ -3,6 +3,7 @@
 #include "../src/state_json.hpp"
 // Isolated-test fixture only. Not installed and never loaded in the host session.
 #include <hyprland/src/plugins/PluginAPI.hpp>
+#include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
 #include <hyprland/src/pointer/PointerController.hpp>
@@ -31,7 +32,109 @@ extern "C" {
 #include <lua.h>
 #include <lauxlib.h>
 }
+#include <chrono>
+#include <dlfcn.h>
+#include <EGL/egl.h>
+#include <GLES3/gl3.h>
+#include <GLES2/gl2ext.h>
 namespace {
+using Clock=std::chrono::steady_clock;
+struct GLCounters { uint64_t uniform_lookups,integer_reads,texture_allocations,texture_pixels,framebuffer_allocations,clears,clear_pixels,draws,shader_links; };
+struct FrameProfile {
+    void (*resetGL)()=nullptr;
+    void (*snapshotGL)(GLCounters*)=nullptr;
+    bool active=false, gpuAvailable=false;
+    GLuint query=0;
+    Clock::time_point start{},previous{};
+    double interval=0,layoutMs=0,layoutOutsideMs=0;
+    size_t layoutCalls=0,symbolCalls=0;
+    std::string gpu,reason;
+    uint32_t drmFormat=0,mirrorFormat=0;
+    nlohmann::json frames=nlohmann::json::array();
+    std::vector<std::pair<GLuint,size_t>> pending;
+    PFNGLGETQUERYOBJECTUI64VEXTPROC result=nullptr;
+    void drain(bool finish=false) {
+        if (eglGetCurrentContext()==EGL_NO_CONTEXT) return;
+        if (finish) glFinish();
+        std::erase_if(pending,[&](const auto& p) {
+            GLuint available=0; glGetQueryObjectuiv(p.first,GL_QUERY_RESULT_AVAILABLE,&available);
+            if (!available) return false;
+            GLuint64 value=0; result(p.first,GL_QUERY_RESULT_EXT,&value);
+            frames[p.second]["gpu_ms"]=value/1e6;
+            glDeleteQueries(1,&p.first); return true;
+        });
+    }
+    void stage(Event::SRenderStageEvent event) {
+        if (!active) return;
+        if (event.stage==RENDER_PRE) {
+            drain();
+            if (resetGL) resetGL();
+            const auto now=Clock::now();
+            interval=previous==Clock::time_point{}?0:std::chrono::duration<double,std::milli>(now-previous).count();
+            previous=start=now;
+        } else if (event.stage==RENDER_BEGIN && event.context && !query) {
+            const auto fb=event.context->get().m_data.currentFB;
+            drmFormat=fb?fb->m_drmFormat:0;
+            const auto mirror=fb?fb->getMirrorTexture():nullptr;
+            mirrorFormat=mirror?mirror->m_drmFormat:0;
+            if (!result) {
+                const auto ext=reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+                result=reinterpret_cast<PFNGLGETQUERYOBJECTUI64VEXTPROC>(eglGetProcAddress("glGetQueryObjectui64vEXT"));
+                gpuAvailable=ext && std::strstr(ext,"GL_EXT_disjoint_timer_query") && result;
+                gpu=reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+                if (!gpuAvailable) reason="GL_EXT_disjoint_timer_query unavailable";
+            }
+            if (gpuAvailable) { glGenQueries(1,&query); glBeginQuery(GL_TIME_ELAPSED_EXT,query); }
+        } else if (event.stage==RENDER_POST && start!=Clock::time_point{}) {
+            const auto cpu=std::chrono::duration<double,std::milli>(Clock::now()-start).count();
+            frames.push_back({{"cpu_work_ms",cpu+layoutOutsideMs},{"layout_ms",layoutMs},{"layout_calls",layoutCalls},{"symbol_calls",symbolCalls},{"cpu_render_ms",cpu},{"interval_ms",interval},{"time_ns",std::chrono::duration_cast<std::chrono::nanoseconds>(start.time_since_epoch()).count()}});
+            if (snapshotGL) {
+                GLCounters c{};snapshotGL(&c);
+                frames.back()["gl"]={{"uniform_lookups",c.uniform_lookups},{"integer_reads",c.integer_reads},{"texture_allocations",c.texture_allocations},{"texture_pixels",c.texture_pixels},{"framebuffer_allocations",c.framebuffer_allocations},{"clears",c.clears},{"clear_pixels",c.clear_pixels},{"draws",c.draws},{"shader_links",c.shader_links}};
+            }
+            if (query) { glEndQuery(GL_TIME_ELAPSED_EXT); pending.emplace_back(query,frames.size()-1); query=0; }
+            start={};layoutMs=layoutOutsideMs=0;layoutCalls=symbolCalls=0;
+        }
+    }
+} frameProfile;
+Hyprutils::Memory::CSharedPointer<Hyprutils::Signal::CSignalListener> frameListener;
+extern HANDLE fixtureHandle;
+CFunctionHook *profileLayoutHook=nullptr,*profileSymbolsHook=nullptr;
+void profileLayout(Layout::CLayoutManager* manager,PHLMONITOR monitor) {
+    const auto begin=Clock::now();
+    reinterpret_cast<decltype(&profileLayout)>(profileLayoutHook->m_original)(manager,monitor);
+    if (frameProfile.active) {
+        const double elapsed=std::chrono::duration<double,std::milli>(Clock::now()-begin).count();
+        frameProfile.layoutMs+=elapsed;++frameProfile.layoutCalls;
+        if (frameProfile.start==Clock::time_point{}) frameProfile.layoutOutsideMs+=elapsed;
+    }
+}
+std::vector<SFunctionMatch> profileSymbols(HANDLE handle,const std::string& name) {
+    if (frameProfile.active) ++frameProfile.symbolCalls;
+    return reinterpret_cast<decltype(&profileSymbols)>(profileSymbolsHook->m_original)(handle,name);
+}
+int profile(lua_State* L) {
+    const std::string action=luaL_checkstring(L,1);
+    if (action=="begin") {
+        if (!profileLayoutHook) {
+            const auto source=hymission::hooks::findSymbol(HyprlandAPI::findFunctionsByName(fixtureHandle,"invalidateMonitorGeometries"),"Layout::CLayoutManager::invalidateMonitorGeometries(Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>)",true);
+            profileLayoutHook=HyprlandAPI::createFunctionHook(fixtureHandle,source,reinterpret_cast<void*>(&profileLayout));
+            profileSymbolsHook=HyprlandAPI::createFunctionHook(fixtureHandle,reinterpret_cast<void*>(&HyprlandAPI::findFunctionsByName),reinterpret_cast<void*>(&profileSymbols));
+            if (!profileLayoutHook || !profileLayoutHook->hook() || !profileSymbolsHook || !profileSymbolsHook->hook()) return luaL_error(L,"private profiler hooks unavailable");
+        }
+        frameProfile.resetGL=reinterpret_cast<void(*)()>(dlsym(RTLD_DEFAULT,"stage_profile_gl_reset"));
+        frameProfile.snapshotGL=reinterpret_cast<void(*)(GLCounters*)>(dlsym(RTLD_DEFAULT,"stage_profile_gl_snapshot"));
+        frameProfile.drain(true);frameProfile.layoutMs=frameProfile.layoutOutsideMs=0;frameProfile.layoutCalls=frameProfile.symbolCalls=0;
+        frameProfile.frames=nlohmann::json::array();frameProfile.previous={};frameProfile.active=true;
+    } else if (action=="end") {
+        frameProfile.active=false;
+        frameProfile.drain(true);
+        std::ofstream output(luaL_checkstring(L,2));
+        output<<nlohmann::json{{"drm_format",frameProfile.drmFormat},{"mirror_format",frameProfile.mirrorFormat},{"gpu_available",frameProfile.gpuAvailable},{"gpu",frameProfile.gpu},{"gpu_error",frameProfile.reason},{"pending",frameProfile.pending.size()},{"frames",frameProfile.frames}}.dump(2)<<"\n";
+        if (!output) return luaL_error(L,"cannot write private frame profile");
+    } else return luaL_error(L,"unknown profile action");
+    return 0;
+}
 HANDLE fixtureHandle=nullptr;
 CFunctionHook* releaseHook=nullptr;
 int mouseReleases=0;
@@ -215,6 +318,8 @@ int pointer(lua_State* L) {
 APICALL EXPORT std::string PLUGIN_API_VERSION() { return HYPRLAND_API_VERSION; }
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     fixtureHandle=handle;
+    frameListener=Event::bus()->m_events.render.stage.listen([](Event::SRenderStageEvent event) { frameProfile.stage(event); });
+    HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","profile",profile);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","trackpad",trackpad);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","drag",drag);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","animation_report",animationReport);
@@ -230,6 +335,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     return {"hymission_tiles_test","private native gesture/input test fixture","hymission","1"};
 }
 APICALL EXPORT void PLUGIN_EXIT() {
+    frameProfile.active=false;frameListener.reset();
+    if (profileLayoutHook) HyprlandAPI::removeFunctionHook(fixtureHandle,profileLayoutHook);
+    if (profileSymbolsHook) HyprlandAPI::removeFunctionHook(fixtureHandle,profileSymbolsHook);
     g_pUnifiedWorkspaceSwipe->cancel();
     if (releaseHook) HyprlandAPI::removeFunctionHook(fixtureHandle,releaseHook);
     releaseHook=nullptr;

@@ -3963,18 +3963,21 @@ void StageController::Impl::applyVisibility(double progress) {
         screen.flights.clear();
         screen.paneTransition = false;
         screen.departingCards.clear();
-        if (auto monitor = screen.monitor.lock()) {
-            g_layoutManager->invalidateMonitorGeometries(monitor);
-            // Finger progress already supplies the animation; native window
-            // animations must not lag behind each new work-area endpoint.
-            for (const auto& window : Desktop::windowState()->windows()) {
-                if (window->m_monitor == monitor && window->mapped() && !window->isFloating() && !static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED)) {
-                    window->positionAnimation()->warp();
-                    window->sizeAnimation()->warp();
-                }
+    }
+    // Every column already observes the same visibility. Recompute each
+    // physical output once, rather than repeating the whole layout per tile.
+    for (const auto& monitor:State::monitorState()->monitors()) {
+        if (std::ranges::none_of(screens,[&](const auto& screen) { return screen.monitor==monitor; }))
+            continue;
+        g_layoutManager->invalidateMonitorGeometries(monitor);
+        // Finger progress owns this motion; native animations must not lag.
+        for (const auto& window:Desktop::windowState()->windows()) {
+            if (window->m_monitor==monitor && window->mapped() && !window->isFloating() && !static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED)) {
+                window->positionAnimation()->warp();
+                window->sizeAnimation()->warp();
             }
-            damage(screen);
         }
+        if (g_pHyprRenderer) g_pHyprRenderer->damageMonitor(monitor);
     }
     request();
 }

@@ -87,6 +87,7 @@ void StageEdgeEffect::reset() {
     if (m_vao)
         glDeleteVertexArrays(1, &m_vao);
     m_program = m_vao = 0;
+    m_uniforms={};
     m_error.clear();
 }
 
@@ -114,8 +115,13 @@ bool StageEdgeEffect::ensureShader() {
             m_error = message;
             glDeleteProgram(m_program);
             m_program = 0;
-        } else
+        } else {
             glGenVertexArrays(1, &m_vao);
+            const auto location=[&](const char* name) { return glGetUniformLocation(m_program,name); };
+            m_uniforms={location("uTexture"),location("uMirror"),location("uHasMirror"),location("uSize"),
+                location("uAxisX"),location("uAxisY"),location("uViewport"),location("uSample"),location("uSampleFB"),
+                location("uWidths"),location("uMaxRadius"),location("uPass")};
+        }
     }
     if (vertex)
         glDeleteShader(vertex);
@@ -133,7 +139,6 @@ SP<Render::IFramebuffer> StageEdgeEffect::bufferFor(const PHLMONITOR& monitor, c
     if (!monitor || !destination || !g_pHyprOpenGL || eglGetCurrentContext() == EGL_NO_CONTEXT ||
         eglGetCurrentContext() != g_pHyprOpenGL->m_eglContext)
         return nullptr;
-    GLState restore;
     const auto destinationMirror = destination->getMirrorTexture();
     const auto format = stage::edgeAlphaFormat(destination->m_drmFormat);
     const auto mirrorFormat = destinationMirror ? stage::edgeAlphaFormat(destinationMirror->m_drmFormat) : 0;
@@ -145,14 +150,14 @@ SP<Render::IFramebuffer> StageEdgeEffect::bufferFor(const PHLMONITOR& monitor, c
         }
         return nullptr;
     };
-    GLint maxSize = 0;
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxSize);
     if (!format || (destinationMirror && !mirrorFormat) ||
         !std::isfinite(monitor->m_pixelSize.x) || !std::isfinite(monitor->m_pixelSize.y) ||
-        monitor->m_pixelSize.x < 1 || monitor->m_pixelSize.y < 1 ||
-        monitor->m_pixelSize.x > maxSize || monitor->m_pixelSize.y > maxSize)
+        monitor->m_pixelSize.x < 1 || monitor->m_pixelSize.y < 1)
         return fail();
-    std::erase_if(m_buffers, [](const Buffer& b) { return b.monitor.expired(); });
+    if (std::ranges::any_of(m_buffers,[](const Buffer& b) { return b.monitor.expired(); })) {
+        GLState restore;
+        std::erase_if(m_buffers, [](const Buffer& b) { return b.monitor.expired(); });
+    }
     auto it = std::ranges::find_if(m_buffers, [&](const Buffer& b) { return b.monitor == monitor; });
     if (it == m_buffers.end()) {
         m_buffers.push_back({monitor, nullptr, nullptr});
@@ -162,6 +167,12 @@ SP<Render::IFramebuffer> StageEdgeEffect::bufferFor(const PHLMONITOR& monitor, c
     const auto oldMirror = fb ? fb->getMirrorTexture() : nullptr;
     if (!fb || fb->m_size != monitor->m_pixelSize || fb->m_drmFormat != format ||
         (oldMirror ? oldMirror->m_drmFormat : 0) != mirrorFormat) {
+        // Cache hits only update CPU-side image-description metadata. GL
+        // bindings and limits need querying/restoring only for an allocation.
+        GLState restore;
+        GLint maxSize=0;
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE,&maxSize);
+        if (monitor->m_pixelSize.x>maxSize || monitor->m_pixelSize.y>maxSize) return fail();
         // Replace the complete attachment set together when output size/CM or
         // capture changes. Never reallocate with a stale mirror attachment.
         fb.reset();
@@ -262,11 +273,11 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
         glActiveTexture(GL_TEXTURE1);
         mirror->bind();
     }
-    const auto uniform = [&](const char* name) { return glGetUniformLocation(m_program, name); };
-    glUniform1i(uniform("uTexture"), 0);
-    glUniform1i(uniform("uMirror"), 1);
-    glUniform1i(uniform("uHasMirror"), mirror ? 1 : 0);
-    glUniform2f(uniform("uSize"), monitor->m_pixelSize.x, monitor->m_pixelSize.y);
+    const auto& uniform=m_uniforms;
+    glUniform1i(uniform.texture, 0);
+    glUniform1i(uniform.mirror, 1);
+    glUniform1i(uniform.hasMirror, mirror ? 1 : 0);
+    glUniform2f(uniform.size, monitor->m_pixelSize.x, monitor->m_pixelSize.y);
     const auto transform = Math::wlTransformToHyprutils(monitor->m_transform);
     // CBox's dimensions are the input extent, matching native damage/scissor
     // transforms. Vector2D::transform uses a different size convention.
@@ -276,10 +287,10 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
     const auto origin = map(0, 0);
     const auto x = map(1, 0) - origin;
     const auto y = map(0, 1) - origin;
-    glUniform3f(uniform("uAxisX"), x.x, y.x, origin.x);
-    glUniform3f(uniform("uAxisY"), x.y, y.y, origin.y);
-    glUniform4f(uniform("uViewport"), view.x, view.y, view.w, view.h);
-    glUniform4f(uniform("uSample"), sample.x, sample.y, sample.w, sample.h);
+    glUniform3f(uniform.axisX, x.x, y.x, origin.x);
+    glUniform3f(uniform.axisY, x.y, y.y, origin.y);
+    glUniform4f(uniform.viewport, view.x, view.y, view.w, view.h);
+    glUniform4f(uniform.sample, sample.x, sample.y, sample.w, sample.h);
     auto sampleFB = sample.copy().transform(Math::wlTransformToHyprutils(Math::invertTransform(monitor->m_transform)),
         monitor->m_transformedSize.x, monitor->m_transformedSize.y);
     const auto end = Vector2D{std::floor(sampleFB.x + sampleFB.w), std::floor(sampleFB.y + sampleFB.h)};
@@ -287,15 +298,15 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
     sampleFB.y = std::ceil(sampleFB.y);
     sampleFB.w = std::max(1.0, end.x - sampleFB.x);
     sampleFB.h = std::max(1.0, end.y - sampleFB.y);
-    glUniform4f(uniform("uSampleFB"), sampleFB.x, sampleFB.y, sampleFB.w, sampleFB.h);
-    glUniform4f(uniform("uWidths"), left, right, top, bottom);
-    glUniform1f(uniform("uMaxRadius"), maxRadius);
+    glUniform4f(uniform.sampleFB, sampleFB.x, sampleFB.y, sampleFB.w, sampleFB.h);
+    glUniform4f(uniform.widths, left, right, top, bottom);
+    glUniform1f(uniform.maxRadius, maxRadius);
     // First pass fills the padded sample rectangle without opacity. The
     // second samples only that fresh rectangle and composites over the output.
     g_pHyprRenderer->bindFB(renderContext(), horizontal);
     g_pHyprOpenGL->blend(false);
     g_pHyprOpenGL->setCapStatus(GL_STENCIL_TEST, false);
-    glUniform1i(uniform("uPass"), 0);
+    glUniform1i(uniform.pass, 0);
     g_pHyprOpenGL->scissor(renderContext(), sample, true);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     g_pHyprRenderer->bindFB(renderContext(), destination);
@@ -305,7 +316,7 @@ bool StageEdgeEffect::draw(const PHLMONITOR& monitor, const stage::EdgeViewport&
         glActiveTexture(GL_TEXTURE1);
         horizontal->getMirrorTexture()->bind();
     }
-    glUniform1i(uniform("uPass"), 1);
+    glUniform1i(uniform.pass, 1);
     g_pHyprOpenGL->blend(true);
     outputDamage.forEachRect([&](const auto& rect) {
         g_pHyprOpenGL->scissor(renderContext(), &rect, true);

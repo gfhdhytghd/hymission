@@ -31,6 +31,10 @@ class StageEdgeEffect {
     SP<Render::IFramebuffer> m_backdrop;
     GLuint m_program = 0;
     GLuint m_vao = 0;
+    struct Uniforms {
+        GLint texture=-1,mirror=-1,hasMirror=-1,size=-1,axisX=-1,axisY=-1,viewport=-1,
+            sample=-1,sampleFB=-1,widths=-1,maxRadius=-1,pass=-1;
+    } m_uniforms;
     std::string m_error;
     bool ensureShader();
     SP<Render::IFramebuffer> bufferFor(const PHLMONITOR& monitor, const SP<Render::IFramebuffer>& destination, bool horizontal = false);
