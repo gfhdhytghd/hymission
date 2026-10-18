@@ -427,6 +427,7 @@ class OverviewController {
     };
 
     struct WorkspaceOverride {
+        uint64_t     tileId = 0;
         MONITORID    monitorId = MONITOR_INVALID;
         PHLWORKSPACE workspace;
         WorkspaceKey workspaceId = WORKSPACE_INVALID;
@@ -448,6 +449,7 @@ class OverviewController {
     struct WorkspaceTransition {
         bool                                  active = false;
         PHLMONITOR                             monitor;
+        uint64_t                               tileId = 0;
         eTrackpadGestureDirection              gestureDirection = TRACKPAD_GESTURE_DIR_NONE;
         WorkspaceTransitionAxis                axis = WorkspaceTransitionAxis::Horizontal;
         WorkspaceTransitionMode                mode = WorkspaceTransitionMode::Gesture;

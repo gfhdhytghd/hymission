@@ -34,3 +34,20 @@ Evidence: `build-tiles/fb4-baseline-native/switch-onlycurrentworkspace-stage0-op
 its paired JSON, and `build-tiles/fb4-shadow-verified/` (all frames and observations).
 Run with `--feedback4-regression shadow`; `--feedback4-observe` preserves failing
 baseline observations without accepting them as passing regressions.
+
+## 3. Workspace transitions stay in the selected tile
+
+The target-state override previously replaced the entire monitor's workspace
+collection with the new workspace. The transition then applied its monitor-wide
+pan to all source items, including other tiles. Add a tile identity to the
+transition and its override: replace just that tile's workspace, preserve the
+other views, leave their preview rectangles stationary, and use the tile width
+for a horizontal transition. Commit to the stored tile through the activation
+transaction, including the synthetic-workspace rebuild path; pinned-window
+migration uses that tile's old workspace. The non-tile path is unchanged.
+
+Native workspace-dispatch reproduction while ws overview is active records 11
+moving frames on the non-focused tile in each Stage-off/on baseline. The fixed
+run records zero moved/missing frames in both cases, including the committed
+state. Evidence: `fb4-baseline-native/switch-stage{0,1}.json` versus
+`fb4-switch-fixed/switch-stage{0,1}.json`, with every-frame PNGs in each directory.

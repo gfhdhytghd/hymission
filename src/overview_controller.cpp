@@ -6862,8 +6862,12 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
         managed.relayoutFromGlobal = managed.targetGlobal;
     }
 
+    uint64_t transitionTile = 0;
+    if (auto* tiles=TilesController::get();tiles && tiles->enabled(monitor) && source.collectionPolicy.onlyActiveWorkspace)
+        for (const auto& view:tiles->views(monitor)) if (view.focused) { transitionTile=view.id;break; }
     const auto anchorMonitor = m_state.ownerMonitor ? m_state.ownerMonitor : monitor;
     std::vector<WorkspaceOverride> overrides = {{
+        .tileId = transitionTile,
         .monitorId = monitor->m_id,
         .workspace = workspace,
         .workspaceId = workspaceId,
@@ -6892,6 +6896,7 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
     m_workspaceTransition = {
         .active = true,
         .monitor = monitor,
+        .tileId = transitionTile,
         .gestureDirection = m_workspaceSwipeGesture.direction,
         .axis = transitionAxis,
         .mode = mode,
@@ -6912,6 +6917,9 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
         .animationStart = {},
     };
 
+    if (transitionTile && transitionAxis==WorkspaceTransitionAxis::Horizontal)
+        for (const auto& view:TilesController::get()->views(monitor)) if (view.id==transitionTile)
+            m_workspaceTransition.distance=std::max(1.0,view.allocation.w+static_cast<double>(getConfigInt(m_handle,"general:gaps_workspaces",0)));
     if (mode == WorkspaceTransitionMode::TimedCommit)
         m_workspaceTransition.animationToDelta = static_cast<double>(m_workspaceTransition.step) * m_workspaceTransition.distance;
 
@@ -7209,7 +7217,9 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
     clearPendingWindowGeometryRetry();
 
     const auto transitionMonitor = m_workspaceTransition.monitor;
-    const auto oldWorkspace = transitionMonitor->m_activeWorkspace;
+    auto oldWorkspace = transitionMonitor->m_activeWorkspace;
+    if (m_workspaceTransition.tileId && TilesController::get())
+        for (const auto& view:TilesController::get()->views(transitionMonitor)) if (view.id==m_workspaceTransition.tileId) oldWorkspace=view.workspace;
     const auto targetWorkspaceId = m_workspaceTransition.targetWorkspaceId;
     const bool targetWorkspaceSyntheticEmpty = m_workspaceTransition.targetWorkspaceSyntheticEmpty;
     const auto targetWorkspaceName = m_workspaceTransition.targetWorkspaceName;
@@ -7242,7 +7252,10 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
     {
         ScopedFlag applyingWorkspaceTransitionCommit(m_applyingWorkspaceTransitionCommit);
 
-        transitionMonitor->changeWorkspace(targetWorkspace, true, true, true);
+        if (m_workspaceTransition.tileId && TilesController::get())
+            (void)TilesController::get()->activate(transitionMonitor,m_workspaceTransition.tileId,targetWorkspace);
+        else
+            transitionMonitor->changeWorkspace(targetWorkspace, true, true, true);
 
         if (oldWorkspace && oldWorkspace != targetWorkspace) {
             for (const auto& window : Desktop::viewState()->windows()) {
@@ -7268,6 +7281,7 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         if (targetWorkspaceSyntheticEmpty || !containsHandle(next.managedWorkspaces, targetWorkspace) || next.ownerWorkspace != targetWorkspace) {
             const auto rebuildMonitor = m_state.ownerMonitor ? m_state.ownerMonitor : transitionMonitor;
             const std::vector<WorkspaceOverride> overrides = {{
+                .tileId = m_workspaceTransition.tileId,
                 .monitorId = transitionMonitor->m_id,
                 .workspace = targetWorkspace,
                 .workspaceId = targetWorkspaceId,
@@ -10120,6 +10134,13 @@ std::optional<Rect> OverviewController::workspaceTransitionRectForWindow(const P
     const auto* targetManaged = managedWindowFor(m_workspaceTransition.targetState, window, true);
     if (!sourceManaged && !targetManaged)
         return std::nullopt;
+    if (m_workspaceTransition.tileId) {
+        const auto* managed=sourceManaged?sourceManaged:targetManaged;
+        auto* tiles=TilesController::get();
+        if (managed->targetMonitor!=m_workspaceTransition.monitor || !tiles ||
+            tiles->preferredTile(window->m_workspace,managed->targetMonitor)!=m_workspaceTransition.tileId)
+            return managed->targetGlobal;
+    }
 
     const double clampedDelta = std::clamp(m_workspaceTransition.delta, -m_workspaceTransition.distance, m_workspaceTransition.distance);
     const double sourceOffset = -clampedDelta;
@@ -15172,7 +15193,12 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 continue;
 
             if (const auto* override = overrideForMonitor(candidateMonitor); override) {
-                if (override->workspace)
+                if (auto* tiles=TilesController::get();override->tileId && tiles && tiles->enabled(candidateMonitor)) {
+                    // A tile transition replaces one desktop, preserving the
+                    // other tiles in both source and destination scenes.
+                    for (const auto& view:tiles->views(candidateMonitor))
+                        addWorkspace(view.id==override->tileId?override->workspace:view.workspace);
+                } else if (override->workspace)
                     addWorkspace(override->workspace);
                 continue;
             }
