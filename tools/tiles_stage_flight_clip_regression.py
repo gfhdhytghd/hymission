@@ -54,7 +54,7 @@ def verify_existing(root, observe=False):
     print(('OBSERVED' if observe else 'PASS')+': incoming/outgoing foreign-region coverage, held swipe and restored endpoint clips')
 
 
-def run(case, observe, route_filter, layout, request, root, env, runtime, processes, handles, handoff=False):
+def run(case, observe, route_filter, layout, request, root, env, runtime, processes, handles, handoff=False, order=False, recent=1):
     def evaluate(code):
         value = request('/eval '+code)
         assert value.strip() == 'ok', (code, value)
@@ -94,7 +94,14 @@ def run(case, observe, route_filter, layout, request, root, env, runtime, proces
             wait('j/clients', lambda cs:len(cs)==total)
     focus(101)
     if handoff:
-        evaluate('hl.workspace_rule({workspace="100",persistent=true}); hl.dispatch(hl.dsp.focus({workspace=100})); hl.dispatch(hl.dsp.focus({workspace=101}))')
+        evaluate('hl.workspace_rule({workspace="100",persistent=true}); hl.dispatch(hl.dsp.focus({workspace=100}))')
+        if order:
+            log = open(root/'client-100.log','w'); handles.append(log)
+            passive_env = child.copy(); passive_env['HMT_MARKER_COLOR'] = 'a060c0'
+            processes.append(subprocess.Popen([str(binary)],env=passive_env,stdout=log,stderr=subprocess.STDOUT))
+            total += 1
+            wait('j/clients', lambda cs:len(cs)==total)
+        focus(101)
     if case != 'off':
         evaluate('hl.config({plugin={hymission={tiles_enabled=1,tile_min_width=120}}}); hl.plugin.hymission_tiles_test.refresh()')
         wait('j/hymission-tiles-state',lambda s:s['enabled'])
@@ -105,6 +112,13 @@ def run(case, observe, route_filter, layout, request, root, env, runtime, proces
     evaluate('hl.config({animations={enabled=true},plugin={hymission={stage_enabled=1}}}); hl.plugin.hymission.stage_open(); hl.gesture({fingers=4,direction="vertical",action="workspace"}); hl.config({gestures={workspace_swipe_invert=false,workspace_swipe_create_new=false,workspace_swipe_use_r=false,workspace_swipe_distance=300,workspace_swipe_cancel_ratio=.05,workspace_swipe_min_speed_to_force=0,workspace_swipe_forever=false}})')
     wait('j/hymission-stage-state',lambda s:len(s['screens'])==count and s['visibility_progress']==1)
     time.sleep(.7)
+
+    if order:
+        from tiles_stage_order_regression import prepare
+        def pointer(kind,x,y):
+            evaluate(f'hl.plugin.hymission_tiles_test.pointer("{kind}",{x},{y})')
+            time.sleep(.06)
+        prepare(case,recent,evaluate,read,wait,pointer,root)
 
     def rect_mask(size, box, inset=6):
         x,y,w,h = (box[k] for k in ('x','y','width','height'))

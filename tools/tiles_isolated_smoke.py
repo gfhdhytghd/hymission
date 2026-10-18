@@ -46,6 +46,8 @@ def main():
     ap.add_argument("--stage-flight-clip-observe",action="store_true")
     ap.add_argument("--stage-flight-clip-route",choices=("key","swipe"))
     ap.add_argument("--stage-flight-clip-layout",choices=("dwindle","scrolling"),default="dwindle")
+    ap.add_argument("--stage-order-regression",action="store_true")
+    ap.add_argument("--stage-order-recent",type=int,choices=(0,1),default=1)
     ap.add_argument("--stage-flight-handoff",action="store_true",help="FB15: include persistent neighboring cards and check flight endpoint continuity")
     ap.add_argument("--relative-regression",choices=("off","single","two","three"))
     ap.add_argument("--relative-observe",action="store_true")
@@ -75,8 +77,8 @@ def main():
     ap.add_argument("--plugin", required=True)
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
-    if args.stage_flight_handoff and not args.stage_flight_clip_regression:
-        ap.error("--stage-flight-handoff requires --stage-flight-clip-regression")
+    if (args.stage_flight_handoff or args.stage_order_regression) and not args.stage_flight_clip_regression:
+        ap.error("Stage flight/order checks require --stage-flight-clip-regression")
     root = Path(args.output).resolve()
     root.mkdir(parents=True, exist_ok=True)
     artifacts = {}
@@ -227,8 +229,11 @@ def main():
             return
         if args.stage_flight_clip_regression:
             from tiles_stage_flight_clip_regression import run
-            run(args.stage_flight_clip_regression,args.stage_flight_clip_observe,args.stage_flight_clip_route,args.stage_flight_clip_layout,request,root,env,runtime,processes,handles,args.stage_flight_handoff)
-            if args.stage_flight_handoff:
+            run(args.stage_flight_clip_regression,args.stage_flight_clip_observe,args.stage_flight_clip_route,args.stage_flight_clip_layout,request,root,env,runtime,processes,handles,args.stage_flight_handoff or args.stage_order_regression,args.stage_order_regression,args.stage_order_recent)
+            if args.stage_order_regression:
+                from tiles_stage_order_regression import verify
+                verify(root,args.stage_flight_clip_observe)
+            elif args.stage_flight_handoff:
                 from tiles_stage_handoff_regression import verify
                 verify(root,args.stage_flight_clip_observe)
             (root/"configerrors.txt").write_text(request("/configerrors"))

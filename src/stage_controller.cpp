@@ -604,7 +604,7 @@ struct StageController::Impl {
         if (auto* tiles=TilesController::get()) for (const auto& view:tiles->views(monitor)) if (view.id==tile) return base.intersection(view.allocation);
         return base;
     }
-    std::vector<Card> cardsForWorkspace(const PHLMONITOR& monitor, const PHLWORKSPACE& activeWorkspace) const;
+    std::vector<Card> cardsForWorkspace(const PHLMONITOR& monitor, const PHLWORKSPACE& activeWorkspace, WorkspaceKey pendingActive = WORKSPACE_INVALID) const;
     std::pair<Screen*, std::optional<std::size_t>> hit(const Vector2D& point, bool activation = false);
     void pointer();
     void updateDragHover();
@@ -1078,34 +1078,13 @@ void StageController::Impl::prepareSwipe(const PHLWORKSPACE& target) {
     visual.active = target ? workspaceKey(target) : swipe->requestedTarget;
     visual.workspace=target;
     visual.right = !clustered(*source) && smartisan ? !source->right : source->right;
-    visual.cards.clear();
-    for (const auto& workspace : State::workspaceState()->workspaces()) {
-        if ((workspace->type() == Workspace::eWorkspaceType::SPECIAL) || workspace->m_monitor != monitor ||
-            (clustered(*source) && TilesController::get()->preferredTile(workspace.lock(),monitor)!=source->tile) ||
-            (setting("stage_show_active", 0) == 0 && workspace == target) ||
-            (!setting("stage_show_empty", 1) && workspace->getWindowCount(std::nullopt, false) == 0))
-            continue;
-        const auto old = std::ranges::find_if(source->cards, [&](const auto& card) { return card.workspace == workspace; });
-        visual.cards.push_back(old == source->cards.end() ? Card{.workspace = workspace} : *old);
+    // Preview and committed scenes must share one ordering authority, including
+    // a drag order retained after collapsing back to a single tile.
+    visual.cards = cardsForWorkspace(monitor, target ? target : origin, target ? WORKSPACE_INVALID : swipe->requestedTarget);
+    for (auto& card : visual.cards) {
+        const auto old=std::ranges::find_if(source->cards,[&](const Card& c) { return cardID(c)==cardID(card); });
+        if (old!=source->cards.end()) card=*old;
     }
-    for (const auto& card : source->cards) {
-        if (card.syntheticId == 0)
-            continue;
-        const auto id = cardID(card);
-        if (std::ranges::find_if(visual.cards, [&](const Card& c) { return cardID(c) == id; }) == visual.cards.end())
-            visual.cards.push_back(card);
-    }
-    std::ranges::sort(visual.cards, [](const Card& a, const Card& b) {
-        const auto ida = cardID(a), idb = cardID(b);
-        if ((ida > 0) != (idb > 0))
-            return ida > 0;
-        return ida > 0 ? ida < idb :
-            (a.workspace.lock() && b.workspace.lock() && a.workspace.lock()->displayName() < b.workspace.lock()->displayName());
-    });
-    if (clustered(*source) && !tileCardOrder.empty())
-        std::ranges::stable_sort(visual.cards,[&](const Card& a,const Card& b) {
-            return std::ranges::find(tileCardOrder,cardID(a))-tileCardOrder.begin()<std::ranges::find(tileCardOrder,cardID(b))-tileCardOrder.begin();
-        });
     visual.geometry = clustered(*source) ? source->geometry : stage::layout(visual.base.w, visual.base.h, visual.cards.size(), settingsForSide(visual.right), std::nullopt, monitor->m_size.x);
     if (clustered(*source)) {
         // Freeze the shared scale during a gesture, but allow a newly created
@@ -1270,6 +1249,9 @@ void StageController::Impl::endSwipe() {
     swipe->releaseTo = commit ? 1 : 0;
     swipe->releaseStart = Clock::now();
     swipe->releaseDuration = std::clamp(setting("stage_transition_ms", 300), 0L, 2000L) * std::abs(swipe->releaseTo - swipe->releaseFrom);
+    std::vector<std::pair<WorkspaceKey,double>> presentedTops;
+    if (swipe->prepared) for (size_t i=0;i<swipe->visual.cards.size();++i)
+        presentedTops.emplace_back(cardID(swipe->visual.cards[i]),swipe->visual.base.y+cardTop(swipe->visual,i));
     if (commit) {
         if (swipe->prepared) {
             for (auto& flight : swipe->visual.flights) {
@@ -1294,6 +1276,17 @@ void StageController::Impl::endSwipe() {
             if (!actual || actual->suspended) {
                 clearSwipe();
                 return;
+            }
+            // Native activation synchronizes the final list. Continue passive
+            // cards from the last gesture-owned positions rather than replaying
+            // their old pre-gesture slots when the owner changes.
+            for (size_t i=0;i<actual->cards.size();++i) {
+                auto& card=actual->cards[i];
+                const auto top=std::ranges::find_if(presentedTops,[&](const auto& entry) { return entry.first==cardID(card); });
+                if (top==presentedTops.end()) continue;
+                card.shift=top->second-actual->base.y-actual->geometry.cardTop(i,actual->scroll);
+                card.shiftStart=Clock::now();
+                if (card.shift!=0) armMotion();
             }
             swipe->visual.cards = actual->cards;
             swipe->visual.geometry = actual->geometry;
@@ -1690,7 +1683,7 @@ size_t StageController::Impl::referenceCardCount(const PHLMONITOR& monitor,const
     return count;
 }
 
-std::vector<StageController::Impl::Card> StageController::Impl::cardsForWorkspace(const PHLMONITOR& monitor, const PHLWORKSPACE& activeWorkspace) const {
+std::vector<StageController::Impl::Card> StageController::Impl::cardsForWorkspace(const PHLMONITOR& monitor, const PHLWORKSPACE& activeWorkspace, WorkspaceKey pendingActive) const {
     const auto workspaces = State::workspaceState()->workspacesCopy();
     const bool showEmpty = setting("stage_show_empty", 1) != 0;
     std::vector<Card> targets;
@@ -1701,7 +1694,7 @@ std::vector<StageController::Impl::Card> StageController::Impl::cardsForWorkspac
             const auto home=tiles->preferredTile(activeWorkspace,monitor);
             if (tiles->preferredTile(workspace,monitor)!=home) continue;
         }
-        if (setting("stage_show_active", 0) == 0 && workspace == activeWorkspace)
+        if (setting("stage_show_active", 0) == 0 && (pendingActive != WORKSPACE_INVALID ? workspaceKey(workspace) == pendingActive : workspace == activeWorkspace))
             continue;
         if (!showEmpty && workspace->getWindowCount(std::nullopt, false) == 0)
             continue;
@@ -3403,7 +3396,7 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
             return std::nullopt;
         const double scale = geometry.cardWidth / geometry.desktopWidth;
         const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - it->shiftStart).count();
-        const double shift = it->shift * (1 - stage::transitionProgress(elapsed, duration));
+        const double shift = cached ? it->shift * (1 - stage::transitionProgress(elapsed, duration)) : 0;
         auto endpoint=screen; endpoint.geometry=geometry; endpoint.right=right;
         const auto band = clustered(screen)?rect(sidebar(endpoint)):stage::sidebarArea(rect(screen.base), geometry, right);
         const auto area = clustered(screen)?rect(desktop(endpoint)):stage::desktopArea(rect(screen.base), geometry, right);
@@ -3464,13 +3457,13 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
                 flight.from = box(stage::transitionBoxWithin(rect(flight.from), rect(flight.from), 0, flightBounds(monitor)));
             }
             if (scrollingTiled(window)) {
-                const auto miniatureView = [&](const std::vector<Card>& cards, const stage::Geometry& geometry, double scroll, bool right) -> std::optional<stage::EdgeViewport> {
+                const auto miniatureView = [&](const std::vector<Card>& cards, const stage::Geometry& geometry, double scroll, bool right, bool sampled) -> std::optional<stage::EdgeViewport> {
                     auto endpoint=screen; endpoint.geometry=geometry; endpoint.right=right;
                     if (clustered(screen)) {
                         const auto it=std::ranges::find_if(cards,[&](const Card& card) { return card.workspace==workspace; });
                         if (it==cards.end()) return std::nullopt;
                         const double elapsed=std::chrono::duration<double,std::milli>(Clock::now()-it->shiftStart).count();
-                        const double shift=it->shift*(1-stage::transitionProgress(elapsed,duration));
+                        const double shift=sampled?it->shift*(1-stage::transitionProgress(elapsed,duration)):0;
                         // A window thumbnail is not the workspace aperture.
                         // Use the same complete slot as stationary card drawing,
                         // including its centered tile viewport and current shift.
@@ -3492,10 +3485,10 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
                         const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 32) * visibility : 0;
                         flight.fromViewport = stage::desktopEdgeViewport(area, width, oldRight, clustered(screen));
                     } else
-                        flight.fromViewport = miniatureView(oldCards, oldGeometry, oldScroll, oldRight);
+                        flight.fromViewport = miniatureView(oldCards, oldGeometry, oldScroll, oldRight, true);
                 }
                 flight.toViewport = workspace == activeWorkspace ? std::optional{desktopViewport(screen)} :
-                    miniatureView(screen.cards, screen.geometry, screen.scroll, screen.right);
+                    miniatureView(screen.cards, screen.geometry, screen.scroll, screen.right, false);
             }
         }
     }
@@ -3852,10 +3845,10 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
                 const auto preview = std::ranges::find_if(card->previews, [&](const auto& p) { return p.window == window; });
                 if (preview != card->previews.end()) {
                     flight.to = preview->target.copy().translate(Vector2D{sidebar(screen).x + screen.geometry.padding,
-                        screen.base.y + cardTop(screen, std::distance(screen.cards.begin(), card))});
+                        screen.base.y + screen.geometry.cardTop(std::distance(screen.cards.begin(), card), screen.scroll)});
                     if (flight.toViewport)
                         flight.toViewport = cardViewport(screen,CBox{sidebar(screen).x + screen.geometry.padding,
-                            screen.base.y + cardTop(screen, std::distance(screen.cards.begin(), card)), screen.geometry.cardWidth, screen.geometry.cardHeight});
+                            screen.base.y + screen.geometry.cardTop(std::distance(screen.cards.begin(), card), screen.scroll), screen.geometry.cardWidth, screen.geometry.cardHeight});
                 }
             }
         }
@@ -4091,25 +4084,29 @@ std::string StageController::Impl::stateJson() const {
                     {"selectionGeometry", geometryJson(preview.selection)}, {"selectionClipGeometry", geometryJson(preview.clip)}, {"selectionRounding", preview.rounding}});
             }
         }
-        nlohmann::json cards = nlohmann::json::array();
-        for (const auto& card : screen.cards) {
-            if (const auto workspace = card.workspace.lock())
-            {
-                const size_t index=&card-screen.cards.data();
-                const auto band=sidebar(screen);
-                const CBox frame{band.x+screen.geometry.padding,screen.base.y+cardTop(screen,index),screen.geometry.cardWidth,screen.geometry.cardHeight};
-                nlohmann::json previews=nlohmann::json::array();
-                for (const auto& preview:card.previews) if (auto window=preview.window.lock()) {
-                    const auto b=preview.target.copy().translate(frame.pos());
-                    previews.push_back({{"address",std::format("0x{:x}",reinterpret_cast<uintptr_t>(window.get()))},{"x",b.x},{"y",b.y},{"width",b.w},{"height",b.h}});
+        const auto serializeCards = [&](const Screen& scene) {
+            nlohmann::json cards = nlohmann::json::array();
+            for (const auto& card : scene.cards) {
+                if (const auto workspace = card.workspace.lock())
+                {
+                    const size_t index=&card-scene.cards.data();
+                    const auto band=sidebar(scene);
+                    const CBox frame{band.x+scene.geometry.padding,scene.base.y+cardTop(scene,index),scene.geometry.cardWidth,scene.geometry.cardHeight};
+                    nlohmann::json previews=nlohmann::json::array();
+                    for (const auto& preview:card.previews) if (auto window=preview.window.lock()) {
+                        const auto b=preview.target.copy().translate(frame.pos());
+                        previews.push_back({{"address",std::format("0x{:x}",reinterpret_cast<uintptr_t>(window.get()))},{"x",b.x},{"y",b.y},{"width",b.w},{"height",b.h}});
+                    }
+                    cards.push_back({{"workspace",workspaceKey(workspace)},{"name",workspace->displayName()},{"previews_ready",card.previewsReady},{"shift",card.shift},
+                        {"x",frame.x},{"y",frame.y},{"width",frame.w},{"height",frame.h},{"windows",previews}});
                 }
-                cards.push_back({{"workspace",workspaceKey(workspace)},{"name",workspace->displayName()},{"previews_ready",card.previewsReady},{"shift",card.shift},
-                    {"x",frame.x},{"y",frame.y},{"width",frame.w},{"height",frame.h},{"windows",previews}});
+                else if (card.syntheticId > 0)
+                    cards.push_back({{"workspace", card.syntheticId}, {"name", "empty:" + std::to_string(card.syntheticId)}, {"synthetic", true},
+                        {"previews_ready", true}});
             }
-            else if (card.syntheticId > 0)
-                cards.push_back({{"workspace", card.syntheticId}, {"name", "empty:" + std::to_string(card.syntheticId)}, {"synthetic", true},
-                    {"previews_ready", true}});
-        }
+            return cards;
+        };
+        const auto cards = serializeCards(screen);
         const auto prepared = std::ranges::find_if(overviewExitScreens, [&](const auto& candidate) { return candidate.monitor == monitor; });
         const auto owner = stage::overviewRenderOwner(overviewPhaseFor(monitor), prepared != overviewExitScreens.end());
         nlohmann::json preparedCards = nlohmann::json::array();
@@ -4141,7 +4138,7 @@ std::string StageController::Impl::stateJson() const {
                                      {"flights",flights},{"transition_windows", rendered.flights.size()}, {"transition_progress", rendered.flights.empty() ? 1.0 : sampledFlightProgress},
                                      {"sidebar",{{"x",sidebar(screen).x},{"y",sidebar(screen).y},{"width",sidebar(screen).w},{"height",sidebar(screen).h}}},{"desktop_geometry",{{"x",desktop(screen).x},{"y",desktop(screen).y},{"width",desktop(screen).w},{"height",desktop(screen).h}}},{"desktop_width", desktop(screen).w}, {"desktop_height", desktop(screen).h}, {"reservation", screen.geometry.reservation},
                                      {"scroll", screen.scroll}, {"max_scroll", screen.geometry.maxScroll}, {"covered", screen.covered}, {"suspended", screen.suspended},
-                                     {"cards", cards}});
+                                     {"cards", cards}, {"presentation_cards", &rendered == &screen ? cards : serializeCards(rendered)}});
     }
     return dumpStateJson(result) + "\n";
 }
