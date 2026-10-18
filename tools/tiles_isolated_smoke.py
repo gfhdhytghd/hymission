@@ -6,6 +6,7 @@ Logs and the private config stay in --output for reproducibility.
 """
 import argparse
 import json
+import hashlib
 import os
 from pathlib import Path
 import socket
@@ -33,6 +34,10 @@ def main():
     ap.add_argument("--stage-switch-empty-source",action="store_true")
     ap.add_argument("--stage-switch-layout",choices=("dwindle","scrolling"),default="dwindle")
     ap.add_argument("--stage-switch-route",choices=("key","relative","card","swipe","unified","strip"))
+    ap.add_argument("--stage-flight-clip-regression",choices=("off","single","two","three"))
+    ap.add_argument("--stage-flight-clip-observe",action="store_true")
+    ap.add_argument("--stage-flight-clip-route",choices=("key","swipe"))
+    ap.add_argument("--stage-flight-clip-layout",choices=("dwindle","scrolling"),default="dwindle")
     ap.add_argument("--relative-regression",choices=("off","single","two","three"))
     ap.add_argument("--relative-observe",action="store_true")
     ap.add_argument("--presentation-regression",choices=("two","three"))
@@ -63,6 +68,12 @@ def main():
     args = ap.parse_args()
     root = Path(args.output).resolve()
     root.mkdir(parents=True, exist_ok=True)
+    artifacts = {}
+    for name, path in (("plugin", args.plugin), ("fixture", args.fixture), ("hyprland", args.hyprland)):
+        if path:
+            with open(path, "rb") as artifact:
+                artifacts[name] = {"path": str(Path(path).resolve()), "sha256": hashlib.file_digest(artifact, "sha256").hexdigest()}
+    (root / "input-artifacts.json").write_text(json.dumps(artifacts, indent=2))
     runtime = Path(tempfile.mkdtemp(prefix="hmt-"))
     env = os.environ.copy()
     for key in ("HYPRLAND_INSTANCE_SIGNATURE", "WAYLAND_DISPLAY", "DISPLAY", "SWAYSOCK", "DBUS_SESSION_BUS_ADDRESS", "LD_PRELOAD"):
@@ -151,7 +162,7 @@ def main():
 
         for _ in range(100):
             try:
-                state = json.loads(request("j/hymission-stage-state" if (args.default_off_regression or args.stage_animation_profile or args.stage_height_regression or args.focus_reflow_regression or args.stage_switch_regression) else "j/hymission-tiles-state"))
+                state = json.loads(request("j/hymission-stage-state" if (args.default_off_regression or args.stage_animation_profile or args.stage_height_regression or args.focus_reflow_regression or args.stage_switch_regression or args.stage_flight_clip_regression) else "j/hymission-tiles-state"))
                 break
             except (ValueError, OSError):
                 time.sleep(0.1)
@@ -190,6 +201,11 @@ def main():
         if args.stage_switch_regression:
             from tiles_stage_switch_regression import run
             run(args.stage_switch_regression,args.stage_switch_observe,args.stage_switch_route,args.stage_switch_layout,args.stage_switch_empty_source,request,root,env,runtime,processes,handles)
+            return
+        if args.stage_flight_clip_regression:
+            from tiles_stage_flight_clip_regression import run
+            run(args.stage_flight_clip_regression,args.stage_flight_clip_observe,args.stage_flight_clip_route,args.stage_flight_clip_layout,request,root,env,runtime,processes,handles)
+            (root/"configerrors.txt").write_text(request("/configerrors"))
             return
         if args.relative_regression:
             from tiles_relative_regression import run

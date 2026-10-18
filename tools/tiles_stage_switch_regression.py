@@ -130,6 +130,15 @@ def run(case,observe,route_filter,layout,empty_source,request,root,env,runtime,p
                 diff=ImageChops.difference(first,Image.open(frame['pixels']).convert('RGB'))
                 draw=ImageDraw.Draw(diff)
                 for point in (cursor_before,cursor_after):draw.rectangle((point['x']-30,point['y']-30,point['x']+30,point['y']+30),fill=(0,0,0))
+                # FB12 restores native Stage flight stacking across foreign
+                # desktops/columns. Only those real moving footprints may
+                # change neighbor pixels; the dedicated flight raster test
+                # separately verifies that their bodies are actually painted.
+                for sample in (frames[0],frame):
+                    for column in sample['stage']['screens']:
+                        for flight in column.get('flights',[]):
+                            b=flight['frame']
+                            draw.rectangle((b['x']-6,b['y']-40,b['x']+b['width']+6,b['y']+b['height']+40),fill=(0,0,0))
                 for sc in before['screens']:
                     if sc['tile_id'] not in neighbors:continue
                     for region in (sc['desktop_geometry'],sc['sidebar']):
@@ -138,7 +147,7 @@ def run(case,observe,route_filter,layout,empty_source,request,root,env,runtime,p
                         histogram=diff.crop((x,y,x+w,y+h)).convert('L').histogram()
                         changes.append(sum(histogram[9:])/(w*h))
             (root/(name+'-neighbor-pixels.json')).write_text(json.dumps(changes))
-            check(max(changes,default=0)<.002,name+': neighboring desktop/sidebar pixels stay still')
+            check(max(changes,default=0)<.002,name+': neighboring desktop/sidebar pixels outside flight footprints stay still')
         moving=[f for f in frames if any(sc['transition_windows'] for sc in f['stage']['screens'])]
         check(all(abs(v)<.01 for f in moving for w in f['native'] if w['visible'] for v in w['offset']) and
               all(not w['workspace_animated'] and not w['workspace_alpha_animated'] for f in moving for w in f['native'] if w['visible'] or w['workspace'] in (str(source),str(target))),name+': no native slide/fade underneath Stage')

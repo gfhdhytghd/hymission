@@ -3023,6 +3023,15 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
     }};
     if (TilesController::get() && TilesController::get()->available()) {
         for (auto& screen:screens) if (screen.monitor==monitor) { drawingScreen=&screen; drawOne(monitor); }
+        // Complete every column's stationary pane before painting flights.
+        // Otherwise a later column can cut through an earlier column's flight.
+        if (!sidebarProgress || !sidebarProgress(monitor)) {
+            for (auto& screen:screens) if (screen.monitor==monitor) {
+                drawingScreen=&screen;
+                if (auto* visual=visualScreenFor(monitor); visual && hooksReady && !renderBlocked(monitor) && !rendering && g_pHyprOpenGL)
+                    drawFlights(*visual,monitor);
+            }
+        }
         drawingScreen=nullptr;
         drawDragHover(monitor);
         auto* tiles=TilesController::get();
@@ -3231,7 +3240,8 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
     renderContext().m_data.clipBox = previousClip;
     if (progress)
         return;
-    drawFlights(*screen, monitor);
+    if (!TilesController::get() || !TilesController::get()->available())
+        drawFlights(*screen, monitor);
     if (!TilesController::get() || !TilesController::get()->available()) drawDragHover(monitor);
 }
 
@@ -3822,15 +3832,10 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
         const CBox drawClip = !screen.tile && flight.desktopDecorations ? CBox{0, 0, monitor->m_size.x * monitor->m_scale, monitor->m_size.y * monitor->m_scale} : clip;
         const double radius = flight.desktopDecorations ? window->presentation().rounding() :
             flight.fromRadius + (flight.toRadius - flight.fromRadius) * stage::transitionProgress(p, 1);
-        if (clustered(screen) && !flight.edgeTransfer && !flight.dropToCard) {
-            // The moving column owns only its desktop and its left-side band.
-            // A flight from a right-hand tile must not paint through its neighbors.
-            for (auto region:{desktop(screen),sidebar(screen)}) {
-                region.translate(-monitor->m_position).scale(monitor->m_scale);
-                const auto ownClip=region.intersection(drawClip);
-                if (ownClip.w>0 && ownClip.h>0) drawPreview(window,monitor,box(frame),ownClip,radius,viewport,nullptr,flight.desktopDecorations);
-            }
-        } else drawPreview(window, monitor, box(frame), drawClip, radius, viewport, nullptr, flight.desktopDecorations);
+        // Flights use the same output plane as native single-column Stage.
+        // Keep the flight's own interpolated scrolling viewport, not tile or
+        // sidebar scissors belonging to stationary content beneath it.
+        drawPreview(window, monitor, box(frame), drawClip, radius, viewport, nullptr, flight.desktopDecorations);
     }
     renderContext().m_data.clipBox = previousClip;
 }
@@ -4082,7 +4087,8 @@ std::string StageController::Impl::stateJson() const {
         const auto geometryJson=[](const CBox& b) { return nlohmann::json{{"x",b.x},{"y",b.y},{"width",b.w},{"height",b.h}}; };
         for (const auto& flight:rendered.flights) if (auto window=flight.preview.window.lock()) {
             const auto sample=flightFrame(flight,flightProgress(rendered),monitor);
-            flights.push_back({{"workspace",workspaceKey(window->m_workspace)},{"from",geometryJson(flight.from)},{"to",geometryJson(flight.to)},{"frame",geometryJson(box(sample.first))}});
+            flights.push_back({{"workspace",workspaceKey(window->m_workspace)},{"from",geometryJson(flight.from)},{"to",geometryJson(flight.to)},{"frame",geometryJson(box(sample.first))},
+                {"viewport",sample.second ? geometryJson(box(sample.second->box)) : nlohmann::json(nullptr)}});
         }
         result["screens"].push_back({{"monitor", monitor->m_name},{"tile_id",screen.tile},{"active_workspace",screen.active},{"base",{{"x",screen.base.x},{"y",screen.base.y},{"width",screen.base.w},{"height",screen.base.h}}}, {"card_width", screen.geometry.cardWidth}, {"card_height", screen.geometry.cardHeight},
                                      {"overview_render_owner", owner == stage::OverviewRenderOwner::Overview ? "overview" :
