@@ -4169,7 +4169,8 @@ bool OverviewController::shouldRenderWindowHook(const PHLWINDOW& window, const P
     const auto workspace = window ? window->m_workspace : PHLWORKSPACE{};
     const auto workspaceMonitor = workspace ? workspace->m_monitor.lock() : PHLMONITOR{};
     const bool activeWorkspace = workspaceMonitor &&
-        (workspaceMonitor->m_activeWorkspace == workspace || workspaceMonitor->m_activeSpecialWorkspace == workspace);
+        (workspaceMonitor->m_activeWorkspace == workspace || workspaceMonitor->m_activeSpecialWorkspace == workspace ||
+         (TilesController::get() && TilesController::get()->presented(workspace)));
     if (shouldSuppressOverviewExitWindow(m_deactivatePending, rawWindowRenderActive(), window && static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED),
                                         static_cast<bool>(workspace), activeWorkspace))
         return false;

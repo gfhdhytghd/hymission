@@ -50,7 +50,7 @@ class CaptureFramePass final:public IPassElement {
  public:
     std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override {
         if (!recordingFrames || capturedFrames.size()>=180 || !ctx.m_data.currentFB) return {};
-        const auto fb=dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.mainFB);
+        const auto fb=dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.currentFB);
         if (!fb) throw std::runtime_error("private capture requires native GL framebuffer");
         const auto size=fb->m_size;
         CapturedFrame frame{static_cast<int>(size.x),static_cast<int>(size.y),{}, {}};
@@ -60,6 +60,8 @@ class CaptureFramePass final:public IPassElement {
         for (size_t i=0;i<frame.pixels.size()/3;++i) std::copy_n(rgba.data()+i*4,3,frame.pixels.data()+i*3);
         frame.state={{"overview",nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-overview-state","","j"))},
                      {"tiles",nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-tiles-state","","j"))}};
+        frame.state["framebuffer"]={{"current",fb->getFBID()},{"main",dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.mainFB)->getFBID()},{"damage",nlohmann::json::array()}};
+        ctx.m_data.damage.forEachRect([&](const auto& rect) { frame.state["framebuffer"]["damage"].push_back({rect.x1,rect.y1,rect.x2,rect.y2}); });
         frame.state["stage"]=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-stage-state","","j"));
         frame.state["native"]=nlohmann::json::array();
         for (const auto& window:Desktop::windowState()->windows()) {

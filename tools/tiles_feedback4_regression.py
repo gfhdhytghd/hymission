@@ -26,8 +26,16 @@ def run(case,observe,request,root,env,runtime,processes,handles):
         evaluate('hl.plugin.hymission_tiles_test.frame_capture("end",'+json.dumps(str(prefix))+')')
         frames=json.loads(prefix.with_suffix('.json').read_text())
         assert len(frames)>=5,('insufficient rendered frames',name,len(frames))
+        presented=None
         for i,frame in enumerate(frames):
-            image=Image.open(frame['pixels']).convert('RGB');assert image.getextrema()[2][1]>20,('invalid black readback',name,i);image.save(root/f'{name}-{i:02}.png')
+            image=Image.open(frame['pixels']).convert('RGB');assert image.getextrema()[2][1]>20,('invalid black readback',name,i)
+            image.save(root/f'{name}-{i:02}-workbuffer.png')
+            # Outside native damage the workbuffer may be undefined/discarded.
+            # Compose only damaged rectangles, as the actual output does.
+            if presented is None:presented=image.copy()
+            else:
+                for rect in frame['framebuffer']['damage']:presented.paste(image.crop(tuple(rect)),tuple(rect[:2]))
+            presented.save(root/f'{name}-{i:02}.png')
             Path(frame['pixels']).unlink();frame['pixels']=str(root/f'{name}-{i:02}.png')
         prefix.with_suffix('.json').write_text(json.dumps(frames,indent=2))
         subprocess.run(['grim','-o',read('j/monitors')[0]['name'],str(root/(name+'-screencopy.png'))],env=child,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
@@ -87,10 +95,16 @@ def run(case,observe,request,root,env,runtime,processes,handles):
             closed=record(f'{case}-{scope}-stage{stage}-close','hl.plugin.hymission.close()')
             wait('j/hymission-overview-state',lambda s:not s['active'])
             if case!='switch':
-                result.append(dict(stage=stage,scope=scope,open_frames=len(opened),close_frames=len(closed),shadow_interior_run=shadow_runs(opened)))
+                missing=[]
+                for i,frame in enumerate(closed):
+                    im=Image.open(frame['pixels']).convert('RGB')
+                    green=sum(1 for r,g,b in im.crop((970,100,1900,1000)).get_flattened_data() if g>180 and r<80 and b<80)
+                    if green<10000:missing.append(i)
+                result.append(dict(stage=stage,scope=scope,open_frames=len(opened),close_frames=len(closed),shadow_interior_run=shadow_runs(opened),blank_neighbor_frames=missing))
             if case=='switch' and scope=='onlycurrentworkspace':
                 evaluate('hl.config({animations={enabled=false}}); hl.dispatch(hl.dsp.focus({workspace=901})); hl.config({animations={enabled=true}})')
     (root/'observations.json').write_text(json.dumps(result,indent=2))
+    if not observe and case=='close':assert all(not r['blank_neighbor_frames'] for r in result),result
     if not observe and case=='shadow':assert all(r['shadow_interior_run']<=16 for r in result),result
     if not observe and case=='switch':assert all(not r['moved_frames'] and not r['missing_frames'] for r in result),result
     print(('OBSERVED' if observe else 'PASS')+': every-frame tile overview '+case+' '+json.dumps(result))

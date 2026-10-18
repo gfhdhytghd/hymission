@@ -51,3 +51,29 @@ moving frames on the non-focused tile in each Stage-off/on baseline. The fixed
 run records zero moved/missing frames in both cases, including the committed
 state. Evidence: `fb4-baseline-native/switch-stage{0,1}.json` versus
 `fb4-switch-fixed/switch-stage{0,1}.json`, with every-frame PNGs in each directory.
+
+## 2. Non-focused tile flashes during close handoff
+
+`shouldRenderWindowHook` used the physical monitor active workspace to classify
+windows during `m_deactivatePending`. Its exit filter therefore hid the other
+tile's still-presented workspace for the handoff frame. Include presented tile
+workspaces in that existing visibility decision; hidden workspaces remain
+filtered, and tiles-disabled behavior is unchanged.
+
+The final recorder also saves native damage rectangles and raw workbuffer PNGs.
+Undamaged workbuffer contents are not guaranteed to represent the displayed
+output: compose each frame from the prior frame plus the current damaged
+rectangles. Each capture starts on the full-output damage from open/close/pan.
+A separate native screencopy at the settled endpoint is retained for comparison.
+The debug fixture now records actual current framebuffer identity too (equal to
+the main framebuffer in these runs). Raw partial-damage black regions are not
+counted as flashes.
+
+Baseline `fb4-close-before-final` has exactly one fully-damaged blank-neighbor
+frame (index 8) in ws-only close with Stage off, and another in ws-only close
+with Stage on. `fb4-close-after` has zero blank-neighbor frames in all four
+ws-only/forceall × Stage-off/on cases. Native workspace/window alpha stayed one;
+this was an admission/filtering error, not an alpha animation. Every-frame
+native damage/state, reconstructed PNGs, raw PNGs and endpoint screencopies are
+retained in these directories. The regression fails if an occupied non-focused
+tile loses its marker pixels during the close or handoff.
