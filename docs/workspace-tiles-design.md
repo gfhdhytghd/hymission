@@ -198,6 +198,8 @@ tile 内窗口使用真实全局几何，不对普通 surface 输入做截图坐
 
 scrolling 超出 tile 边界的内容先硬限制在 tile，再在**边界内侧**按现有 Stage 样式渐进模糊、渐变透明；不会向相邻 tile 泄漏原 workspace 的窗口像素。使用 `stage::edgeViewport` / `edgeViewportForWindow` 构造左右边缘；仅在对应方向有 scrolling 溢出时启用，垂直 scrolling 同理用 top/bottom。
 
+进入 overview 时，桌面 scrolling 的这条模糊/透明渐变带保留随窗口缩放后的宽度，向窗口越界方向持续平移，直至越过整个窗口；退出时反向。内容、原生边框、阴影合在同一个临时层内经过同一遮罩，阴影保留原生窗口 cutout，不能提前显示完整空框。all/forceall 使用整屏范围；ws overview 的所有者范围从 Stage 压缩后的 tile 平滑过渡至对应 tile，不能先套用最终 allocation 而硬切源桌面。完全不可见的 scrolling 列保留真实布局所在的左/右侧和布局 y，不按 overview 槽位的上下方选择飞入方向。Stage 卡片已有的固定外侧边缘展开规则继续保留。详见 `workspace-tiles-feedback-round13.md`。
+
 复用 `stage_scrolling_desktop_edge_width`（当前默认 32 逻辑像素）与 `stage_scrolling_preview_edge_width`（16），以及 `src/stage_edge_shader.hpp`、`stage_edge_framebuffer.hpp`、`StageEdgeEffect::draw`。首版不复制 shader、blur 算法或添加第二套边缘调参。宽度按已有逻辑压缩，避免窄 tile 左右 fade 重叠。
 
 将现有捕获/执行 pass 与 effect 所有权抽为 Stage/Tiles/overview 共用的内部服务。特别是 Stage 的 `blurFramebufferThunk` 当前读的是它自己 `edgeEffect.backdrop()`；另建一个 Tiles effect 却不接 backdrop 会让 native blur 读错目标。共享服务须提供当前绘制作用域的 backdrop，并统一 RenderContextScope、RAII 状态恢复和 scratch lease；嵌套调用不能复用仍被引用的 scratch。每个窗口一次有效 edge 处理，Stage 与 tile 边界先合成最终 viewport，避免两次 blur/fade。

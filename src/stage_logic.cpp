@@ -365,9 +365,10 @@ EdgeFrame interpolateEdgeFrame(const EdgeFrame& from, const EdgeFrame& to, doubl
     const auto mixRect = [&](const Rect& a, const Rect& b) {
         return Rect{mix(a.x, b.x), mix(a.y, b.y), mix(a.width, b.width), mix(a.height, b.height)};
     };
-    const EdgeFrame frame{edgeViewport(mixRect(from.viewport.box, to.viewport.box), mix(from.viewport.left, to.viewport.left),
+    EdgeFrame frame{edgeViewport(mixRect(from.viewport.box, to.viewport.box), mix(from.viewport.left, to.viewport.left),
                                       mix(from.viewport.right, to.viewport.right), mix(from.viewport.top, to.viewport.top),
                                       mix(from.viewport.bottom, to.viewport.bottom)), mixRect(from.clip, to.clip)};
+    frame.viewport.revealDecorations=from.viewport.revealDecorations || to.viewport.revealDecorations;
     // Releasing/reversing a gesture retains the sampled outer edge, even when
     // the other endpoint is the unrestricted overview output.
     return pinOuterEdge(frame, from.viewport.fixedOuterEdge != FixedOuterEdge::None ? from.viewport : to.viewport);
@@ -392,6 +393,26 @@ EdgeFrame overviewRevealFrame(const OverviewEndpoint& endpoint, const Rect& curr
         return Rect{mapped.x + (output.x - mapped.x) * reveal, mapped.y + (output.y - mapped.y) * reveal,
                     mapped.width + (output.width - mapped.width) * reveal, mapped.height + (output.height - mapped.height) * reveal};
     };
+    if (endpoint.viewport.revealDecorations) {
+        // Preserve the band's width in window coordinates. Translating it past
+        // the window (including shadow support) reveals clear pixels behind it;
+        // shrinking the band in place would prematurely release decorations.
+        auto bounds=unfold(endpoint.viewport.box);
+        const double pad=128*std::max(sx,sy);
+        const auto& source=endpoint.viewport.box;
+        const double left=current.x+(source.x-endpoint.window.x)*sx;
+        const double right=current.x+(source.x+source.width-endpoint.window.x)*sx;
+        const double l=endpoint.viewport.left*sx, r=endpoint.viewport.right*sx;
+        const double endLeft=std::min(output.x-l,current.x-pad-l);
+        const double endRight=std::max(output.x+output.width+r,current.x+current.width+pad+r);
+        bounds.x=left+(endLeft-left)*reveal;
+        bounds.width=right+(endRight-right)*reveal-bounds.x;
+        auto viewport=edgeViewport(bounds,l,r,endpoint.viewport.top*sy,endpoint.viewport.bottom*sy);
+        viewport.revealDecorations=true;
+        auto clip=unfold(endpoint.clip);
+        clip.x=bounds.x; clip.width=bounds.width;
+        return {viewport,clip};
+    }
     const auto viewport = edgeViewport(unfold(endpoint.viewport.box), endpoint.viewport.left * sx * (1 - reveal),
                                       endpoint.viewport.right * sx * (1 - reveal), endpoint.viewport.top * sy * (1 - reveal),
                                       endpoint.viewport.bottom * sy * (1 - reveal));

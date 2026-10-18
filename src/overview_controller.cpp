@@ -2927,6 +2927,7 @@ std::string OverviewController::overviewStateJson() const {
             item["stageTransitionClip"] = rectJson(frame->clip);
             item["stageTransitionViewport"] = rectJson(frame->viewport.box);
             item["stageTransitionEdges"] = {frame->viewport.left, frame->viewport.right, frame->viewport.top, frame->viewport.bottom};
+            item["stageTransitionSharedDecorations"] = frame->viewport.revealDecorations;
         }
         if (managed.group) {
             item["groupSize"] = managed.group->size();
@@ -4498,9 +4499,14 @@ void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, co
         }
         std::optional<CBox> shadowClip;
         if (auto* tiles=TilesController::get();workspaceScoped() && !m_stripPreviewContext.active && tiles && tiles->enabled(monitor)) {
-            const auto tile=tiles->preferredTile(window->m_workspace,monitor);
-            for (const auto& view:tiles->views(monitor)) if (view.id==tile)
-                shadowClip=toBox(rectToMonitorRenderLocal({view.allocation.x,view.allocation.y,view.allocation.w,view.allocation.h},monitor));
+            const auto transition=stageTransitionFrame(window,monitor);
+            if (transition && transition->viewport.revealDecorations)
+                shadowClip=toBox(rectToMonitorRenderLocal(transition->clip,monitor));
+            else {
+                const auto tile=tiles->preferredTile(window->m_workspace,monitor);
+                for (const auto& view:tiles->views(monitor)) if (view.id==tile)
+                    shadowClip=toBox(rectToMonitorRenderLocal({view.allocation.x,view.allocation.y,view.allocation.w,view.allocation.h},monitor));
+            }
         }
         renderContext().m_pass.add(makeUnique<OverviewShadowPassElement>(
             shadowBox, shadowRound, static_cast<float>(roundingPower), renderRange, shadowColor, previewAlpha,
@@ -8904,9 +8910,21 @@ Rect OverviewController::offscreenAnimationEndpointFor(const ManagedWindow& wind
     if (!window.targetMonitor)
         return baseRect;
 
-    const Rect bounds = makeRect(window.targetMonitor->m_position.x, window.targetMonitor->m_position.y, window.targetMonitor->m_size.x, window.targetMonitor->m_size.y);
+    Rect bounds = makeRect(window.targetMonitor->m_position.x, window.targetMonitor->m_position.y, window.targetMonitor->m_size.x, window.targetMonitor->m_size.y);
+    if (auto* tiles=TilesController::get();tiles && tiles->enabled(window.targetMonitor)) {
+        const auto id=tiles->preferredTile(window.window?window.window->m_workspace:nullptr,window.targetMonitor);
+        for (const auto& view:tiles->views(window.targetMonitor)) if (view.id==id)
+            bounds={view.allocation.x,view.allocation.y,view.allocation.w,view.allocation.h};
+    }
     if (bounds.width <= 1.0 || bounds.height <= 1.0)
         return baseRect;
+
+    if (window.window && !window.isFloating && scrollingAlgorithmForWorkspace(window.window->m_workspace)) {
+        const auto& layout=window.naturalGlobal;
+        if (layout.x+layout.width<=bounds.x || layout.x>=bounds.x+bounds.width)
+            return {layout.x+layout.width<=bounds.x?bounds.x-baseRect.width:bounds.x+bounds.width,
+                    layout.y,baseRect.width,baseRect.height};
+    }
 
     Vector2D direction;
     const auto workspace = window.window ? window.window->m_workspace : PHLWORKSPACE{};
@@ -8946,7 +8964,7 @@ void OverviewController::applyOffscreenExitAnimationEndpoints(State& state, cons
     for (auto& window : state.windows) {
         window.stageClosingEndpoint.reset();
         if (const auto destination = StageController::overviewDestination(window.window, activeWorkspaceOverride, window.exitGlobal)) {
-            if (stage::overviewEndpointVisible(*destination)) {
+            if (stage::overviewEndpointVisible(*destination) || destination->viewport.revealDecorations) {
                 window.exitGlobal = destination->window;
                 window.stageClosingEndpoint = destination;
             } else
@@ -10339,15 +10357,32 @@ std::optional<stage::EdgeFrame> OverviewController::stageTransitionFrame(const P
     const Rect output{monitor->m_position.x, monitor->m_position.y, monitor->m_size.x, monitor->m_size.y};
     const auto transform = windowTransformFor(window, monitor);
     const Rect current = transform ? transform->targetGlobal : currentPreviewRect(*managed);
+    const auto constrain = [&](stage::EdgeFrame frame) {
+        auto* tiles=TilesController::get();
+        if (!frame.viewport.revealDecorations || !workspaceScoped() || !tiles || !tiles->enabled(monitor)) return frame;
+        const auto id=tiles->preferredTile(window->m_workspace,monitor);
+        for (const auto& view:tiles->views(monitor)) if (view.id==id) {
+            const auto desktop=StageController::tilePresentation(monitor,view.allocation).value_or(view.allocation);
+            const Rect owner=lerpRect({desktop.x,desktop.y,desktop.w,desktop.h},
+                                     {view.allocation.x,view.allocation.y,view.allocation.w,view.allocation.h},progress);
+            auto& v=frame.viewport.box;
+            const double right=std::min(v.x+v.width,owner.x+owner.width);
+            v.x=std::max(v.x,owner.x); v.width=std::max(0.0,right-v.x);
+            const auto clipped=toBox(frame.clip).intersection(toBox(owner));
+            frame.clip={clipped.x,clipped.y,clipped.w,clipped.h};
+            break;
+        }
+        return frame;
+    };
     if (managed->stageTransitionStart && opening == managed->stageTransitionOpening) {
         const double t = m_state.phase == Phase::ClosingSettle ? 0 :
             stage::overviewTransitionProgress(managed->stageTransitionStartProgress, progress, opening);
         const auto from = stage::overviewRevealFrame(*managed->stageTransitionStart, current, output, 0);
         const auto to = !opening && endpoint ? stage::overviewRevealFrame(*endpoint, current, output, 0) :
             stage::EdgeFrame{stage::edgeViewport(output, 0, 0), output};
-        return stage::interpolateEdgeFrame(from, to, t);
+        return constrain(stage::interpolateEdgeFrame(from, to, t));
     }
-    return endpoint ? std::optional{stage::overviewRevealFrame(*endpoint, current, output, progress)} : std::nullopt;
+    return endpoint ? std::optional{constrain(stage::overviewRevealFrame(*endpoint, current, output, progress))} : std::nullopt;
 }
 
 double OverviewController::visualProgress() const {
@@ -11752,7 +11787,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
             const auto origin = StageController::overviewOrigin(window.window);
             if (!origin)
                 continue;
-            if (stage::overviewEndpointVisible(*origin)) {
+            if (stage::overviewEndpointVisible(*origin) || origin->viewport.revealDecorations) {
                 window.stageOpeningGlobal = origin->window;
                 window.stageOpeningEndpoint = origin;
             } else

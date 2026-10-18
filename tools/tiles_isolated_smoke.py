@@ -27,6 +27,8 @@ def main():
     ap.add_argument("--fixture")
     ap.add_argument("--integration", action="store_true")
     ap.add_argument("--default-off-regression", action="store_true")
+    ap.add_argument("--overview-reveal-regression",choices=("reference","off","single","two","three"))
+    ap.add_argument("--overview-reveal-observe",action="store_true")
     ap.add_argument("--top-clip-regression", action="store_true")
     ap.add_argument("--animation-regression", action="store_true")
     ap.add_argument("--stage-switch-regression",choices=("off","single","two","three"))
@@ -162,7 +164,7 @@ def main():
 
         for _ in range(100):
             try:
-                state = json.loads(request("j/hymission-stage-state" if (args.default_off_regression or args.stage_animation_profile or args.stage_height_regression or args.focus_reflow_regression or args.stage_switch_regression or args.stage_flight_clip_regression) else "j/hymission-tiles-state"))
+                state = json.loads(request("j/hymission-stage-state" if (args.overview_reveal_regression or args.default_off_regression or args.stage_animation_profile or args.stage_height_regression or args.focus_reflow_regression or args.stage_switch_regression or args.stage_flight_clip_regression) else "j/hymission-tiles-state"))
                 break
             except (ValueError, OSError):
                 time.sleep(0.1)
@@ -176,6 +178,10 @@ def main():
         else:
             raise RuntimeError("nested output did not appear")
         expected_width = monitors[0]["width"] / monitors[0].get("scale", 1)
+        if args.overview_reveal_regression:
+            from tiles_overview_reveal_regression import run
+            run(args.overview_reveal_regression,args.overview_reveal_observe,request,root,env,runtime,processes,handles)
+            return
         if args.stage_height_regression:
             from tiles_stage_height_regression import run
             run(args.stage_height_regression,args.stage_height_observe,request,root,env,runtime,processes,handles)

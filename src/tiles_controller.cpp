@@ -542,7 +542,13 @@ struct TilesController::Impl {
             }
         }
         const auto presentation=overview?StageController::overviewPresentation(w,mon):std::nullopt;
-        if (presentation) clipBox=clipBox.intersection(CBox{presentation->clip.x,presentation->clip.y,presentation->clip.width,presentation->clip.height});
+        if (presentation) {
+            // The overview owns the moving Stage-desktop -> tile boundary.
+            // Applying the final tile allocation immediately would hard-cut
+            // the compressed desktop before its edge band can move with it.
+            if (presentation->viewport.revealDecorations) clipBox=CBox{mon->m_position,mon->m_size};
+            clipBox=clipBox.intersection(CBox{presentation->clip.x,presentation->clip.y,presentation->clip.width,presentation->clip.height});
+        }
         else if (!overview && !w->isFloating() && !Fullscreen::controller()->isFullscreen(w)) if (const auto desktop=StageController::nativeDesktop(w->m_workspace)) {
             // Reapply 21fdcdd's native vertical-shadow rule at the outer tile
             // pass too: layout reserved/gap bounds must not trim CSD/decorations.
@@ -559,7 +565,7 @@ struct TilesController::Impl {
         }
         const Rect clip{clipBox.x,clipBox.y,clipBox.w,clipBox.h};
         auto edge=stage::edgeViewport(clip,0,0);
-        if (presentation) edge=stage::edgeViewport(clip,presentation->viewport.left,presentation->viewport.right,presentation->viewport.top,presentation->viewport.bottom);
+        if (presentation) edge=presentation->viewport;
         const auto algorithm=w->m_workspace->space()->algorithm();
         const bool scrolling=algorithm && algorithm->tiledAlgo() && Layout::Supplementary::algoMatcher()->getNameForTiledAlgo(&typeid(*algorithm->tiledAlgo()))=="scrolling";
         if (!overview && scrolling && !w->isFloating() && !Fullscreen::controller()->isFullscreen(w)) {

@@ -558,6 +558,7 @@ struct StageController::Impl {
     void motion();
     bool installHooks();
     bool ensureEdgeHook();
+    bool ensureOverviewRenderHook();
     void releaseHooks();
     void afterRecheck(Layout::CSpace* space);
     bool endDrag(Layout::Supplementary::CDragStateController* drag);
@@ -1389,7 +1390,8 @@ bool StageController::Impl::installHooks() {
         scrollFocusHook = hooks::create(handle, scrollFocus, hooks::target(&scrollFocusThunk));
         hitHook = hooks::create(handle, hit, hooks::target(&windowAtThunk));
         roundingHook = hooks::create(handle, rounding, hooks::target(&roundingThunk));
-        renderWindowHook = hooks::create(handle, reinterpret_cast<void*>(renderWindow), hooks::target(&renderWindowThunk));
+        if (!renderWindowHook)
+            renderWindowHook = hooks::create(handle, reinterpret_cast<void*>(renderWindow), hooks::target(&renderWindowThunk));
         surfaceBoxHook = hooks::create(handle, surfaceBox, hooks::target(&surfaceBoxThunk));
         surfaceVisibleHook = hooks::create(handle, surfaceVisible, hooks::target(&surfaceVisibleThunk));
         surfaceUVHook = hooks::create(handle, surfaceUV, hooks::target(&surfaceUVThunk));
@@ -1422,6 +1424,18 @@ bool StageController::Impl::installHooks() {
             LOG(Log::WARN, "[hymission] Stage edge blur hook unavailable; retaining hard clipping");
     }
     return hooksReady;
+}
+
+bool StageController::Impl::ensureOverviewRenderHook() {
+    if (!renderWindowHook) {
+        const auto source=hooks::findSymbol(HyprlandAPI::findFunctionsByName(handle,"renderWindow"),
+            "Render::IHyprRenderer::renderWindow(Render::CRenderContext&, Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>, Render::SWindowRenderPresentation const&, std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&, bool, Render::eRenderPassMode, bool, bool)",true);
+        if (!source) return false;
+        renderWindowHook=hooks::create(handle,source,hooks::target(&renderWindowThunk));
+    }
+    if (!renderWindowHook || !renderWindowHook->hook()) return false;
+    (void)ensureEdgeHook();
+    return true;
 }
 
 bool StageController::Impl::ensureEdgeHook() {
@@ -3576,7 +3590,7 @@ void StageController::Impl::captureWindowPasses(Render::IHyprRenderer* renderer,
                 for (auto& pass : passes) pass->discard(renderContext());
         }, box(clip).translate(-monitor->m_position)));
     };
-    if (overviewClip) {
+    if (overviewClip && !viewport.revealDecorations) {
         // Overview's outer shadow is a separate decoration, not window content.
         // Keep native pass order, but do not put it inside the card's hard crop
         // or edge-gradient framebuffer. Its pass owns its output clipping.
@@ -4319,13 +4333,29 @@ std::optional<stage::OverviewEndpoint> StageController::Impl::cardEndpoint(const
     return std::nullopt;
 }
 
+static std::optional<stage::OverviewEndpoint> nativeOverviewEndpoint(const PHLWINDOW& window, std::optional<Rect> frame = {}) {
+    if (!window || !window->mapped() || !scrollingTiled(window) || !window->m_workspace || window->onSpecialWorkspace() ||
+        static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED)) return {};
+    const auto mon=window->m_monitor.lock();
+    if (!mon) return {};
+    auto* tiles=TilesController::get();
+    const auto view=tiles?tiles->view(window->m_workspace):std::nullopt;
+    if (!view && mon->m_activeWorkspace!=window->m_workspace) return {};
+    const auto bounds=view?view->allocation:CBox{mon->m_position,mon->m_size};
+    const auto target=frame.value_or(rect(CBox{window->positionAnimation()->value()+window->m_workspace->m_renderOffset->value(),window->sizeAnimation()->value()}));
+    auto edge=stage::edgeViewportForWindow(stage::edgeViewport(rect(bounds),setting("stage_scrolling_desktop_edge_width",32),setting("stage_scrolling_desktop_edge_width",32)),target);
+    edge.revealDecorations=true;
+    return stage::OverviewEndpoint{target,edge,rect(bounds)};
+}
+
 std::optional<stage::OverviewEndpoint> StageController::overviewOrigin(const PHLWINDOW& window) {
     auto* self = Impl::instance;
+    if (self && !self->enabled) return nativeOverviewEndpoint(window);
     if (!self || !self->enabled || self->visibility <= 0 || self->blocked() || !window || static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED))
         return std::nullopt;
     const auto monitor = window->m_monitor.lock();
     auto* screen = TilesController::get() && TilesController::get()->available()?self->screenForWorkspace(window->m_workspace):self->visualScreenFor(monitor);
-    if (!monitor || !screen || !screen->geometry.enabled() || screen->covered || screen->suspended)
+    if (!monitor || !screen || (!screen->geometry.enabled() && !self->clustered(*screen)) || screen->covered || screen->suspended)
         return std::nullopt;
     const Rect output = rect(CBox{monitor->m_position,monitor->m_size});
     if (self->dragHover && self->dragHover->window == window) {
@@ -4343,7 +4373,10 @@ std::optional<stage::OverviewEndpoint> StageController::overviewOrigin(const PHL
         if (!scrollingTiled(window))
             return std::nullopt;
         const Rect frame = rect(CBox{window->positionAnimation()->value() + window->m_workspace->m_renderOffset->value(), window->sizeAnimation()->value()});
-        const auto edge = stage::edgeViewportForWindow(stage::desktopShadowViewport(self->desktopViewport(*screen), output), frame);
+        auto viewport=stage::desktopShadowViewport(self->desktopViewport(*screen),output);
+        if (self->clustered(*screen)) viewport.right=viewport.left=setting("stage_scrolling_desktop_edge_width",32)*self->visibility;
+        auto edge = stage::edgeViewportForWindow(viewport, frame);
+        edge.revealDecorations=true;
         return stage::OverviewEndpoint{frame, edge, rect(box(edge.box).intersection(box(output)))};
     }
     return self->cardEndpoint(*screen, window, false);
@@ -4360,7 +4393,7 @@ void StageController::prepareOverviewExit(const std::vector<PHLMONITOR>& monitor
         const auto monitor=scene.monitor.lock();
         if (std::ranges::find(monitors,monitor)==monitors.end()) continue;
         const auto* source=&scene;
-        if (!monitor || !source || !source->geometry.enabled())
+        if (!monitor || !source || (!source->geometry.enabled() && !self->clustered(*source)))
             continue;
         const auto target = activeWorkspace && activeWorkspace->m_monitor == monitor && (!source->tile || TilesController::get()->preferredTile(activeWorkspace,monitor)==source->tile) ? activeWorkspace : self->screenWorkspace(*source);
         if (!target || (target->type() == Workspace::eWorkspaceType::SPECIAL))
@@ -4403,11 +4436,12 @@ void StageController::prepareOverviewExit(const std::vector<PHLMONITOR>& monitor
 
 std::optional<stage::OverviewEndpoint> StageController::overviewDestination(const PHLWINDOW& window, const PHLWORKSPACE& activeWorkspace, const Rect& desktopWindow) {
     auto* self = Impl::instance;
+    if (self && !self->enabled) return nativeOverviewEndpoint(window,desktopWindow);
     if (!self || !self->enabled || !window || !window->mapped() || static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED) || !window->m_workspace || window->onSpecialWorkspace())
         return std::nullopt;
     const auto monitor = window->m_workspace->m_monitor.lock();
     const auto* destination = self->preparedOverviewScreen(monitor,TilesController::get() && TilesController::get()->available()?TilesController::get()->preferredTile(window->m_workspace,monitor):0);
-    if (!monitor || !destination || destination->shown <= 0 || !destination->geometry.enabled())
+    if (!monitor || !destination || destination->shown <= 0 || (!destination->geometry.enabled() && !self->clustered(*destination)))
         return std::nullopt;
     const auto target = destination->tile?self->screenWorkspace(*destination):
         activeWorkspace && activeWorkspace->m_monitor==monitor?activeWorkspace:monitor->m_activeWorkspace;
@@ -4417,7 +4451,10 @@ std::optional<stage::OverviewEndpoint> StageController::overviewDestination(cons
         if (!scrollingTiled(window))
             return std::nullopt;
         const Rect output = rect(CBox{monitor->m_position,monitor->m_size});
-        const auto edge = stage::edgeViewportForWindow(stage::desktopShadowViewport(self->desktopViewport(*destination), output), desktopWindow);
+        auto viewport=stage::desktopShadowViewport(self->desktopViewport(*destination),output);
+        if (self->clustered(*destination)) viewport.right=viewport.left=setting("stage_scrolling_desktop_edge_width",32)*self->visibility;
+        auto edge = stage::edgeViewportForWindow(viewport, desktopWindow);
+        edge.revealDecorations=true;
         return stage::OverviewEndpoint{desktopWindow, edge, rect(box(edge.box).intersection(box(output)))};
     }
     return self->cardEndpoint(*destination, window, true);
@@ -4643,6 +4680,11 @@ void StageController::setOverviewRendering(bool active) {
         return;
     Impl::overviewRendering = active;
     auto* self = Impl::instance;
+    // Overview's tape reveal also needs the shared native window layer while
+    // Stage is disabled. Install only that renderer hook, not Stage input or
+    // layout hooks, and reuse it if Stage is enabled later.
+    if (self && active && !self->ensureOverviewRenderHook())
+        LOG(Log::ERR,"[hymission] overview edge renderer hook unavailable");
     if (!self || !self->hooksReady)
         return;
     for (auto* hook : {self->surfaceBoxHook, self->surfaceVisibleHook, self->surfaceUVHook}) {

@@ -83,6 +83,7 @@ class CaptureFramePass final:public IPassElement {
         CapturedFrame frame{static_cast<int>(size.x),static_cast<int>(size.y),{}, {}};
         // Sample animation phase before synchronous GPU readback advances time.
         const auto stageBeforeReadback=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-stage-state","","j"));
+        const auto overviewBeforeReadback=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-overview-state","","j"));
         const auto readbackStart=std::chrono::steady_clock::now();
         std::vector<uint8_t> rgba(frame.width*frame.height*4);
         if (!readFramePixels(*fb,rgba)) throw std::runtime_error("private framebuffer readback failed");
@@ -90,7 +91,7 @@ class CaptureFramePass final:public IPassElement {
         for (size_t i=0;i<frame.pixels.size()/3;++i) std::copy_n(rgba.data()+i*4,3,frame.pixels.data()+i*3);
         auto tiles=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-tiles-state","","j"),nullptr,false);
         if (tiles.is_discarded()) tiles={{"enabled",false},{"tiles",nlohmann::json::array()}};
-        frame.state={{"overview",nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-overview-state","","j"))}, {"tiles",tiles}};
+        frame.state={{"overview",overviewBeforeReadback}, {"tiles",tiles}};
         frame.state["monitor"]=ctx.m_data.pMonitor->m_name;
         frame.state["framebuffer"]={{"current",fb->getFBID()},{"main",dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.mainFB)->getFBID()},{"damage",nlohmann::json::array()}};
         ctx.m_data.damage.forEachRect([&](const auto& rect) { frame.state["framebuffer"]["damage"].push_back({rect.x1,rect.y1,rect.x2,rect.y2}); });

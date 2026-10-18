@@ -334,6 +334,25 @@ int main() {
         ok &= expect(std::isfinite(frame.clip.x) && frame.clip.width > 0 && frame.clip.height > 0,
             "reveal remains valid throughout scaling on a negatively positioned monitor");
     }
+    // Desktop tape edges instead translate at constant window-relative width,
+    // carrying decorations and returning along the identical closing path.
+    for (const bool right : {false,true}) {
+        OverviewEndpoint tape{{-100,30,300,240},edgeViewport({0,0,600,480},32,32),{0,0,600,480}};
+        if (right) tape.window.x=500;
+        tape.viewport.revealDecorations=true;
+        double previous=right?-1e9:1e9;
+        for (int step=0;step<=100;++step) {
+            const double p=step/100.;
+            const auto frame=overviewRevealFrame(tape,tape.window,{0,0,600,480},p);
+            const double edge=right?frame.viewport.box.x+frame.viewport.box.width:frame.viewport.box.x;
+            ok &= expect(frame.viewport.revealDecorations && near(frame.viewport.left,32) && near(frame.viewport.right,32),
+                "desktop reveal retains one band for contents and decorations");
+            ok &= expect(right?edge>=previous:edge<=previous,"desktop band moves outwards without shrinking in place");
+            previous=edge;
+            if (step==100) ok &= expect(near(edgeOpacity(frame.viewport,tape.window.x+1,tape.window.y+120),1) &&
+                near(edgeOpacity(frame.viewport,tape.window.x+tape.window.width-1,tape.window.y+120),1),"finished reveal is clear across the whole window");
+        }
+    }
     // The card's outside fade stays at its original x as the window unfolds.
     // Vertical motion and the opposite (desktop seam) edge keep their path.
     for (const bool right : {false, true}) {
