@@ -176,13 +176,19 @@ def run(case,request,root,env,runtime,processes,handles):
                 if c['workspace']['id'] not in (503,504):continue
                 evaluate('hl.plugin.hymission.tile_focus("right"); hl.plugin.hymission_tiles_test.window("focus",'+json.dumps(c['address'])+'); hl.plugin.hymission.tile_move_window("left")')
             stage=wait('j/hymission-stage-state',lambda s:len(s['screens'])==2 and s['screens'][0]['cards'] and not s['screens'][1]['cards'])
+            time.sleep(.25);stage=read('j/hymission-stage-state')
             left,right=stage['screens'];band=right['sidebar']
             assert abs(band['width']-left['sidebar']['width'])<1,('empty column lost its fixed position/width',stage)
             source=next(c for c in left['cards'] if c['workspace']==502)
-            w=max(source['windows'],key=lambda w:w['x'])
-            x=w['x']+w['width']/2;y=w['y']+w['height']/2
+            visible=[w for w in source['windows'] if min(w['x']+w['width'],source['x']+source['width'])>max(w['x'],source['x'])]
+            w=max(visible,key=lambda w:min(w['x']+w['width'],source['x']+source['width'])-max(w['x'],source['x']))
+            x=(max(w['x'],source['x'])+min(w['x']+w['width'],source['x']+source['width']))/2;y=w['y']+w['height']/2
             dx=band['x']+band['width']/2;dy=band['y']+100
-            pointer('press',x,y);pointer('move',dx,dy);pointer('release',dx,dy)
+            (root/'empty-column-before.json').write_text(json.dumps(stage,indent=2))
+            pointer('press',x,y);pointer('move',dx,dy)
+            (root/'empty-column-held.json').write_text(request('j/hymission-stage-state'))
+            pointer('release',dx,dy)
+            (root/'empty-column-after.json').write_text(request('j/hymission-stage-state'))
             target=right['active_workspace']
             wait('j/clients',lambda cs:next(c for c in cs if c['address']==w['address'])['workspace']['id']==target)
             assert len(tiles())==2

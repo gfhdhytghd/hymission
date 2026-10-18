@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <optional>
+#include <limits>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -468,6 +469,7 @@ struct StageController::Impl {
     Vector2D pressPoint;
     PHLMONITORREF pressMonitor;
     std::size_t pressCard = 0;
+    std::vector<WorkspaceKey> tileCardOrder;
     bool reorderArmed = false;
     std::unordered_set<uint32_t> swallowedButtons;
     PHLWINDOWREF lastDragged;
@@ -500,6 +502,41 @@ struct StageController::Impl {
         return screen.cards.empty() ? std::nullopt : std::optional<std::size_t>(index);
     }
 
+    Screen* tileColumn(const Vector2D& point) {
+        Screen* nearest=nullptr;
+        double distance=std::numeric_limits<double>::max();
+        for (auto& screen:screens) {
+            if (!screen.tile || screen.covered || screen.suspended || !enabled || blocked() || visibility<=0) continue;
+            const auto band=sidebar(screen);
+            // Include the complete shared sidebar, its padding and inter-column gaps.
+            if (point.y<band.y || point.y>=band.y+band.h) continue;
+            const double d=std::abs(point.x-band.middle().x);
+            if (d<distance) { nearest=&screen; distance=d; }
+        }
+        if (!nearest) return nullptr;
+        double left=std::numeric_limits<double>::max(),right=-left;
+        for (const auto& screen:screens) if (screen.monitor==nearest->monitor && screen.tile) {
+            const auto band=sidebar(screen); left=std::min(left,band.x); right=std::max(right,band.x+band.w);
+        }
+        return point.x>=left && point.x<right?nearest:nullptr;
+    }
+    void orderTileCard(const PHLWORKSPACE& workspace,Screen& screen,const Vector2D& point) {
+        std::vector<WorkspaceKey> order;
+        // Retain existing global order while inserting relative to the target column.
+        for (const auto& column:screens) for (const auto& card:column.cards)
+            if (cardID(card)!=workspaceKey(workspace)) order.push_back(cardID(card));
+        std::ranges::stable_sort(order,[&](auto a,auto b) {
+            return std::ranges::find(tileCardOrder,a)-tileCardOrder.begin()<std::ranges::find(tileCardOrder,b)-tileCardOrder.begin();
+        });
+        auto insertion=order.end();
+        for (size_t i=0;i<screen.cards.size();++i) {
+            if (cardID(screen.cards[i])==workspaceKey(workspace)) continue;
+            const auto at=std::ranges::find(order,cardID(screen.cards[i]));
+            if (point.y<screen.base.y+cardTop(screen,i)+screen.geometry.cardHeight/2) { insertion=at; break; }
+            if (at!=order.end()) insertion=at+1;
+        }
+        order.insert(insertion,workspaceKey(workspace)); tileCardOrder=std::move(order);
+    }
     Impl(HANDLE h, std::function<bool()> suspended, std::function<stage::OverviewPhase(const PHLMONITOR&)> phase,
          std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> frame, std::function<std::optional<double>(const PHLMONITOR&)> slide,
          std::function<bool()> suppressInput) :
@@ -1642,6 +1679,10 @@ std::vector<StageController::Impl::Card> StageController::Impl::cardsForWorkspac
         return ida > 0 ? ida < idb :
             (a.workspace.lock() && b.workspace.lock() && a.workspace.lock()->displayName() < b.workspace.lock()->displayName());
     });
+    if (auto* tiles=TilesController::get(); tiles && tiles->available() && !tileCardOrder.empty())
+        std::ranges::stable_sort(targets,[&](const Card& a,const Card& b) {
+            return std::ranges::find(tileCardOrder,cardID(a))-tileCardOrder.begin()<std::ranges::find(tileCardOrder,cardID(b))-tileCardOrder.begin();
+        });
     return targets;
 }
 
@@ -2094,19 +2135,15 @@ void StageController::Impl::pointer() {
         return;
     const auto point = g_pInputManager->getMouseCoordsInternal();
     auto [hoveredScreen, index] = hit(point);
-    // An empty column still represents its tile's active desktop for transfer
-    // drops, even when stage_show_active hides the active workspace card.
-    if (!hoveredScreen && (tileDragCandidate || tileDragPending) && visibility>0 && !blocked())
-        for (auto& column:screens) if (clustered(column) && !column.covered && !column.suspended && sidebar(column).containsPoint(point)) {
-            hoveredScreen=&column;
-            break;
-        }
+    if (auto* column=tileColumn(point); column && (tileDragCandidate || tileDragPending)) {
+        hoveredScreen=column; index=cardHit(*column,point);
+    }
     if (tileDragCandidate && !tileDragPending && !thumbnailDrag &&
         !(g_pInputManager->getModsFromAllKBs() & Input::HL_MODIFIER_META) && point.distanceSq(tileDragPress)>64) {
         auto* tiles=TilesController::get();
         const auto columnMonitor=hoveredScreen?hoveredScreen->monitor.lock():nullptr;
         const auto column=hoveredScreen?hoveredScreen->tile:0;
-        if (tiles && tiles->transferDestination(tileDragMonitor.lock(),tileDragSource,point,columnMonitor,column)) {
+        if (!hoveredScreen && tiles && tiles->transferDestination(tileDragMonitor.lock(),tileDragSource,point,columnMonitor,column)) {
             if (legacyTileOwner) { tiles->release(TilesController::Owner::StageDrag); legacyTileOwner=false; }
             std::vector<PHLWINDOW> members;
             for (const auto& ref:tileDragMembers) if (auto w=ref.lock();w && w->m_workspace==tileDragWorkspace) members.push_back(w);
@@ -2120,8 +2157,7 @@ void StageController::Impl::pointer() {
     }
     if (tileDragPending) {
         auto* tiles=TilesController::get();
-        if (!tiles || !tiles->updateTransfer(point,hoveredScreen?hoveredScreen->monitor.lock():nullptr,hoveredScreen?hoveredScreen->tile:0,
-                hoveredScreen && index?hoveredScreen->cards[*index].workspace.lock():nullptr)) {
+        if (!tiles || !tiles->updateTransfer(hoveredScreen?tileDragOrigin.middle():point)) {
             tileDragPending=false; tileDragWorkspace.reset(); tileDragClicked.reset();
         } else {
             if (auto mon=tileDragMonitor.lock()) g_pHyprRenderer->damageMonitor(mon);
@@ -2316,6 +2352,36 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
     // Preserve native Stage's suppressed-event passthrough, including its
     // retained swallowed release, when the tiles capability is disabled.
     if (!tileMode && suppressed) return;
+    if (tileMode && !suppressed && event.button==BTN_LEFT && event.state==WL_POINTER_BUTTON_STATE_RELEASED &&
+        (tileDragCandidate || tileDragPending) && g_pInputManager->getMouseCoordsInternal().distanceSq(tileDragPress)>64) {
+        const auto point=g_pInputManager->getMouseCoordsInternal();
+        if (auto* column=tileColumn(point)) {
+            auto* controller=TilesController::get();
+            if (tileDragPending) controller->finishTransfer(false);
+            if (legacyTileOwner) controller->release(TilesController::Owner::StageDrag);
+            auto workspace=tileDragWorkspace.lock();
+            bool success=false;
+            if (workspace && !cancelDrop) {
+                const bool crossing=column->tile!=tileDragSource || column->monitor!=tileDragMonitor;
+                if (crossing && tileDragClicked) {
+                    const auto index=cardHit(*column,point);
+                    auto destination=index?column->cards[*index].workspace.lock():screenWorkspace(*column);
+                    if (!destination && index && column->cards[*index].syntheticId>0)
+                        destination=ensureWorkspace(column->monitor.lock(),column->cards[*index].syntheticId);
+                    std::vector<PHLWINDOW> members;
+                    for (auto& ref:tileDragMembers) if (auto w=ref.lock()) members.push_back(w);
+                    success=controller->moveWindows(members,column->monitor.lock(),column->tile,destination);
+                } else {
+                    success=!crossing || controller->moveWorkspace(workspace,column->monitor.lock(),column->tile);
+                    if (success) orderTileCard(workspace,*column,point);
+                }
+            }
+            dropTrace={{{"event","tile_sidebar_drop"},{"success",success},{"tile",column->tile},{"workspace",workspace?workspaceKey(workspace):0}}};
+            tileDragPending=tileDragCandidate=legacyTileOwner=false; tileDragMembers.clear();
+            tileDragWorkspace.reset(); tileDragClicked.reset(); pressed.reset(); pressedSyntheticId=0; reorderArmed=false;
+            swallowedButtons.erase(event.button); info.cancelled=true; forceRefresh=true; request(); return;
+        }
+    }
     if (event.button==BTN_LEFT && event.state==WL_POINTER_BUTTON_STATE_RELEASED) {
         if (legacyTileOwner) {
             if (auto* tiles=TilesController::get()) tiles->release(TilesController::Owner::StageDrag);
@@ -2462,7 +2528,7 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
             } else if (workspace) {
                 for (const auto& w:Desktop::windowState()->windows()) if (w->mapped() && w->m_workspace==workspace && !static_cast<bool>(w->m_state & Desktop::View::WINDOW_STATE_PINNED)) members.push_back(w);
             }
-            tileDragCandidate=!members.empty();
+            tileDragCandidate=workspace!=nullptr;
             tileDragMembers.clear();
             for (const auto& w:members) tileDragMembers.push_back(w);
             tileDragOrigin=cardBox; tileDragPress=g_pInputManager->getMouseCoordsInternal();

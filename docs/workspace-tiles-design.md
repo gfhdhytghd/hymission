@@ -235,7 +235,7 @@ Stage 采用 **每个 tile 一列、所有列集中在整个 monitor 最左侧**
 
 Stage 缩略图可以跨列左右拖入另一 tile 的 active workspace，也可以落在其桌面区域；单窗口缩略图移动窗口，workspace/stage 组缩略图移动组内全部成员，保持组关系。目标为空白/已呈现 workspace 的区别在预览阶段确定。source workspace 不被销毁，未移动的窗口保持原位。
 
-单 tile 时从 Stage sidebar 拖出缩略图到桌面左/右半区，可预览原地 Split View：在落点侧新建 tile，源桌面保留另一侧；两个 tile 时同样在目标 tile 的左/右半拆出第三个，三个时不再提供 split 落点。桌面落点规则为：单 tile 的两半、来源 tile 的两半，或其他 tile 的外侧 20% 区域提供 split；其他 tile 的中部以及 sidebar 列提供移动落点。预览明确展示最终动作。新增宽度受 tile_min_width 限制；预览不满足条件时显示无效落点，不能松手后偷偷改变其他 tile。若目的仅为向已有 tile 移动，预览明确为该 tile 的桌面 drop，不创建额外 tile。
+单 tile 时从 Stage sidebar 拖出缩略图到桌面左/右半区，可预览原地 Split View：在落点侧新建 tile，源桌面保留另一侧；两个 tile 时同样在目标 tile 的左/右半拆出第三个，三个时不再提供 split 落点。桌面落点规则为：单 tile 的两半、来源 tile 的两半，或其他 tile 的外侧 20% 区域提供 split；其他 tile 的中部提供桌面移动落点。sidebar 始终先按所在列解析重排，工作区卡片跨列只转移整个 workspace 的归属和顺序，不合并其中窗口；同列重排不改变窗口 workspace，单个窗口跨列的空白落点进入该列的 active workspace。详见 `workspace-tiles-feedback-round6.md`。预览明确展示最终动作。新增宽度受 tile_min_width 限制；预览不满足条件时显示无效落点，不能松手后偷偷改变其他 tile。若目的仅为向已有 tile 移动，预览明确为该 tile 的桌面 drop，不创建额外 tile。
 
 平时不绘制 tile 边界线，边界命中区仍支持拖动调整宽度。拖动缩略图时绘制半透明目标区域与分割线，反馈最终新/旧 tile 的几何。松手前 Esc、拖回原 sidebar 缩略图、锁屏、源窗口消失、断屏或拓扑 generation 变化均取消。取消不创建 workspace，不改变 binding/窗口/历史。drop 先验证完整计划和源成员，再调用与 tile_add / 窗口移动相同的事务；失败回滚新 workspace、几何和焦点。
 

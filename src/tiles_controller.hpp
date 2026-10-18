@@ -35,6 +35,7 @@ class TilesController {
     bool presented(const PHLWORKSPACE&) const;
     bool focus(const PHLMONITOR&, tiles::Id, bool warp = false);
     bool activate(const PHLMONITOR&, tiles::Id, const PHLWORKSPACE&, bool swap = false);
+    bool moveWorkspace(const PHLWORKSPACE&, const PHLMONITOR&, tiles::Id);
     bool moveWindow(const PHLWINDOW&, const PHLMONITOR&, tiles::Id);
     bool moveWindows(const std::vector<PHLWINDOW>&, const PHLMONITOR&, tiles::Id, const PHLWORKSPACE&);
     bool busy() const;

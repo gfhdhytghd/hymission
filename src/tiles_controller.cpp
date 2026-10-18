@@ -1262,6 +1262,27 @@ bool TilesController::moveWindow(const PHLWINDOW& w, const PHLMONITOR& mon, tile
     Desktop::focusState()->fullWindowFocus(w, Desktop::FOCUS_REASON_KEYBIND);
     return true;
 }
+bool TilesController::moveWorkspace(const PHLWORKSPACE& ws,const PHLMONITOR& mon,tiles::Id id) {
+    auto* o=m->output(mon);
+    if (!m->ready || !o || !ws || ws->m_monitor!=mon || ws->type()==Workspace::eWorkspaceType::SPECIAL || locked()) return false;
+    auto draft=o->model;
+    auto state=draft.state();
+    const auto target=draft.index(id);
+    if (!target) return false;
+    const auto key=workspaceKey(ws);
+    // Moving a visible workspace exchanges display slots, never its windows.
+    if (const auto source=draft.presented(key); source && *source!=*target)
+        std::swap(state.tiles[*source].workspace,state.tiles[*target].workspace);
+    for (auto& tile:state.tiles) std::erase(tile.history,key);
+    state.tiles[*target].history.insert(state.tiles[*target].history.begin(),key);
+    if (!draft.restore(state,draft.state().generation)) return false;
+    const auto previous=m->homes.find(key);
+    const auto saved=previous==m->homes.end()?std::optional<std::pair<PHLMONITORREF,tiles::Id>>{}:previous->second;
+    m->homes[key]={mon,id};
+    if (m->publish(*o,std::move(draft),{},nullptr,false)) return true;
+    if (saved) m->homes[key]=*saved; else m->homes.erase(key);
+    return false;
+}
 bool TilesController::moveWindows(const std::vector<PHLWINDOW>& windows,const PHLMONITOR& mon,tiles::Id id,const PHLWORKSPACE& destination) {
     auto* o=m->output(mon);
     if (!m->ready || !o || windows.empty() || !o->model.index(id) || !destination || destination->m_monitor!=mon || destination->type()==Workspace::eWorkspaceType::SPECIAL || locked()) return false;

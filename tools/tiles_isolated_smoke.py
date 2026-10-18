@@ -28,6 +28,8 @@ def main():
     ap.add_argument("--default-off-regression", action="store_true")
     ap.add_argument("--top-clip-regression", action="store_true")
     ap.add_argument("--animation-regression", action="store_true")
+    ap.add_argument("--stage-drop-regression",choices=("off","single","two","three"))
+    ap.add_argument("--stage-drop-observe",action="store_true")
     ap.add_argument("--stage-height-regression",choices=("off","single","two","three"))
     ap.add_argument("--stage-height-observe",action="store_true")
     ap.add_argument("--stage-animation-profile", action="store_true")
@@ -171,6 +173,11 @@ def main():
             from tiles_gesture_lifecycle_regression import run
             run(request,root)
             assert child.poll() is None, "compositor exited during gesture regression"
+            (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
+        if args.stage_drop_regression:
+            from tiles_stage_drop_regression import run
+            run(args.stage_drop_regression,args.stage_drop_observe,request,root,env,runtime,processes,handles)
             (root/"configerrors.txt").write_text(request("/configerrors"))
             return
         if args.feedback4_regression:
@@ -378,7 +385,7 @@ def main():
             def source_preview(state,address=None):
                 return next((sc,c,w) for sc in state["screens"] for c in sc["cards"] for w in c.get("windows",[]) if (address is None or w["address"]==address))
             stage=stage_ready(1)
-            # Same-column actions retain their original Stage paths. Keep an
+            # Single-tile clicks/Meta keep native paths; plain reorders preserve identity. Keep an
             # empty active card beside a populated hidden stage for reordering.
             original_ws=tiles_state()[0]["activeWorkspace"]["id"]
             evaluate(f'hl.workspace_rule({{workspace="{original_ws}",persistent=true}}); hl.dispatch(hl.dsp.focus({{workspace=77}})); hl.plugin.hymission_tiles_test.refresh()')
@@ -408,7 +415,7 @@ def main():
             assert reorder["reorder_armed"] and not reorder["tile_transfer_active"]
             pointer("release",destination["x"]+0.5,destination["y"]+destination["height"]/2)
             (root/"same-column-after.json").write_text(request("j/hymission-stage-state"))
-            wait_json("j/clients",lambda cs:all(any(v["address"]==address and v["workspace"]["id"]==77 for v in cs) for address in source_members),"same-column-reorder")
+            wait_json("j/clients",lambda cs:all(any(v["address"]==address and v["workspace"]["id"]==c["workspace"] for v in cs) for address in source_members),"same-column-reorder-preserves-identity")
             stage=stage_ready(1); sc,c,w=source_preview(stage)
             before_meta=tiles_state()
             evaluate('hl.plugin.hymission_tiles_test.meta(true)')
