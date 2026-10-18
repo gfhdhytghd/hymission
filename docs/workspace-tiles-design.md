@@ -250,6 +250,8 @@ Tiles/Stage/overview 共用一个交互 owner（类型区分 resize、workspace 
 
 ### 7.2 Stage 可见时的 workspace 集成动画（FB10）
 
+FB16：多 tile 的桌面 flight 端点在左右两侧都保留原生 tile 的模糊/透明渐变带；不能在飞行末段把非 sidebar 朝向一边的渐变缩成硬切。单 tile 和 tiles 关闭时继续保留原有单侧 Stage 语义。该 viewport 政策独立于 FB14 的原生 work area 缩窄和 FB15 的完整卡片孔径/原生窗口端点。
+
 Stage 完全打开、未被 overview/special workspace 暂挂时，键盘 workspace action、相对 selector、Stage 卡片点击和 unified/四指 workspace swipe 都由 Stage 持有窗口动画：旧桌面收回本列卡片，新卡片展开到该 tile 桌面。activation 仍提交真实 workspace/history/归属事务；在首个渲染帧前同步准备 flight，原生 workspace slide/fade 不在其下同时运行。Stage 隐藏时保留原生 tile 动画；单 tile 和 tiles 关闭时沿用 pre-tiles Stage 曲线、时长、端点与跟手/松手逻辑，不额外强制原生滑动。
 
 每次 swipe 固定 monitor + tile ID，候选直接复用 §5.1 的归属/边界解析。Stage 初始化原生 gesture session 后保留唯一 `Swipe` owner，Tiles 不再为同一手势建立第二份 native slide。visual scene、卡片、frame state、commit/cancel/settle 都按这个 tile 选取，不因物理 monitor 相同而复用到其他列。新 workspace 的创建仍由 activation 提交；取消只回到原端点，不发布 binding。

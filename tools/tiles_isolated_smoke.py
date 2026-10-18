@@ -27,7 +27,10 @@ def main():
     ap.add_argument("--fixture")
     ap.add_argument("--integration", action="store_true")
     ap.add_argument("--default-off-regression", action="store_true")
+    ap.add_argument("--stage-edge-observe",action="store_true")
+    ap.add_argument("--stage-edge-regression",choices=("off","single","two","three"))
     ap.add_argument("--stage-viewport-regression",choices=("off","single","two","three"))
+    ap.add_argument("--stage-viewport-warmup",action="store_true",help="explicit warmed Stage control; cold capture remains the default")
     ap.add_argument("--stage-viewport-observe",action="store_true")
     ap.add_argument("--stage-viewport-layout",choices=("scrolling","dwindle"),default="scrolling")
     ap.add_argument("--overview-reveal-regression",choices=("reference","off","single","two","three"))
@@ -184,9 +187,13 @@ def main():
         else:
             raise RuntimeError("nested output did not appear")
         expected_width = monitors[0]["width"] / monitors[0].get("scale", 1)
+        if args.stage_edge_regression:
+            from tiles_stage_edge_regression import run
+            run(args.stage_edge_regression,args.stage_edge_observe,request,root,env,runtime,processes,handles)
+            return
         if args.stage_viewport_regression:
             from tiles_stage_viewport_regression import run
-            run(args.stage_viewport_regression,args.stage_viewport_observe,args.stage_viewport_layout,request,root,env,runtime,processes,handles)
+            run(args.stage_viewport_regression,args.stage_viewport_observe,args.stage_viewport_layout,request,root,env,runtime,processes,handles,warmup=args.stage_viewport_warmup)
             return
         if args.overview_reveal_regression:
             from tiles_overview_reveal_regression import run

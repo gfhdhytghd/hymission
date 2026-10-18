@@ -148,6 +148,11 @@ struct EdgeViewport {
     bool revealDecorations = false;
 };
 EdgeViewport edgeViewport(const Rect& box, double left, double right, double top = 0, double bottom = 0);
+// Multi-tile native desktops own two horizontal seams. Stage flights must
+// retain both when handing back to the native tile scene.
+inline EdgeViewport desktopEdgeViewport(const Rect& box, double width, bool right, bool tiled) {
+    return edgeViewport(box, tiled || !right ? width : 0, tiled || right ? width : 0);
+}
 EdgeViewport desktopShadowViewport(const EdgeViewport& viewport, const Rect& output);
 EdgeViewport edgeViewportForWindow(const EdgeViewport& viewport, const Rect& window);
 double edgeOpacity(const EdgeViewport& viewport, double x, double y);

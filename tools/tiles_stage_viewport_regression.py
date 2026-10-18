@@ -35,7 +35,7 @@ def validate_camera(root):
     (root/'camera-validation.json').write_text(json.dumps(result,indent=2));return result
 
 
-def run(case,observe,layout,request,root,env,runtime,processes,handles):
+def run(case,observe,layout,request,root,env,runtime,processes,handles,warmup=False):
     results=[]
     def evaluate(code):
         reply=request('/eval '+code)
@@ -97,6 +97,13 @@ def run(case,observe,layout,request,root,env,runtime,processes,handles):
         prefix.with_suffix('.json').write_text(json.dumps(frames,indent=2));return frames
     for address in centers:evaluate(f'hl.plugin.hymission_tiles_test.window("focus","{address}")')
     time.sleep(.2)
+    if warmup:
+        # Explicit steady-state control; the default still records cold startup.
+        evaluate('hl.plugin.hymission.stage_open()')
+        wait('j/hymission-stage-state',lambda s:s['visibility_progress']==1)
+        evaluate('hl.plugin.hymission.stage_close()')
+        wait('j/hymission-stage-state',lambda s:s['visibility_progress']==0)
+        time.sleep(.2)
     before=snapshot('before')
     evaluate('hl.config({animations={enabled=true}})')
     opened=record('opening','hl.plugin.hymission.stage_open()')

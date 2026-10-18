@@ -139,6 +139,13 @@ int main() {
         const auto right = reservedWorkArea(native, 240, progress, true);
         ok &= expect(near(right.x, native.x) && near(right.width, native.width - 240 * progress), "right sidebar also narrows the scrolling sizing viewport");
     }
+    for (const bool right : {false,true}) {
+        const hymission::Rect desktop{240,0,520,720};
+        const auto tiled=desktopEdgeViewport(desktop,32,right,true);
+        const auto single=desktopEdgeViewport(desktop,32,right,false);
+        ok &= expect(near(tiled.left,32) && near(tiled.right,32), "Stage tile flights retain both native desktop edge bands");
+        ok &= expect(near(single.left,right?0:32) && near(single.right,right?32:0), "single Stage retains its sidebar-facing band");
+    }
     // Lifecycle regression: A's old sidebar must never cover B's predicted
     // sidebar during the zero-progress frame or deferred overview teardown.
     ok &= expect(overviewRenderOwner(OverviewPhase::Inactive, false) == OverviewRenderOwner::Stage,

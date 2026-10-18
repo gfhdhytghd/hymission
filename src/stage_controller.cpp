@@ -3490,7 +3490,7 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
                         auto endpoint=screen; endpoint.geometry=oldGeometry; endpoint.right=oldRight;
                         const auto area = clustered(screen)?rect(desktop(endpoint)):stage::desktopArea(rect(screen.base), oldGeometry, oldRight);
                         const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 32) * visibility : 0;
-                        flight.fromViewport = stage::edgeViewport(area, oldRight ? 0 : width, oldRight ? width : 0);
+                        flight.fromViewport = stage::desktopEdgeViewport(area, width, oldRight, clustered(screen));
                     } else
                         flight.fromViewport = miniatureView(oldCards, oldGeometry, oldScroll, oldRight);
                 }
@@ -3522,7 +3522,7 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
 
 stage::EdgeViewport StageController::Impl::desktopViewport(const Screen& screen) const {
     const double width = blurFramebufferHook ? setting("stage_scrolling_desktop_edge_width", 32) * visibility : 0;
-    return stage::edgeViewport(rect(desktop(screen)), screen.right ? 0 : width, screen.right ? width : 0);
+    return stage::desktopEdgeViewport(rect(desktop(screen)), width, screen.right, clustered(screen));
 }
 
 CBox StageController::Impl::previewFootprint(const PHLWINDOW& window,const CBox& target) const {
@@ -4118,10 +4118,14 @@ std::string StageController::Impl::stateJson() const {
                 preparedCards.push_back(cardID(card));
         nlohmann::json flights=nlohmann::json::array();
         const auto geometryJson=[](const CBox& b) { return nlohmann::json{{"x",b.x},{"y",b.y},{"width",b.w},{"height",b.h}}; };
+        // One IPC snapshot must not mix per-flight geometry with a later clock
+        // sample, especially when capture or a busy machine delays this loop.
+        const double sampledFlightProgress=flightProgress(rendered);
         for (const auto& flight:rendered.flights) if (auto window=flight.preview.window.lock()) {
-            const auto sample=flightFrame(flight,flightProgress(rendered),monitor);
+            const auto sample=flightFrame(flight,sampledFlightProgress,monitor);
             flights.push_back({{"workspace",workspaceKey(window->m_workspace)},{"from",geometryJson(flight.from)},{"to",geometryJson(flight.to)},{"frame",geometryJson(box(sample.first))},
-                {"viewport",sample.second ? geometryJson(box(sample.second->box)) : nlohmann::json(nullptr)}});
+                {"viewport",sample.second ? geometryJson(box(sample.second->box)) : nlohmann::json(nullptr)},
+                {"viewport_edges",sample.second ? nlohmann::json{sample.second->left,sample.second->right,sample.second->top,sample.second->bottom} : nlohmann::json(nullptr)}});
         }
         result["screens"].push_back({{"monitor", monitor->m_name},{"tile_id",screen.tile},{"active_workspace",screen.active},{"base",{{"x",screen.base.x},{"y",screen.base.y},{"width",screen.base.w},{"height",screen.base.h}}}, {"card_width", screen.geometry.cardWidth}, {"card_height", screen.geometry.cardHeight},
                                      {"overview_render_owner", owner == stage::OverviewRenderOwner::Overview ? "overview" :
@@ -4134,7 +4138,7 @@ std::string StageController::Impl::stateJson() const {
                                      {"sidebar_side", screen.right ? "right" : "left"}, {"sidebar_transition", screen.paneTransition},
                                      {"swipe_active", swipe && swipe->monitor == monitor && swipe->tile==screen.tile},
                                      {"swipe_progress", swipe && swipe->monitor == monitor && swipe->tile==screen.tile ? swipe->progress : 0},
-                                     {"flights",flights},{"transition_windows", rendered.flights.size()}, {"transition_progress", rendered.flights.empty() ? 1.0 : flightProgress(rendered)},
+                                     {"flights",flights},{"transition_windows", rendered.flights.size()}, {"transition_progress", rendered.flights.empty() ? 1.0 : sampledFlightProgress},
                                      {"sidebar",{{"x",sidebar(screen).x},{"y",sidebar(screen).y},{"width",sidebar(screen).w},{"height",sidebar(screen).h}}},{"desktop_geometry",{{"x",desktop(screen).x},{"y",desktop(screen).y},{"width",desktop(screen).w},{"height",desktop(screen).h}}},{"desktop_width", desktop(screen).w}, {"desktop_height", desktop(screen).h}, {"reservation", screen.geometry.reservation},
                                      {"scroll", screen.scroll}, {"max_scroll", screen.geometry.maxScroll}, {"covered", screen.covered}, {"suspended", screen.suspended},
                                      {"cards", cards}});

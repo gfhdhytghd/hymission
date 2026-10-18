@@ -1,4 +1,5 @@
 """Private scrolling overview reveal: pixels, masks and layout-side endpoints."""
+import math
 import json
 import subprocess
 import time
@@ -163,26 +164,37 @@ def run(case, observe, request, root, env, runtime, processes, handles):
                 windows=on['overview']['windows'];other={w['address']:w for w in off['overview']['windows']}
                 stable=all(w['address'] in other and max(abs(w['contentGeometry'][k]-other[w['address']]['contentGeometry'][k]) for k in ('x','y','width','height'))<.1 for w in windows)
                 check(stable,f'{scope}/Stage{stage}: paired shadow control has identical held geometry')
+                sides={side:dict(tested_pixels=0,shadow_pixels_outside_mask=0,outer_right_pixels=0) for side in ('left','right')}
                 for w in windows:
                     client=next((c for c in native if c['address']==w['address']),None)
                     if not client or client['workspace']['id']%2==0:continue
                     box=w['contentGeometry'];clip=w.get('stageTransitionClip')
                     if not clip:continue
-                    for x in range(max(1,int(box['x']-20)),min(a.width-1,int(box['x']+4),int(clip['x']-2))):
-                        for y in range(max(40,int(box['y']+box['height']*.2)),min(a.height-20,int(box['y']+box['height']*.8)),2):
-                            covered=False
-                            for v in windows:
-                                if v['address']==w['address']:continue
-                                vb=v['contentGeometry'];vc=v.get('stageTransitionClip');owner=next((c for c in native if c['address']==v['address']),None)
-                                if vc and owner and owner['workspace']['id']%2 and not (vc['x']<=x<vc['x']+vc['width'] and vc['y']<=y<vc['y']+vc['height']):continue
-                                if vb['x']-30<=x<vb['x']+vb['width']+30 and vb['y']-40<=y<vb['y']+vb['height']+30:covered=True;break
-                            if covered:continue
-                            sampled+=1
-                            if max(abs(u-v) for u,v in zip(a.getpixel((x,y)),bim.getpixel((x,y))))>3:difference+=1
-                observations[-1].setdefault('paired_phases',[]).append(dict(delta=held_delta,shadow_pixels_outside_mask=difference,tested_pixels=sampled))
+                    for side,xs in (
+                        ('left',range(max(1,math.floor(box['x']-20)),min(a.width-1,math.ceil(box['x']+box['width']+20),math.floor(clip['x']-2)))),
+                        ('right',range(max(1,math.floor(box['x']-20),math.ceil(clip['x']+clip['width']+2)),min(a.width-1,math.ceil(box['x']+box['width']+20))))):
+                        for x in xs:
+                            for y in range(max(40,int(box['y']+box['height']*.2)),min(a.height-20,int(box['y']+box['height']*.8)),2):
+                                covered=False
+                                for v in windows:
+                                    if v['address']==w['address']:continue
+                                    vb=v['contentGeometry'];vc=v.get('stageTransitionClip');owner=next((c for c in native if c['address']==v['address']),None)
+                                    if vc and owner and owner['workspace']['id']%2 and not (vc['x']<=x<vc['x']+vc['width'] and vc['y']<=y<vc['y']+vc['height']):continue
+                                    if vb['x']-30<=x<vb['x']+vb['width']+30 and vb['y']-40<=y<vb['y']+vb['height']+30:covered=True;break
+                                if covered:continue
+                                sampled+=1;sides[side]["tested_pixels"]+=1
+                                if side=="right" and client["workspace"]["id"]==901+2*(count-1) and client["at"][0]+client["size"][0]>1280:
+                                    sides[side]["outer_right_pixels"]+=1
+                                if max(abs(u-v) for u,v in zip(a.getpixel((x,y)),bim.getpixel((x,y))))>3:
+                                    difference+=1;sides[side]["shadow_pixels_outside_mask"]+=1
+                observations[-1].setdefault('paired_phases',[]).append(dict(delta=held_delta,shadow_pixels_outside_mask=difference,tested_pixels=sampled,sides=sides))
                 check(difference==0,f'{scope}/Stage{stage}: shadow is absent beyond the moving band')
                 (root/'observations.json').write_text(json.dumps(observations,indent=2))
-    if not observe:validate_exits(root)
+    if not observe:
+        validate_exits(root)
+        if count>1:
+            right=sum(p['sides']['right']['outer_right_pixels'] for o in observations if o['stage']==1 for p in o.get('paired_phases',[]))
+            check(right>0,'Stage-on outer rightmost tile shadow control has actual pixel samples')
     print(('OBSERVED' if observe else 'PASS')+': scrolling overview moving edge band '+case)
 
 
