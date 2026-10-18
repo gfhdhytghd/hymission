@@ -555,6 +555,7 @@ struct StageController::Impl {
     bool endDrag(Layout::Supplementary::CDragStateController* drag);
     void renderStage(eRenderStage stage);
     void draw(const PHLMONITOR& monitor);
+    void drawDragHover(const PHLMONITOR& monitor);
     void drawOne(const PHLMONITOR& monitor);
     void drawFlights(Screen& screen, const PHLMONITOR& monitor);
     void drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, double radius,
@@ -866,7 +867,8 @@ struct StageController::Impl {
         }
         if (!standalone && !ignorePosition && !self->rendering && !self->capturingWindowPasses && !renderContext().m_renderingSnapshot &&
             self->enabled && !self->blocked() && screen && screen->geometry.enabled() && !screen->covered && !screen->suspended &&
-            !monitor->m_activeSpecialWorkspace && window && !unclippedDrag && stage::desktopEdgeApplies(static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED), window->isFloating(),
+            !monitor->m_activeSpecialWorkspace && window && !unclippedDrag &&
+            !(window->isFloating() && TilesController::get() && TilesController::get()->enabled(monitor)) && stage::desktopEdgeApplies(static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED), window->isFloating(),
                 scrollingWorkspace(window->m_workspace), window->onSpecialWorkspace(), Fullscreen::controller()->isFullscreen(window))) {
             const CBox bounds{window->positionAnimation()->value() + window->m_workspace->m_renderOffset->value() + window->presentation().floatingOffset(), window->sizeAnimation()->value()};
             const auto viewport = stage::edgeViewportForWindow(self->desktopViewport(*screen), rect(bounds));
@@ -1892,7 +1894,7 @@ void StageController::Impl::sync() {
         screen->preserveScrollingWidth = preserveWidth;
         screen->active = active;
         const auto mode = activeWorkspace ? Fullscreen::controller()->getFullscreenModes(activeWorkspace).internal : Fullscreen::FSMODE_NONE;
-        const bool cover = stage::coversStrip(mode == Fullscreen::FSMODE_FULLSCREEN ? stage::CoverMode::Fullscreen :
+        const bool cover = (TilesController::get() && TilesController::get()->monitorFullscreen(monitor)) || stage::coversStrip(mode == Fullscreen::FSMODE_FULLSCREEN ? stage::CoverMode::Fullscreen :
                                                mode == Fullscreen::FSMODE_MAXIMIZED ? stage::CoverMode::Maximized : stage::CoverMode::None, maximizeCover);
         const bool changedCover = screen->covered != cover;
         if (changedCover) {
@@ -2916,7 +2918,7 @@ void StageController::Impl::renderStage(eRenderStage stage) {
     if (!enabled || rendering || stagePassQueued)
         return;
     const auto monitor = renderContext().m_data.pMonitor.lock();
-    if (renderBlocked(monitor))
+    if (renderBlocked(monitor) || (TilesController::get() && TilesController::get()->monitorFullscreen(monitor) && !overviewRendering))
         return;
     const auto progress = sidebarProgress ? sidebarProgress(monitor) : std::nullopt;
     if (progress && *progress >= 1.0)
@@ -2934,7 +2936,7 @@ void StageController::Impl::renderStage(eRenderStage stage) {
         CBox bounds{{},monitor->m_size};
         if (!progress && !screen->tile && screen->flights.empty() && !screen->paneTransition && !dragHover)
             bounds=sidebar(*screen).translate(-monitor->m_position);
-        else if (!progress && clustered(*screen) && !dragHover && !TilesController::get()->transferDragging()) {
+        else if (!progress && clustered(*screen) && !dragHover && !TilesController::get()->transferDragging() && !(tileDragCandidate && reorderArmed)) {
             bool first=true,settled=true;
             CBox combined;
             for (const auto& column:screens) if (column.monitor==monitor) {
@@ -2967,10 +2969,13 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
     if (TilesController::get() && TilesController::get()->available()) {
         for (auto& screen:screens) if (screen.monitor==monitor) { drawingScreen=&screen; drawOne(monitor); }
         drawingScreen=nullptr;
+        drawDragHover(monitor);
         auto* tiles=TilesController::get();
-        const auto members=tiles->transferMembers();
-        if (tiles->transferDragging() && !members.empty() && monitor->logicalBox().containsPoint(tiles->transferPoint())) {
-            const auto point=tiles->transferPoint();
+        auto members=tiles->transferMembers();
+        const bool sidebarDrag=tileDragCandidate && reorderArmed && !tileDragPending && !cancelDrop;
+        if (sidebarDrag) for (const auto& ref:tileDragMembers) if (auto window=ref.lock()) members.push_back(window);
+        const auto point=sidebarDrag?g_pInputManager->getMouseCoordsInternal():tiles->transferPoint();
+        if ((tiles->transferDragging() || sidebarDrag) && !members.empty() && monitor->logicalBox().containsPoint(point)) {
             std::vector<WindowInput> inputs;
             for (size_t i=0;i<members.size();++i) if (!members[i]->isHidden()) {
                 const auto b=members[i]->getFullWindowBoundingBox();
@@ -3172,6 +3177,11 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
     if (progress)
         return;
     drawFlights(*screen, monitor);
+    if (!TilesController::get() || !TilesController::get()->available()) drawDragHover(monitor);
+}
+
+void StageController::Impl::drawDragHover(const PHLMONITOR& monitor) {
+    const auto physical=[&](CBox area) { return area.translate(-monitor->m_position).scale(monitor->m_scale); };
     if (dragHover && dragHover->monitor == monitor) {
         if (const auto window = dragHover->window.lock()) {
             const auto frame = dragHoverFrame();
@@ -3180,7 +3190,7 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
             const auto clip = physical(CBox{bounds.x, bounds.y, bounds.width, bounds.height});
             const double radius = dragHover->onDesktop ? window->presentation().rounding() : stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
                 numberSetting("decoration:rounding", 0), box.w, box.h);
-            if (!dragHover->edgeTransfer)
+            if ((TilesController::get() && TilesController::get()->enabled(monitor)) || !dragHover->edgeTransfer)
                 drawPreview(window, monitor, box, clip, radius, std::nullopt, nullptr, dragHover->onDesktop);
             else if (stage::overviewEndpointVisible({frame.window, frame.viewport, frame.viewport.box}))
                 drawPreview(window, monitor, box, clip, radius, frame.viewport, nullptr, dragHover->onDesktop);

@@ -262,10 +262,10 @@ def run(case,request,root,env,runtime,processes,handles):
                 assert any((lambda rgb:rgb[0]>180 and rgb[1]<80)(image.getpixel((px,y))) for y in range(int(c['y']*2),int((w['y']+20)*2))),('CSD header clipped in Stage card',c)
         clients=read('j/clients')
         for sc in s['screens']:
-            b=sc['desktop_geometry'];base=sc['base'];zoom=b['width']/base['width']
-            # Native non-covering scrolling fullscreen uses logicalBox(), not
-            # workArea(). It must see the same scaled monitor as the desktop.
-            top=b['y']-base['y']*zoom;height=1728*zoom
+            b=sc['desktop_geometry'];base=sc['base'];zoom_y=b['height']/base['height']
+            # FB5 preserves native vertical occupancy: horizontal reservation
+            # must not be reused as the logicalBox's vertical scale.
+            top=b['y']-base['y']*zoom_y;height=1728*zoom_y
             c=next(c for c in clients if c['workspace']['id']==sc['active_workspace'])
             assert c['at'][1]>=top-2 and c['at'][1]+c['size'][1]<=top+height+2,('scrolling fullscreen ignored Stage transform',sc,c)
         (root/'stage-hidpi-scrolling-clients.json').write_text(json.dumps(clients,indent=2))

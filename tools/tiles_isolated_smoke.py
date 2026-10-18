@@ -28,6 +28,8 @@ def main():
     ap.add_argument("--default-off-regression", action="store_true")
     ap.add_argument("--top-clip-regression", action="store_true")
     ap.add_argument("--animation-regression", action="store_true")
+    ap.add_argument("--presentation-regression",choices=("two","three"))
+    ap.add_argument("--presentation-observe",action="store_true")
     ap.add_argument("--stage-drop-regression",choices=("off","single","two","three"))
     ap.add_argument("--stage-drop-observe",action="store_true")
     ap.add_argument("--stage-height-regression",choices=("off","single","two","three"))
@@ -173,6 +175,11 @@ def main():
             from tiles_gesture_lifecycle_regression import run
             run(request,root)
             assert child.poll() is None, "compositor exited during gesture regression"
+            (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
+        if args.presentation_regression:
+            from tiles_presentation_regression import run
+            run(args.presentation_regression,args.presentation_observe,request,root,env,runtime,processes,handles)
             (root/"configerrors.txt").write_text(request("/configerrors"))
             return
         if args.stage_drop_regression:
@@ -565,7 +572,10 @@ def main():
                 operation(mode)
                 def inside(cs):
                     w=next(v for v in cs if v["address"]==address)
-                    bounds=desktop_tile(target_tile)
+                    monitor=next(m for m in json.loads(request("j/monitors")) if m["id"]==w["monitor"])
+                    bounds=dict(x=monitor["x"],y=monitor["y"],width=monitor["width"]/monitor["scale"],height=monitor["height"]/monitor["scale"]) if mode=="fullscreen" else desktop_tile(target_tile)
+                    if mode=="fullscreen":
+                        return w["fullscreen"]==2 and all(abs(a-b)<1 for a,b in zip(w["at"]+w["size"],[bounds["x"],bounds["y"],bounds["width"],bounds["height"]]))
                     return w["fullscreen"]>0 and w["at"][0]>=bounds["x"]-1 and w["at"][0]+w["size"][0]<=bounds["x"]+bounds["width"]+1 and w["size"][0]>0
                 fullscreen_clients=wait_json("j/clients",inside,mode+"-geometry")
                 assert [t["activeWorkspace"] for t in tiles_state()]==native_bindings

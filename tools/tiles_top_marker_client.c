@@ -28,7 +28,9 @@ static void paint(void) {
     b->pixels=mmap(NULL,b->bytes,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
     if (b->pixels==MAP_FAILED) exit(2);
     uint32_t* pixels=b->pixels;
-    for (int y=0;y<total;++y) for(int x=0;x<width;++x) pixels[y*width+x]=y<header?0xffff0000:0xff00ff00;
+    const char* color=getenv("HMT_MARKER_COLOR");
+    const uint32_t body=color?(0xff000000 | (uint32_t)strtoul(color,NULL,16)):0xff00ff00;
+    for (int y=0;y<total;++y) for(int x=0;x<width;++x) pixels[y*width+x]=y<header?0xffff0000:body;
     struct wl_shm_pool* pool=wl_shm_create_pool(shm,fd,b->bytes);
     b->buffer=wl_shm_pool_create_buffer(pool,0,width,total,stride,WL_SHM_FORMAT_ARGB8888);
     wl_shm_pool_destroy(pool); close(fd);

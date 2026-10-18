@@ -116,7 +116,7 @@ TileInteraction {
 2. 每个 monitor 的 `m_activeWorkspace` 作为兼容投影，始终等于该 monitor `focusedTileId` 的 workspace。其他 tile 仍 visible；visible 不意味着键盘 activated。seat 全局仍只有一个键盘焦点。
 3. 切换事务只修改目标 tile 的 binding/history/动画，其他 tile 的 workspace、窗口、相机和几何不变。改比例属于显式拓扑修改，可影响相邻 tile。
 4. Fit 模式在 monitor **完整逻辑宽度**上分配正宽度，`Σ width = monitor.width`，连续边界无洞无交叠。分缝线和 hit slop 是叠加层，不额外占宽。
-5. `allocationBox` 覆盖显示器分配区；`layoutBox` 是 allocation 与 monitor 去掉 layer-shell reserved 的可用区相交、再应用 gaps；fullscreen 用 allocation；clip 保证任何内容不越 tile。左/右输出 exclusive zone 只影响与其重叠的 tile。
+5. `allocationBox` 覆盖显示器分配区；`layoutBox` 是 allocation 与 monitor 去掉 layer-shell reserved 的可用区相交、再应用 gaps；maximize 与布局内部 fullscreen 用 allocation；真正的客户端 fullscreen 使用物理 monitor。普通平铺内容裁剪在 tile 内，浮窗和拖动预览使用后述整屏上层。左/右输出 exclusive zone 只影响与其重叠的 tile。
 6. 逻辑布局使用浮点；物理像素的相邻边界从同一组累计边界一次量化，并固定首尾，避免各 tile 独立取整产生漏缝。窄视口、变换和最大整数溢出都需验证。
 7. 活跃/预览/退出动画的可见集合分开记录；预览租约不改 workspace 的永久呈现绑定。空但已绑定的 workspace 有生命周期 lease，不能被空工作区清理自动删掉。
 
@@ -174,16 +174,16 @@ tile 内窗口使用真实全局几何，不对普通 surface 输入做截图坐
 
 ### 5.5 Fullscreen、special、pinned
 
-- **fullscreen 默认限定在 tile allocationBox**；maximize 限定 layoutBox。设置和同步路径都改用同一 viewport 查询；保留客户端 fullscreen 协议状态，不通过临时清 fullscreen 假装支持。按 workspace 保留遮挡顺序和 allowed-over-fullscreen 浮窗，不能让 A 的 fullscreen 覆盖 B。需要 layout 自己处理 fullscreen 的算法也纳入验证。
-- layer-shell 是 monitor 级，不复制 N 个 bar。top layer 是否被 fullscreen 覆盖应按与 fullscreen tile 的交集处理；overlay、锁屏规则继续由核心控制。整屏 fullscreen 不在首版偷偷作为默认行为；未来可加显式 presentation mode。
+- **真正的 fullscreen 覆盖整块物理显示器**，包括所有 tile 与 strip；按原生 sync_fullscreen 规则计算的 internal/client 均为 fullscreen 时，即使请求 layout-aware 也转交默认 monitor handler。maximize、仅 internal fullscreen 和 scrolling 自身全屏列仍限定原 tile。设置、同步、logicalBox、渲染和输入采用相同判定；退出保留原 workspace 与 tile 布局。
+- layer-shell 是 monitor 级，不复制 N 个 bar。真正 fullscreen 期间，top layer 按原生整屏规则隐藏，above-fullscreen/overlay 与锁屏仍由核心控制；内部 fullscreen 才按 tile 交集处理。真正 fullscreen 只提交其 workspace 的场景与 frame callbacks，其他 tile 不做多余窗口渲染。
 - **special workspace 保持 monitor 级覆盖层**，一次画/输入一次；显示时冻结普通 tile 交互/拖缝/swipe，关闭后恢复原 focused tile。显式普通 workspace 切换可遵循 `hide_special_on_workspace_change` 先关闭再路由到该 tile；禁用该选项时返回 special 阻塞错误。special 本身不成为 tile，也不参与相对候选。
-- **pinned 浮窗保持 monitor 级唯一实例**，可以跨 tile 覆盖，位于正常 tile 内容之上；不能因 tile focus 更换而迁移 N 次或重复绘制。焦点落在 pinned 时保留其下最近的 focused tile 作为 workspace 操作上下文，客户端/窗口归属需与 native pin/unpin 规则一致。普通浮窗仍受其 workspace tile clip；unpin 后归入当前 focused tile 的 workspace。
+- **pinned 浮窗保持 monitor 级唯一实例**，可以跨 tile 覆盖，位于正常 tile 内容之上；不能因 tile focus 更换而迁移 N 次或重复绘制。焦点落在 pinned 时保留其下最近的 focused tile 作为 workspace 操作上下文，客户端/窗口归属需与 native pin/unpin 规则一致。普通浮窗也允许跨区显示，按实际中心点归属 workspace；unpin 后先遵循原生 workspace 归属，再按中心点更新。
 
 ## 6. 渲染、边缘、HDR/CM 与性能
 
 ### 6.1 场景组织
 
-每个物理 monitor 的 shell background/bottom 只绘一次；按 tile 的 workspace 场景绘制 tiled、浮窗、popup、fullscreen、fadeout；之后绘 monitor 级 special/pinned/top/overlay，保持原生 z-order。`WORKSPACE_WINDOWS` 是可用的选择基础，但不是“多调 N 次 MONITOR 模式”：后者会重复普通可见窗口和 shell。fullscreen 分支也需按 tile 的 workspace 单独选择。
+每个物理 monitor 的 shell background/bottom 只绘一次；按 tile 的 workspace 场景收集 tiled、popup、内部 fullscreen、fadeout，普通浮窗统一在 tile 内容之后按原生堆叠顺序绘制，pinned 保持在普通浮窗之上；之后由原生绘制 top/overlay 与光标。真正 fullscreen 仅选择其 workspace。`WORKSPACE_WINDOWS` 是可用的选择基础，但不是“多调 N 次 MONITOR 模式”：后者会重复普通可见窗口和 shell。fullscreen 分支也需按 tile 的 workspace 单独选择。
 
 真实窗口由 `CSpace` 重排到 tile 区域，呈现默认 1:1；不把整屏工作区缩成窄图。clip 要落实到 surface、阴影、边框、blur、popup、fadeout 和 pass 可见/不透明区域，不能只设置一次 GL scissor 后假定所有 deferred pass 继承它。tile 外不出现任何未经处理的 workspace 内容。
 
@@ -467,3 +467,24 @@ Tile 的 live renderWindow viewport subscriber 固定在 Stage 外层（priority
 stage_show_active=0 对每个 tile 均生效，已在桌面呈现的 workspace 不再重复出卡片；
 stage_show_active=1 保留显示 active 卡片的行为。空列保留共同列宽和水平顺序，
 可以作为对应 tile active workspace 的拖入目标，不因没有卡片而错投左侧 tile。
+
+
+### FB8：整屏 fullscreen、跨区拖动与浮窗
+
+真正 fullscreen 在所属 workspace 仍被某 tile 展示时持有整屏指针与键盘焦点，
+阻止 hover/tile_focus 将输入送到被遮盖区域；其他 tile 的显式 workspace 绑定可变化，
+但不会缩小或移动 fullscreen。切走 fullscreen 自己的 workspace 后恢复普通多 tile 呈现，
+返回时沿用原生保留的 fullscreen 状态。Stage 所有列一起隐藏；overview 可暂时接管呈现，
+退出后还原真正 fullscreen。
+
+原生拖动仍由原生 drag controller 唯一驱动位置，绘制延迟到整屏末尾，
+位于各 tile 内容、边缘效果及 strip 之上、原生 top/overlay 层与光标之下，不继承源 tile clip。overview 使用现有
+strip 后绘制的单一 ghost；Stage 在所有列完成后只绘制一次 ghost，同列重排也保留
+指针预览。松手或取消后下一帧自动恢复普通层级，锁屏与 snapshot 不走拖动上层。
+
+普通非 pinned 浮窗在各 tile 平铺内容之后、原生 top/overlay 层之前按原生全局堆叠
+顺序绘制，不受 workspace 的 tile clip 限制。归属以当前实际窗口矩形中心所在 tile
+决定（Stage 开启时先逆映射共同桌面变换）；已获焦点的浮窗在同一事务中同步 focused tile，保留实际键盘焦点；移动与调整大小均通过同一窗口移动事务
+转入该 tile 当前 workspace，并保留全局位置和大小。归属 workspace 隐藏时随之隐藏。
+workspace 切换及非交互窗口几何动画、overview/Stage owner、布局内部 fullscreen 和 pinned 窗口不触发
+这一自动归属路径；临时浮起的原生 tiled drag 仍使用既有松手事务。

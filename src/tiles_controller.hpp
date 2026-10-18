@@ -29,6 +29,7 @@ class TilesController {
     std::optional<View> view(const PHLWORKSPACE&) const;
     bool enabled(const PHLMONITOR&) const;
     bool available() const;
+    PHLWINDOW monitorFullscreen(const PHLMONITOR&) const;
     void fail(std::string error);
     bool handleDivider(const IPointer::SButtonEvent&, Event::SCallbackInfo&);
     tiles::Id preferredTile(const PHLWORKSPACE&, const PHLMONITOR&) const;
@@ -37,7 +38,7 @@ class TilesController {
     bool activate(const PHLMONITOR&, tiles::Id, const PHLWORKSPACE&, bool swap = false);
     bool moveWorkspace(const PHLWORKSPACE&, const PHLMONITOR&, tiles::Id);
     bool moveWindow(const PHLWINDOW&, const PHLMONITOR&, tiles::Id);
-    bool moveWindows(const std::vector<PHLWINDOW>&, const PHLMONITOR&, tiles::Id, const PHLWORKSPACE&);
+    bool moveWindows(const std::vector<PHLWINDOW>&, const PHLMONITOR&, tiles::Id, const PHLWORKSPACE&, bool focusTile = false);
     bool busy() const;
     enum class Owner { None, Resize, Swipe, OverviewDrag, StageDrag };
     bool acquire(Owner);

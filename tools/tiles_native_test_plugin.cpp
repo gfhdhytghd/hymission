@@ -1,6 +1,7 @@
 #include "../src/hook_symbols.hpp"
 #include <fstream>
 #include "../src/state_json.hpp"
+#include "../src/workspace_key.hpp"
 // Isolated-test fixture only. Not installed and never loaded in the host session.
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/render/Renderer.hpp>
@@ -321,7 +322,26 @@ int window(lua_State* L) {
     PHLWINDOW window;
     for (const auto& w:Desktop::windowState()->windows()) if (std::format("0x{:x}",reinterpret_cast<uintptr_t>(w.get()))==address) window=w;
     if (!window) return luaL_error(L,"test window not found");
-    if (action=="focus") Desktop::focusState()->fullWindowFocus(window,Desktop::FOCUS_REASON_KEYBIND);
+    if (action=="workspace") {
+        const auto destination=hymission::workspaceForKey(luaL_checkinteger(L,3));
+        if (!destination) return luaL_error(L,"test workspace not found");
+        Desktop::globalWindowController()->moveWindowToWorkspace(window,destination);
+    } else if (action=="place") {
+        const CBox geometry{luaL_checknumber(L,3),luaL_checknumber(L,4),luaL_checknumber(L,5),luaL_checknumber(L,6)};
+        if (window->isFloating()) window->layoutTarget()->space()->algorithm()->setTargetGeom(geometry,window->layoutTarget());
+        else window->layoutTarget()->setPositionGlobal(geometry);
+        window->positionAnimation()->warp(); window->sizeAnimation()->warp();
+        g_pHyprRenderer->damageMonitor(window->m_monitor.lock());
+    } else if (action=="assert-hit") {
+        const Vector2D point{luaL_checknumber(L,3),luaL_checknumber(L,4)};
+        const auto hit=Desktop::viewState()->hitTest().windowAt(point,Desktop::View::ALLOW_FLOATING | Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS);
+        if (hit!=window) return luaL_error(L,"pointer did not hit expected window");
+    } else if (action=="layout-fullscreen") {
+        Fullscreen::controller()->setFullscreenMode(window,Fullscreen::FSMODE_FULLSCREEN,Fullscreen::FSMODE_FULLSCREEN,true);
+    } else if (action=="internal-fullscreen" || action=="layout-internal-fullscreen") {
+        const auto result=Config::Actions::fullscreenWindow(Fullscreen::FSMODE_FULLSCREEN,Fullscreen::FSMODE_NONE,action=="layout-internal-fullscreen",window);
+        if (!result) return luaL_error(L,"native internal fullscreen action failed");
+    } else if (action=="focus") Desktop::focusState()->fullWindowFocus(window,Desktop::FOCUS_REASON_KEYBIND);
     else if (action=="reset_width") {
         Desktop::focusState()->fullWindowFocus(window,Desktop::FOCUS_REASON_KEYBIND);
         const auto algorithm=window->layoutTarget()->space()->algorithm();

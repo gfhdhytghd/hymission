@@ -36,6 +36,8 @@ inline std::string_view lookup(std::string_view key) {
     if (key == "setFullscreenFadeAnimation") return "Animation::Workspace::setFullscreenFadeAnimation(Hyprutils::Memory::CSharedPointer<Workspace::CHLWorkspace>, Animation::Workspace::eAnimationType)";
     if (key == "renderLayer") return "Render::IHyprRenderer::renderLayer(Render::CRenderContext&, Hyprutils::Memory::CSharedPointer<Desktop::View::CLayerSurface>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>, std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&, bool, bool)";
     if (key == "layerSurfaceAt") return "Desktop::CViewHitTester::layerSurfaceAt(Hyprutils::Math::Vector2D const&, std::vector<Hyprutils::Memory::CWeakPointer<Desktop::View::CLayerSurface>, std::allocator<Hyprutils::Memory::CWeakPointer<Desktop::View::CLayerSurface> > >*, Hyprutils::Math::Vector2D*, Hyprutils::Memory::CSharedPointer<Desktop::View::CLayerSurface>*, bool) const";
+    if (key == "setFullscreenMode") return "Fullscreen::CFullscreenController::setFullscreenMode(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, std::optional<Fullscreen::eFullscreenMode>, std::optional<Fullscreen::eFullscreenMode>, std::optional<bool>, Fullscreen::eFullscreenMutationContext)";
+    if (key == "dragBegin") return "Layout::Supplementary::CDragStateController::dragBegin(Hyprutils::Memory::CSharedPointer<Layout::ITarget>, eMouseBindMode, std::optional<Layout::eRectCorner>, bool)";
     if (key == "dragEnd") return "Layout::Supplementary::CDragStateController::dragEnd()";
     if (key == "logicalBox") return "Monitor::CMonitor::logicalBox() const";
     if (key == "scrollRecalculate") return "Layout::Tiled::SScrollingData::recalculate(bool)";
