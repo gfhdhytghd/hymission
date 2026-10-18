@@ -4,10 +4,10 @@ from pathlib import Path
 import subprocess
 import time
 import itertools
-from PIL import Image
+from PIL import Image, ImageChops
 
 
-def run(case,observe,request,root,env,runtime,processes,handles):
+def run(case,observe,request,root,env,runtime,processes,handles,three=False):
     def evaluate(code):
         result=request('/eval '+code)
         assert result.strip()=='ok',(code,result)
@@ -71,6 +71,28 @@ def run(case,observe,request,root,env,runtime,processes,handles):
             processes.append(subprocess.Popen([str(binary)],env=child,stdout=log,stderr=subprocess.STDOUT))
             wait('j/clients',lambda cs:len(cs)==count+1)
     evaluate('hl.dispatch(hl.dsp.focus({workspace=901})); hl.plugin.hymission.tile_add({workspace="903"}); hl.dispatch(hl.dsp.focus({workspace=904})); hl.dispatch(hl.dsp.focus({workspace=903})); hl.plugin.hymission.tile_focus("left")')
+    if three:evaluate('hl.plugin.hymission.tile_add({workspace="904"}); hl.plugin.hymission.tile_focus("left"); hl.plugin.hymission.tile_focus("left")')
+    evaluate('hl.gesture({fingers=4,direction="vertical",action="workspace"}); hl.config({gestures={workspace_swipe_invert=false,workspace_swipe_distance=300,workspace_swipe_cancel_ratio=.1,workspace_swipe_min_speed_to_force=0},plugin={hymission={hover_expand_scale=1,overview_focus_follows_mouse=0}}})')
+    def compare_neighbors(before,frames):
+        neighbors={w['address']:w['contentGeometry'] for w in before['windows'] if w['tile_id']!=1}
+        focused={w['address']:w['contentGeometry'] for w in before['windows'] if w['tile_id']==1}
+        moved=[];missing=[];moving_focus=[];pixel_changes=[]
+        first_image=Image.open(frames[0]["pixels"]).convert("RGB")
+        for i,f in enumerate(frames):
+            by={w['address']:w['contentGeometry'] for w in f['overview'].get('windows',[])}
+            for address,box in neighbors.items():
+                if address not in by:missing.append(i);continue
+                if max(abs(by[address][k]-v) for k,v in box.items())>1:moved.append(i)
+            if any(address in by and max(abs(by[address][k]-v) for k,v in box.items())>5 for address,box in focused.items()):moving_focus.append(i)
+            current=Image.open(f['pixels']).convert('RGB');changed=0
+            for tile in f['tiles']['tiles']:
+                if tile['id']==1:continue
+                region=(int(tile['x']+10),100,int(tile['x']+tile['width']-10),1050)
+                r,g,b=ImageChops.difference(current.crop(region),first_image.crop(region)).split()
+                hist=ImageChops.lighter(ImageChops.lighter(r,g),b).histogram();changed+=sum(hist[3:])
+            pixel_changes.append(changed)
+        assert len(moving_focus)>=3,('focused tile never animated',moving_focus)
+        return dict(moved_frames=sorted(set(moved)),missing_frames=sorted(set(missing)),moving_focus_frames=len(moving_focus),changed_neighbor_pixels=max(pixel_changes))
     result=[]
     for stage in (0,1):
         evaluate(f'hl.config({{animations={{enabled=false}},plugin={{hymission={{stage_enabled={stage},stage_transition_ms=0}}}}}}); hl.plugin.hymission.stage_'+('open' if stage else 'close')+'()')
@@ -80,18 +102,17 @@ def run(case,observe,request,root,env,runtime,processes,handles):
             opened=record(f'{case}-{scope}-stage{stage}-open',f'hl.plugin.hymission.open("{scope}")')
             wait('j/hymission-overview-state',lambda s:s['phase']=='active')
             if case=='switch' and scope=='onlycurrentworkspace':
-                before=overview();neighbors={w['address']:w['contentGeometry'] for w in before['windows'] if w['tile_id']==2}
-                assert neighbors
-                # Native workspace dispatch while overview is active, rather than a
-                # fabricated visual offset; exercises the real transition owner.
+                before=overview()
                 frames=record(f'switch-stage{stage}', 'hl.dispatch(hl.dsp.focus({workspace=902}))',.7)
-                moved=[];missing=[]
-                for i,f in enumerate(frames):
-                    by={w['address']:w['contentGeometry'] for w in f['overview'].get('windows',[])}
-                    for address,box in neighbors.items():
-                        if address not in by:missing.append(i);continue
-                        if max(abs(by[address][k]-v) for k,v in box.items())>1:moved.append(i)
-                result.append(dict(stage=stage,scope=scope,moved_frames=sorted(set(moved)),missing_frames=sorted(set(missing))))
+                result.append(dict(stage=stage,scope=scope,input='dispatcher',**compare_neighbors(before,frames)))
+                wait('j/hymission-tiles-state',lambda s:s['tiles'][0]['activeWorkspace']['id']==902)
+                evaluate('hl.dispatch(hl.dsp.focus({workspace=901}))');time.sleep(.45)
+                before=overview()
+                frames=record(f'gesture-stage{stage}','hl.plugin.hymission_tiles_test.trackpad("begin"); hl.plugin.hymission_tiles_test.trackpad("update",120)',.2)
+                result.append(dict(stage=stage,scope=scope,input='trackpad-held',**compare_neighbors(before,frames)))
+                tail=record(f'gesture-end-stage{stage}','hl.plugin.hymission_tiles_test.trackpad("update",120); hl.plugin.hymission_tiles_test.trackpad("end")',.6)
+                result.append(dict(stage=stage,scope=scope,input='trackpad-end',**compare_neighbors(before,tail)))
+                wait('j/hymission-tiles-state',lambda s:s['tiles'][0]['activeWorkspace']['id']==902)
             closed=record(f'{case}-{scope}-stage{stage}-close','hl.plugin.hymission.close()')
             wait('j/hymission-overview-state',lambda s:not s['active'])
             if case!='switch':
@@ -106,5 +127,5 @@ def run(case,observe,request,root,env,runtime,processes,handles):
     (root/'observations.json').write_text(json.dumps(result,indent=2))
     if not observe and case=='close':assert all(not r['blank_neighbor_frames'] for r in result),result
     if not observe and case=='shadow':assert all(r['shadow_interior_run']<=16 for r in result),result
-    if not observe and case=='switch':assert all(not r['moved_frames'] and not r['missing_frames'] for r in result),result
+    if not observe and case=='switch':assert all(not r['moved_frames'] and not r['missing_frames'] and r['changed_neighbor_pixels']<=8 for r in result),result
     print(('OBSERVED' if observe else 'PASS')+': every-frame tile overview '+case+' '+json.dumps(result))

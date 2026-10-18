@@ -201,9 +201,9 @@ class OverviewOverlayPassElement final : public IPassElement {
 class OverviewShadowPassElement final : public IPassElement {
   public:
     OverviewShadowPassElement(CBox box, int round, float roundingPower, int range, CHyprColor color, float alpha,
-                              PHLWINDOW cutoutWindow = {}, CBox cutoutSource = {}, CBox cutoutTarget = {}, float cutoutRadius = 0) :
+                              PHLWINDOW cutoutWindow = {}, CBox cutoutSource = {}, CBox cutoutTarget = {}, float cutoutRadius = 0, std::optional<CBox> shadowClip = {}) :
         m_box(box), m_round(round), m_roundingPower(roundingPower), m_range(range), m_color(color), m_alpha(alpha),
-        m_cutoutWindow(cutoutWindow), m_cutoutSource(cutoutSource), m_cutoutTarget(cutoutTarget), m_cutoutRadius(cutoutRadius) {
+        m_cutoutWindow(cutoutWindow), m_cutoutSource(cutoutSource), m_cutoutTarget(cutoutTarget), m_cutoutRadius(cutoutRadius), m_shadowClip(shadowClip) {
     }
 
     std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override {
@@ -218,7 +218,7 @@ class OverviewShadowPassElement final : public IPassElement {
         if (window && m_cutoutSource.w > 0 && m_cutoutSource.h > 0 && m_cutoutTarget.w > 0 && m_cutoutTarget.h > 0) {
             // The body keeps its Stage card crop; its outer shadow needs the
             // full output or the first expanding frame acquires straight cuts.
-            state.clipBox = CBox{Vector2D{}, state.pMonitor->m_transformedSize};
+            state.clipBox = m_shadowClip.value_or(CBox{Vector2D{}, state.pMonitor->m_transformedSize});
             const auto savedWindow = state.currentWindow;
             const auto savedModif = state.renderModif;
             Hyprutils::Utils::CScopeGuard restore{[&] { state.currentWindow = savedWindow; state.renderModif = savedModif; }};
@@ -274,6 +274,7 @@ class OverviewShadowPassElement final : public IPassElement {
     CBox       m_cutoutSource;
     CBox       m_cutoutTarget;
     float      m_cutoutRadius = 0;
+    std::optional<CBox> m_shadowClip;
 };
 
 namespace {
@@ -4495,9 +4496,15 @@ void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, co
             const int maxRadius = std::max(0, static_cast<int>(std::floor(std::min(previewRect.width, previewRect.height) * 0.5)));
             cutoutRadius = std::min(maxRadius, std::max(0, static_cast<int>(std::lround(surfaceRadius * roundingScale))));
         }
+        std::optional<CBox> shadowClip;
+        if (auto* tiles=TilesController::get();workspaceScoped() && !m_stripPreviewContext.active && tiles && tiles->enabled(monitor)) {
+            const auto tile=tiles->preferredTile(window->m_workspace,monitor);
+            for (const auto& view:tiles->views(monitor)) if (view.id==tile)
+                shadowClip=toBox(rectToMonitorRenderLocal({view.allocation.x,view.allocation.y,view.allocation.w,view.allocation.h},monitor));
+        }
         renderContext().m_pass.add(makeUnique<OverviewShadowPassElement>(
             shadowBox, shadowRound, static_cast<float>(roundingPower), renderRange, shadowColor, previewAlpha,
-            cutoutWindow, cutoutSource, cutoutTarget, cutoutRadius));
+            cutoutWindow, cutoutSource, cutoutTarget, cutoutRadius, shadowClip));
     }
 }
 

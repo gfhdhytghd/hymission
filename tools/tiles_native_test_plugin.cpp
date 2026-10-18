@@ -46,6 +46,27 @@ namespace {
 struct CapturedFrame { int width,height; std::vector<unsigned char> pixels; nlohmann::json state; };
 bool recordingFrames=false;
 std::vector<CapturedFrame> capturedFrames;
+template<class Framebuffer>
+bool readFramePixels(Framebuffer& fb,std::vector<uint8_t>& bytes) {
+    if constexpr (requires { fb.readPixelsRGBA8(bytes); }) return fb.readPixelsRGBA8(bytes);
+    else {
+        // Upstream main lacks the HDR tree's convenience readback API. Keep
+        // this fixture buildable there, preserving all pack/read bindings.
+        GLint readFB=0,alignment=0,rowLength=0,skipRows=0,skipPixels=0,buffer=0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&readFB);glGetIntegerv(GL_PACK_ALIGNMENT,&alignment);
+        glGetIntegerv(GL_PACK_ROW_LENGTH,&rowLength);glGetIntegerv(GL_PACK_SKIP_ROWS,&skipRows);
+        glGetIntegerv(GL_PACK_SKIP_PIXELS,&skipPixels);glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING,&buffer);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,fb.getFBID());glBindBuffer(GL_PIXEL_PACK_BUFFER,0);
+        glPixelStorei(GL_PACK_ALIGNMENT,1);glPixelStorei(GL_PACK_ROW_LENGTH,0);
+        glPixelStorei(GL_PACK_SKIP_ROWS,0);glPixelStorei(GL_PACK_SKIP_PIXELS,0);
+        glReadPixels(0,0,fb.m_size.x,fb.m_size.y,GL_RGBA,GL_UNSIGNED_BYTE,bytes.data());
+        const bool ok=glGetError()==GL_NO_ERROR;
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,readFB);glBindBuffer(GL_PIXEL_PACK_BUFFER,buffer);
+        glPixelStorei(GL_PACK_ALIGNMENT,alignment);glPixelStorei(GL_PACK_ROW_LENGTH,rowLength);
+        glPixelStorei(GL_PACK_SKIP_ROWS,skipRows);glPixelStorei(GL_PACK_SKIP_PIXELS,skipPixels);
+        return ok;
+    }
+}
 class CaptureFramePass final:public IPassElement {
  public:
     std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override {
@@ -55,7 +76,7 @@ class CaptureFramePass final:public IPassElement {
         const auto size=fb->m_size;
         CapturedFrame frame{static_cast<int>(size.x),static_cast<int>(size.y),{}, {}};
         std::vector<uint8_t> rgba(frame.width*frame.height*4);
-        if (!fb->readPixelsRGBA8(rgba)) throw std::runtime_error("private framebuffer readback failed");
+        if (!readFramePixels(*fb,rgba)) throw std::runtime_error("private framebuffer readback failed");
         frame.pixels.resize(frame.width*frame.height*3);
         for (size_t i=0;i<frame.pixels.size()/3;++i) std::copy_n(rgba.data()+i*4,3,frame.pixels.data()+i*3);
         frame.state={{"overview",nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-overview-state","","j"))},

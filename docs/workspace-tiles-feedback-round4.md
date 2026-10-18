@@ -77,3 +77,77 @@ this was an admission/filtering error, not an alpha animation. Every-frame
 native damage/state, reconstructed PNGs, raw PNGs and endpoint screencopies are
 retained in these directories. The regression fails if an occupied non-focused
 tile loses its marker pixels during the close or handoff.
+
+## Shadow clipping and raster verification follow-up
+
+A stricter pixel comparison found that the newly mapped outer shadow could still
+escape its tile: the shadow pass intentionally expanded its clip to the whole
+output for Stage's cropped-body reveal. Preserve that behavior for all overview
+and Stage, but give ws-only tile shadows an explicit tile-local output clip.
+This also bounds offscreen incoming-workspace shadows during a tile pan. The
+strip snapshot context retains its independent framebuffer coordinates.
+
+The final three-tile regression (`fb4-three-pixels`) uses real four-finger
+vertical InputManager events, alongside the native workspace dispatcher. For
+Stage off/on, it records held-finger and release/settle frames: the focused tile
+moves in 5–7 intermediate frames per phase, and both non-focused tiles retain
+all managed windows with **zero moved geometry, zero missing windows, and zero
+changed pixels** in their interior regions (excluding the global notification
+header and tile-edge margin). Before this clipping follow-up, dispatcher pan
+had stationary neighbor geometry but 18,453–19,355 changed neighbor pixels from
+escaping shadows. Gesture phases already had zero changed pixels. The committed
+regression checks geometry and raster output, so geometry-only success cannot
+hide this artifact.
+
+The fixture prefers the HDR release tree's native RGBA8 readback helper. Fresh
+upstream main lacks that convenience method; a compile-time fallback uses RGBA
+readback with saved/restored framebuffer and all pixel-pack state. This affects
+only the non-installed private test fixture. The first upstream build failure
+is retained in `fb4-nix-build.log`; it is not reported as a passing build.
+
+Reproduce the visual cases with:
+
+```sh
+python -B tools/tiles_isolated_smoke.py --plugin build-tiles/libhymission.so --fixture build-tiles/libhymission-tiles-test.so --feedback4-regression shadow --output build-tiles/fb4-shadow
+python -B tools/tiles_isolated_smoke.py --plugin build-tiles/libhymission.so --fixture build-tiles/libhymission-tiles-test.so --feedback4-regression close --output build-tiles/fb4-close
+python -B tools/tiles_isolated_smoke.py --plugin build-tiles/libhymission.so --fixture build-tiles/libhymission-tiles-test.so --feedback4-regression switch --feedback4-three --output build-tiles/fb4-switch-three
+```
+
+Omit `--feedback4-three` for two tiles. Add `--feedback4-observe` only when
+collecting a known failing baseline; it skips acceptance assertions and reports
+OBSERVED instead of PASS. The recorder injects no host-session events.
+
+## Final verification
+
+- Full CTest: 16/16 PASS, no skips (`fb4-final-ctest.log`).
+- Release e5a03b6 compositor: full integration smoke PASS; tiles_disabled_regression
+  PASS and observation JSON exactly equal to reference
+  552bd339fe4809e0a031d277ca97f4dac6d0a5da (`fb4-verified-regressions.log`).
+- Final shadow, two-/three-tile close, reserved-top CSD and Stage/forceall
+  origin/endpoint/alpha regressions PASS in the same queue. Stage is tested both
+  off and on; all overview remains a unified output-wide scene.
+- Fresh upstream main 8010b4e5c66f97aa82cd5b3332b4ec613779b9a7 build PASS
+  (`fb4-nix-verified.log`). Flake update leaves the lock unchanged. Nix has 14
+  passing checks and two GL skips for unavailable EGL; both skipped checks pass
+  in the local 16/16 suite. This is build compatibility, not upstream live-session
+  acceptance.
+- Final isolated configuration errors are empty; diff whitespace checks pass.
+
+Selected paired frames (PNG artifacts are intentionally not committed):
+
+| Case | Before | After |
+|---|---|---|
+| Gray shadow stripe | [opening frame 2](../build-tiles/fb4-close-before-final/close-onlycurrentworkspace-stage0-open-02.png) | [opening frame 2](../build-tiles/fb4-verified-shadow/shadow-onlycurrentworkspace-stage0-open-02.png) |
+| Non-focused tile blank at close | [handoff frame 8](../build-tiles/fb4-close-before-final/close-onlycurrentworkspace-stage0-close-08.png) | [handoff frame 8](../build-tiles/fb4-verified-close/close-onlycurrentworkspace-stage0-close-08.png) |
+| Other tile pans with active workspace | [pan frame 3](../build-tiles/fb4-baseline-native/switch-stage0-03.png) | [three-tile pan frame 3](../build-tiles/fb4-three-pixels/switch-stage0-03.png) |
+
+The paired images are frame-level visual evidence, not equal-time performance
+samples. Their JSON sidecars preserve every frame's geometry/alpha, framebuffer
+and damage state; observations.json contains acceptance metrics. User-session
+HDR appearance and stability remain untested: no host reload was performed.
+
+The final two-tile strict raster/input run (`fb4-two-pixels`) also passes all six
+Stage-off/on × dispatcher/held-trackpad/release checks with zero neighbor pixel
+changes, moved geometries or missing windows. Both two- and three-tile phases
+retain at least five moving focused-tile frames. All final configuration-error
+files, including both strict raster runs, are empty.
