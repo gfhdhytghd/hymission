@@ -1,5 +1,11 @@
 # Stage drop targets and workspace identity (FB6)
 
+> FB18 supersedes the ordering policy in this historical report: every Stage
+> column uses numeric/name order; sidebar drag height never inserts/reorders cards
+> or swaps workspace contents, including with tiles disabled. Ownership transfer
+> and FB17's shared preview/static/flight authority remain. See
+> [the current contract](workspace-tiles-feedback-round18.md).
+
 The tile adapter must resolve a Stage drop from the pointer, never from the physical monitor's global active workspace. This change is confined to tiles-enabled paths.
 
 ## Native baseline and requested semantics

@@ -231,8 +231,18 @@ def main():
             from tiles_stage_flight_clip_regression import run
             run(args.stage_flight_clip_regression,args.stage_flight_clip_observe,args.stage_flight_clip_route,args.stage_flight_clip_layout,request,root,env,runtime,processes,handles,args.stage_flight_handoff or args.stage_order_regression,args.stage_order_regression,args.stage_order_recent)
             if args.stage_order_regression:
-                from tiles_stage_order_regression import verify
+                from tiles_stage_order_regression import verify, finish
                 verify(root,args.stage_flight_clip_observe)
+                def evaluate_order(code):
+                    reply=request('/eval '+code)
+                    assert reply.strip()=='ok',(code,reply)
+                def wait_order(cmd,predicate):
+                    for _ in range(300):
+                        state=json.loads(request(cmd))
+                        if predicate(state):return state
+                        time.sleep(.02)
+                    raise AssertionError((cmd,state))
+                finish(evaluate_order,lambda cmd:json.loads(request(cmd)),wait_order,root)
             elif args.stage_flight_handoff:
                 from tiles_stage_handoff_regression import verify
                 verify(root,args.stage_flight_clip_observe)

@@ -107,6 +107,21 @@ def run(request,root,env,runtime,processes,handles):
     evaluate('hl.plugin.hymission_tiles_test.trackpad("cancel")')
     wait('j/hymission-stage-state',lambda s:not s['screens'][0]['swipe_active'],'gesture-cancelled')
     (root/'default-off-observations.json').write_text(json.dumps(observations,indent=2))
+    # FB18 deliberately supersedes tiles-off content swapping. Keep this new
+    # contract separate from the unchanged pre-tiles reference observations.
+    evaluate('hl.config({animations={enabled=false},plugin={hymission={stage_transition_ms=0,stage_show_active=1,niri_mode=0}}})')
+    state=wait('j/hymission-stage-state',lambda s:len(s['screens'][0]['cards'])>=2,'numeric-drag-ready')
+    before={c['address']:c['workspace']['id'] for c in json.loads(request('j/clients'))}
+    screen=state['screens'][0];source=screen['cards'][0];target=screen['cards'][-1]
+    pointer('press',source['x']+1,source['y']+1)
+    pointer('move',target['x']+target['width']/2,target['y']+target['height']/2)
+    pointer('release',target['x']+target['width']/2,target['y']+target['height']/2)
+    time.sleep(.15)
+    after={c['address']:c['workspace']['id'] for c in json.loads(request('j/clients'))}
+    state=json.loads(request('j/hymission-stage-state'))
+    ids=[c['workspace'] for c in state['screens'][0]['cards']]
+    assert before==after and ids==sorted(ids),('FB18 disabled numeric drag',before,after,ids)
+    (root/'disabled-numeric-drag.json').write_text(json.dumps(dict(before=before,after=after,order=ids),indent=2))
     (root/'configerrors.txt').write_text(request('/configerrors'))
     print('PASS: tiles-disabled Stage dimensions, card/monitor-edge clicks, overview entry/exit and Stage restoration')
 

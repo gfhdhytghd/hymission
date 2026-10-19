@@ -1,5 +1,11 @@
 # Stage column drops through native input (FB11)
 
+> FB18 supersedes the ordering policy in this historical report: every Stage
+> column uses numeric/name order; sidebar drag height never inserts/reorders cards
+> or swaps workspace contents, including with tiles disabled. Ownership transfer
+> and FB17's shared preview/static/flight authority remain. See
+> [the current contract](workspace-tiles-feedback-round18.md).
+
 ## Reproduction and the FB6 gap
 
 Baseline: `f080e8b9679c632c0255457c0d9c5ba1eda26f8b`. The supplied screenshot has four cards in the first column, one in the second, and a large unused region below the second column. No screenshot is committed.

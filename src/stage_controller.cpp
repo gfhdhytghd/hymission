@@ -78,7 +78,6 @@
 #include <hyprland/src/desktop/view/window/WindowGroupMembership.hpp>
 #include <hyprland/src/desktop/view/window/WindowMetadata.hpp>
 #include <hyprland/src/desktop/view/window/WindowPresentation.hpp>
-#include <hyprland/src/workspace/RegularWorkspace.hpp>
 #include "workspace_key.hpp"
 
 #include "render_context.hpp"
@@ -239,6 +238,7 @@ struct StageController::Impl {
         bool edgeTransfer = false;
         bool desktopDecorations = false;
         bool nativeDestination = false;
+        bool previewOnly = false; // Returning a card ghost must not hide its real desktop.
     };
     struct DragHover {
         PHLWINDOWREF window;
@@ -459,8 +459,6 @@ struct StageController::Impl {
     WorkspaceKey pressedSyntheticId = 0;
     Vector2D pressPoint;
     PHLMONITORREF pressMonitor;
-    std::size_t pressCard = 0;
-    std::vector<WorkspaceKey> tileCardOrder;
     bool reorderArmed = false;
     std::unordered_set<uint32_t> swallowedButtons;
     PHLWINDOWREF lastDragged;
@@ -488,19 +486,6 @@ struct StageController::Impl {
         return highest<std::numeric_limits<WorkspaceKey>::max()?highest+1:WORKSPACE_INVALID;
     }
 
-    // Nearest card to a sidebar point, gaps included: stretched spacing would
-    // otherwise leave dead zones where a reorder drop is ignored.
-    std::optional<std::size_t> reorderTargetIndex(const Screen& screen, const Vector2D& point) const {
-        const auto& g = screen.geometry;
-        const auto local = point - sidebar(screen).pos();
-        if (local.x < g.padding || local.x >= g.padding + g.cardWidth || local.y < g.paddingTop || local.y >= screen.base.h - g.paddingBottom)
-            return std::nullopt;
-        const double step = g.cardHeight + g.cardGap;
-        const double t = (local.y - g.paddingTop - g.cardHeight / 2) / (step > 0 ? step : 1);
-        const std::size_t index = static_cast<std::size_t>(std::clamp(std::round(t), 0.0, static_cast<double>(screen.cards.size() - 1)));
-        return screen.cards.empty() ? std::nullopt : std::optional<std::size_t>(index);
-    }
-
     Screen* tileColumn(const Vector2D& point) {
         Screen* nearest=nullptr;
         double distance=std::numeric_limits<double>::max();
@@ -518,23 +503,6 @@ struct StageController::Impl {
             const auto band=sidebar(screen); left=std::min(left,band.x); right=std::max(right,band.x+band.w);
         }
         return point.x>=left && point.x<right?nearest:nullptr;
-    }
-    void orderTileCard(const PHLWORKSPACE& workspace,Screen& screen,const Vector2D& point) {
-        std::vector<WorkspaceKey> order;
-        // Retain existing global order while inserting relative to the target column.
-        for (const auto& column:screens) for (const auto& card:column.cards)
-            if (cardID(card)!=workspaceKey(workspace)) order.push_back(cardID(card));
-        std::ranges::stable_sort(order,[&](auto a,auto b) {
-            return std::ranges::find(tileCardOrder,a)-tileCardOrder.begin()<std::ranges::find(tileCardOrder,b)-tileCardOrder.begin();
-        });
-        auto insertion=order.end();
-        for (size_t i=0;i<screen.cards.size();++i) {
-            if (cardID(screen.cards[i])==workspaceKey(workspace)) continue;
-            const auto at=std::ranges::find(order,cardID(screen.cards[i]));
-            if (point.y<screen.base.y+cardTop(screen,i)+screen.geometry.cardHeight/2) { insertion=at; break; }
-            if (at!=order.end()) insertion=at+1;
-        }
-        order.insert(insertion,workspaceKey(workspace)); tileCardOrder=std::move(order);
     }
     Impl(HANDLE h, std::function<bool()> suspended, std::function<stage::OverviewPhase(const PHLMONITOR&)> phase,
          std::function<std::optional<stage::EdgeFrame>(const PHLWINDOW&, const PHLMONITOR&)> frame, std::function<std::optional<double>(const PHLMONITOR&)> slide,
@@ -618,7 +586,10 @@ struct StageController::Impl {
     void button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info);
     void axis(const IPointer::SAxisEvent& event, Event::SCallbackInfo& info);
     void activate(const PHLWORKSPACE& workspace, bool cardClick = false);
-    void swapWorkspaces(const PHLWORKSPACE& a, const PHLWORKSPACE& b);
+    std::vector<PHLWINDOW> sidebarDragWindows() const;
+    std::vector<WindowSlot> sidebarGhostSlots(const std::vector<PHLWINDOW>& members, const Vector2D& point) const;
+    void drawSidebarGhost(const PHLMONITOR& monitor);
+    void returnSidebarCard(const PHLWORKSPACE& workspace, const PHLMONITOR& monitor, tiles::Id tile, const std::vector<WindowSlot>& ghosts, const std::vector<PHLWINDOW>& members);
     void correctFloating(const PHLMONITOR& monitor, const CBox& desktop, const PHLWORKSPACE& workspace = nullptr);
     void damage(const Screen& screen);
     double cardTop(const Screen& screen, std::size_t index) const;
@@ -858,11 +829,12 @@ struct StageController::Impl {
         auto* self = instance;
         const auto* screen = TilesController::get() && TilesController::get()->enabled(monitor) ? self->screenForWorkspace(window ? window->m_workspace : nullptr) : self->visualScreenFor(monitor);
         if (!standalone && !ignorePosition && !self->rendering && !renderContext().m_renderingSnapshot && self->enabled && !self->blocked() && screen && !screen->covered &&
-            !monitor->m_activeSpecialWorkspace && (self->flying(*screen, window) ||
+            !monitor->m_activeSpecialWorkspace && ((self->flying(*screen, window) &&
+                std::ranges::any_of(screen->flights,[&](const Flight& f) { return !f.previewOnly && f.preview.window==window; })) ||
                 (window && !static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED) && previewLayer(window) == stage::PreviewLayer::Hidden &&
                     std::ranges::any_of(screen->flights, [&](const Flight& flight) {
                         const auto owner = flight.preview.window.lock();
-                        return owner && owner->m_workspace == window->m_workspace;
+                        return !flight.previewOnly && owner && owner->m_workspace == window->m_workspace;
                     })) ||
                 (self->dragHover && self->dragHover->window == window)))
             return;
@@ -1725,10 +1697,6 @@ std::vector<StageController::Impl::Card> StageController::Impl::cardsForWorkspac
         return ida > 0 ? ida < idb :
             (a.workspace.lock() && b.workspace.lock() && a.workspace.lock()->displayName() < b.workspace.lock()->displayName());
     });
-    if (auto* tiles=TilesController::get(); tiles && tiles->available() && !tileCardOrder.empty())
-        std::ranges::stable_sort(targets,[&](const Card& a,const Card& b) {
-            return std::ranges::find(tileCardOrder,cardID(a))-tileCardOrder.begin()<std::ranges::find(tileCardOrder,cardID(b))-tileCardOrder.begin();
-        });
     return targets;
 }
 
@@ -2217,7 +2185,7 @@ void StageController::Impl::pointer() {
         }
         return;
     }
-    // Reorder gesture: pressed on a card and moved onto a different one.
+    // Plain sidebar drag: workspace identity and numeric slot stay intact.
     if ((pressed.lock() || pressedSyntheticId > 0) && pressMonitor.lock() && (point.distanceSq(pressPoint) > 100.0 || reorderArmed)) {
         if (tileDragCandidate && !legacyTileOwner) {
             auto* tiles=TilesController::get();
@@ -2225,6 +2193,9 @@ void StageController::Impl::pointer() {
             legacyTileOwner=true;
         }
         reorderArmed = true;
+        // Pointer movement can be hardware-cursor-only; invalidate the ghost
+        // explicitly even while it remains over the same numbered card.
+        for (const auto& screen:screens) damage(screen);
     }
     for (auto& screen : screens) {
         const auto hovered = &screen == hoveredScreen ? index : std::nullopt;
@@ -2233,8 +2204,10 @@ void StageController::Impl::pointer() {
             damage(screen);
         }
         std::optional<std::size_t> reorderTarget;
-        if (reorderArmed && screen.monitor.lock() == pressMonitor.lock() && !screen.cards.empty())
-            reorderTarget = reorderTargetIndex(screen, point);
+        if (reorderArmed && screen.monitor.lock() == pressMonitor.lock() && !screen.cards.empty()) {
+            const auto source=std::ranges::find_if(screen.cards,[&](const Card& c) { return c.workspace==pressed; });
+            if (source!=screen.cards.end()) reorderTarget=std::distance(screen.cards.begin(),source);
+        }
         if (screen.reorderHover != reorderTarget) {
             screen.reorderHover = reorderTarget;
             damage(screen);
@@ -2419,17 +2392,18 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
                 const bool crossing=column->tile!=tileDragSource || column->monitor!=tileDragMonitor;
                 // An unmodified press owns the workspace card even when it
                 // starts over a window preview. Meta is the individual-window
-                // gesture. Existing cards are insertion targets, never merges.
-                // Resolve insertion against the geometry the user dropped on:
-                // publish synchronously rebuilds screens and their shared scale.
-                const auto savedOrder=tileCardOrder;
-                orderTileCard(workspace,*column,point);
+                // gesture. A card hit selects its column, never an insertion slot.
+                const auto members=sidebarDragWindows();
+                const auto ghosts=sidebarGhostSlots(members,point);
+                // The point selects ownership only. Every scene derives the
+                // destination slot from the workspace number after publication.
                 success=!crossing || controller->moveWorkspace(workspace,targetMonitor,targetTile);
-                if (!success) tileCardOrder=savedOrder;
+                if (success) returnSidebarCard(workspace,targetMonitor,targetTile,ghosts,members);
             }
             dropTrace={{{"event","tile_sidebar_drop"},{"success",success},{"tile",targetTile},{"workspace",workspace?workspaceKey(workspace):0}}};
             tileDragPending=tileDragCandidate=legacyTileOwner=false; tileDragMembers.clear();
             tileDragWorkspace.reset(); tileDragClicked.reset(); pressed.reset(); pressedSyntheticId=0; reorderArmed=false;
+            for (auto& screen:screens) if (screen.reorderHover) { screen.reorderHover.reset(); damage(screen); }
             swallowedButtons.erase(event.button); info.cancelled=true; forceRefresh=true; request(); return;
         }
     }
@@ -2479,29 +2453,25 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
     // transition happened in between. Never send an unmatched release to a client.
     if (event.state == WL_POINTER_BUTTON_STATE_RELEASED && swallowedButtons.erase(event.button)) {
         const auto workspace = pressed.lock();
+        const auto dragMembers = sidebarDragWindows();
+        if (event.button == BTN_LEFT) pressed.reset();
         const auto pressedSynthetic = std::exchange(pressedSyntheticId, 0);
-        if (event.button == BTN_LEFT)
-            pressed.reset();
+
         const auto [screen, indexRaw] = hit(g_pInputManager->getMouseCoordsInternal(), !reorderArmed);
         info.cancelled = true;
         std::optional<std::size_t> index = indexRaw;
-        if (event.button == BTN_LEFT && screen && !index && reorderArmed && screen->monitor.lock() == pressMonitor.lock() && !screen->cards.empty())
-            index = reorderTargetIndex(*screen, g_pInputManager->getMouseCoordsInternal());
+        if (event.button == BTN_LEFT && screen && reorderArmed && screen->monitor.lock() == pressMonitor.lock()) {
+            const auto source=std::ranges::find_if(screen->cards,[&](const Card& c) {
+                return workspace ? c.workspace==workspace : pressedSynthetic && c.syntheticId==pressedSynthetic;
+            });
+            index=source==screen->cards.end()?std::nullopt:std::optional<size_t>{std::distance(screen->cards.begin(),source)};
+        }
         if (event.button == BTN_LEFT && screen && index) {
             const auto& card = screen->cards[*index];
-            if (reorderArmed && pressMonitor.lock() == screen->monitor.lock() && pressCard != *index) {
-                // Rearrange: swap the contents of the pressed and hovered cards.
-                const auto monitor = screen->monitor.lock();
-                auto dragged = screen->tile?workspace:pressed.lock();
-                if (!dragged && pressedSynthetic > 0)
-                    dragged = ensureWorkspace(monitor, pressedSynthetic);
-                auto destination = card.workspace.lock();
-                if (!destination && card.syntheticId > 0)
-                    destination = ensureWorkspace(monitor, card.syntheticId);
-                if (dragged && destination && dragged != destination)
-                    swapWorkspaces(dragged, destination);
-                dropTrace.clear();
-                dropTrace.push_back({{"event","column_reorder"},{"source",dragged?workspaceKey(dragged):0},{"destination",destination?workspaceKey(destination):0}});
+            if (reorderArmed) {
+                // Plain sidebar drags never exchange workspace contents. This
+                // includes tiles-off, whose former content-swap policy is retired.
+                returnSidebarCard(workspace,pressMonitor.lock(),screen->tile,sidebarGhostSlots(dragMembers,g_pInputManager->getMouseCoordsInternal()),dragMembers);
             } else if (workspace && card.workspace == workspace) {
                 // Resolve the topmost visible preview before activating: switching
                 // workspaces rebuilds cards and can invalidate this reference.
@@ -2616,7 +2586,6 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
         pressedSyntheticId = index ? screen->cards[*index].syntheticId : 0;
         pressPoint = g_pInputManager->getMouseCoordsInternal();
         pressMonitor = screen->monitor;
-        pressCard = index.value_or(static_cast<std::size_t>(-1));
         reorderArmed = false;
     }
 }
@@ -2721,43 +2690,6 @@ void StageController::Impl::activate(const PHLWORKSPACE& workspace, bool cardCli
         hoverCenterGuardWorkspace = workspace;
         hoverCenterGuardX = g_pInputManager->getMouseCoordsInternal().x;
     }
-    request();
-}
-
-// Rearrange: exchange the contents of two workspaces. Both destinations are
-// pinned persistent for the duration of the swap: moving a's last window out
-// would otherwise leave a empty, and Hyprland destroys empty workspaces, so
-// the second loop could target a workspace that no longer exists. Persistence
-// is restored afterwards; an endpoint that ends empty is then reaped exactly
-// as Hyprland reaps it on its own.
-void StageController::Impl::swapWorkspaces(const PHLWORKSPACE& a, const PHLWORKSPACE& b) {
-    if (sessionLocked())
-        return;
-
-    if (!a || !b || a == b)
-        return;
-    std::vector<PHLWINDOW> aWindows, bWindows;
-    for (const auto& window : Desktop::windowState()->windows()) {
-        if (!window->mapped() || window->isHidden() || static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED) || window->onSpecialWorkspace())
-            continue;
-        if (window->m_workspace == a)
-            aWindows.push_back(window);
-        else if (window->m_workspace == b)
-            bWindows.push_back(window);
-    }
-    if (aWindows.empty() && bWindows.empty())
-        return;
-    const bool aWasPersistent = dynamicPointerCast<Workspace::CRegularWorkspace>(a)->isPersistent();
-    const bool bWasPersistent = dynamicPointerCast<Workspace::CRegularWorkspace>(b)->isPersistent();
-    dynamicPointerCast<Workspace::CRegularWorkspace>(a)->setPersistent(true);
-    dynamicPointerCast<Workspace::CRegularWorkspace>(b)->setPersistent(true);
-    for (const auto& window : aWindows)
-        Desktop::globalWindowController()->moveWindowToWorkspace(window, b);
-    for (const auto& window : bWindows)
-        Desktop::globalWindowController()->moveWindowToWorkspace(window, a);
-    dynamicPointerCast<Workspace::CRegularWorkspace>(a)->setPersistent(aWasPersistent);
-    dynamicPointerCast<Workspace::CRegularWorkspace>(b)->setPersistent(bWasPersistent);
-    forceRefresh = true;
     request();
 }
 
@@ -2904,7 +2836,9 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
             lastDragged.reset();
             forceRefresh = true;
             sync();
-            if (auto* screen = screenFor(monitor); screen && interactive(*screen)) {
+            const auto* tiles=TilesController::get();
+            const auto tile=tiles && tiles->available()?tiles->preferredTile(destination,monitor):0;
+            if (auto* screen = screenFor(monitor,tile); screen && interactive(*screen)) {
                 const auto card = std::ranges::find_if(screen->cards, [&](const auto& c) { return c.workspace == destination; });
                 if (card != screen->cards.end()) {
                     if (const auto target = window->layoutTarget(); target && target->floating()) {
@@ -2912,7 +2846,7 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
                             const auto area = desktop(*screen);
                             const auto center = stage::mapPreviewCenter(
                                 {sidebar(*screen).x + screen->geometry.padding,
-                                 screen->base.y + cardTop(*screen, std::distance(screen->cards.begin(), card)),
+                                 screen->base.y + screen->geometry.cardTop(std::distance(screen->cards.begin(), card),screen->scroll),
                                  screen->geometry.cardWidth, screen->geometry.cardHeight},
                                 {area.x, area.y, area.w, area.h}, dropOrigin.middle().x, dropOrigin.middle().y);
                             floatingCenter = Vector2D{center.first, center.second};
@@ -2933,14 +2867,14 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
                         }
                         std::erase_if(screen->flights, [&](const auto& f) { return f.preview.window == window; });
                         const auto target = preview->target.copy().translate(Vector2D{sidebar(*screen).x + screen->geometry.padding,
-                            screen->base.y + cardTop(*screen, std::distance(screen->cards.begin(), card))});
+                            screen->base.y + screen->geometry.cardTop(std::distance(screen->cards.begin(), card),screen->scroll)});
                         screen->flights.push_back({*preview, dropOrigin, target, dropRadius, static_cast<float>(stage::previewRounding(
                             numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096), numberSetting("decoration:rounding", 0), target.w, target.h)), true});
                         if (edgeTransfer || scrollingTiled(window)) {
                             screen->flights.back().fromViewport = edgeTransfer ? originViewport.value_or(desktopViewport(*screen)) :
                                 stage::edgeViewport(rect(dropOrigin), 0, 0);
                             screen->flights.back().toViewport = cardViewport(*screen,CBox{sidebar(*screen).x + screen->geometry.padding,
-                                screen->base.y + cardTop(*screen, std::distance(screen->cards.begin(), card)), screen->geometry.cardWidth, screen->geometry.cardHeight});
+                                screen->base.y + screen->geometry.cardTop(std::distance(screen->cards.begin(), card),screen->scroll), screen->geometry.cardWidth, screen->geometry.cardHeight});
                         }
                         screen->flights.back().edgeTransfer = edgeTransfer;
                         screen->flightStart = Clock::now();
@@ -3000,7 +2934,7 @@ void StageController::Impl::renderStage(eRenderStage stage) {
         stagePassQueued = true;
         const PHLMONITORREF ref = monitor;
         CBox bounds{{},monitor->m_size};
-        if (!progress && !screen->tile && screen->flights.empty() && !screen->paneTransition && !dragHover)
+        if (!progress && !screen->tile && screen->flights.empty() && !screen->paneTransition && !dragHover && !reorderArmed)
             bounds=sidebar(*screen).translate(-monitor->m_position);
         else if (!progress && clustered(*screen) && !(swipe && swipe->prepared && swipe->monitor==monitor) && !dragHover && !TilesController::get()->transferDragging() && !(tileDragCandidate && reorderArmed)) {
             bool first=true,settled=true;
@@ -3045,23 +2979,7 @@ void StageController::Impl::draw(const PHLMONITOR& monitor) {
         }
         drawingScreen=nullptr;
         drawDragHover(monitor);
-        auto* tiles=TilesController::get();
-        auto members=tiles->transferMembers();
-        const bool sidebarDrag=tileDragCandidate && reorderArmed && !tileDragPending && !cancelDrop;
-        if (sidebarDrag) for (const auto& ref:tileDragMembers) if (auto window=ref.lock()) members.push_back(window);
-        const auto point=sidebarDrag?g_pInputManager->getMouseCoordsInternal():tiles->transferPoint();
-        if ((tiles->transferDragging() || sidebarDrag) && !members.empty() && monitor->logicalBox().containsPoint(point)) {
-            std::vector<WindowInput> inputs;
-            for (size_t i=0;i<members.size();++i) if (!members[i]->isHidden()) {
-                const auto b=members[i]->getFullWindowBoundingBox();
-                inputs.push_back({.index=i,.natural={b.x,b.y,b.w,b.h}});
-            }
-            LayoutConfig config; config.minWindowLength=24; config.outerPaddingTop=config.outerPaddingBottom=config.outerPaddingLeft=config.outerPaddingRight=4;
-            MissionControlLayout layout;
-            const auto slots=layout.compute(inputs,{point.x-110,point.y-80,220,160},config);
-            const CBox clip{{},monitor->m_transformedSize};
-            for (const auto& slot:slots) drawPreview(members[slot.index],monitor,box(slot.target),clip,8,stage::edgeViewport({monitor->m_position.x,monitor->m_position.y,monitor->m_size.x,monitor->m_size.y},0,0));
-        }
+        drawSidebarGhost(monitor);
     } else drawOne(monitor);
 }
 void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
@@ -3184,7 +3102,7 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
                     {.round = ringRound + 1, .roundingPower = 2.0F, .borderSize = 2, .a = 1.0F, .outerRound = -1});
                 renderContext().m_data.clipBox = stripClip;
             }
-            // Reorder target marker while dragging a card onto another one.
+            // Mark the original numbered slot while its drag ghost is away.
             if (screen->reorderHover == i) {
                 const auto accent = CHyprColor(static_cast<uint64_t>(setting("focus_selected_color", 0xF23DC7FF)));
                 const double hoverRound = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
@@ -3253,7 +3171,74 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
         return;
     if (!TilesController::get() || !TilesController::get()->available())
         drawFlights(*screen, monitor);
-    if (!TilesController::get() || !TilesController::get()->available()) drawDragHover(monitor);
+    if (!TilesController::get() || !TilesController::get()->available()) { drawDragHover(monitor); drawSidebarGhost(monitor); }
+}
+
+std::vector<PHLWINDOW> StageController::Impl::sidebarDragWindows() const {
+    std::vector<PHLWINDOW> members;
+    if (tileDragCandidate) {
+        for (const auto& ref:tileDragMembers) if (auto window=ref.lock(); window && window->mapped() && !window->isHidden()) members.push_back(window);
+    } else if (const auto workspace=pressed.lock()) {
+        for (const auto& window:Desktop::windowState()->windows())
+            if (window->mapped() && !window->isHidden() && window->m_workspace==workspace &&
+                !static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED)) members.push_back(window);
+    }
+    return members;
+}
+
+std::vector<WindowSlot> StageController::Impl::sidebarGhostSlots(const std::vector<PHLWINDOW>& members, const Vector2D& point) const {
+    std::vector<WindowInput> inputs;
+    for (size_t i=0;i<members.size();++i) if (!members[i]->isHidden()) {
+        const auto b=members[i]->getFullWindowBoundingBox();
+        inputs.push_back({.index=i,.natural={b.x,b.y,b.w,b.h}});
+    }
+    LayoutConfig config; config.minWindowLength=24; config.outerPaddingTop=config.outerPaddingBottom=config.outerPaddingLeft=config.outerPaddingRight=4;
+    MissionControlLayout layout;
+    return layout.compute(inputs,{point.x-110,point.y-80,220,160},config);
+}
+
+void StageController::Impl::drawSidebarGhost(const PHLMONITOR& monitor) {
+    auto* tiles=TilesController::get();
+    const bool sidebarDrag=reorderArmed && !tileDragPending && !cancelDrop;
+    const bool transfer=tiles && tiles->transferDragging();
+    if (!sidebarDrag && !transfer) return;
+    const auto members=sidebarDrag?sidebarDragWindows():tiles->transferMembers();
+    const auto point=sidebarDrag?g_pInputManager->getMouseCoordsInternal():tiles->transferPoint();
+    if (!monitor->logicalBox().containsPoint(point)) return;
+    const CBox clip{{},monitor->m_transformedSize};
+    for (const auto& slot:sidebarGhostSlots(members,point))
+        drawPreview(members[slot.index],monitor,box(slot.target),clip,8,stage::edgeViewport(rect(monitor->logicalBox()),0,0));
+}
+
+void StageController::Impl::returnSidebarCard(const PHLWORKSPACE& workspace, const PHLMONITOR& monitor, tiles::Id tile,
+                                             const std::vector<WindowSlot>& ghosts, const std::vector<PHLWINDOW>& members) {
+    auto* screen=screenFor(monitor,tile);
+    const double duration=std::clamp(setting("stage_transition_ms",300),0L,2000L);
+    if (!workspace || !screen || !interactive(*screen) || duration<=0 || !numberSetting("animations:enabled",1)) return;
+    const auto card=std::ranges::find_if(screen->cards,[&](const Card& c) { return c.workspace==workspace; });
+    if (card==screen->cards.end()) return;
+    updatePreviews(*screen,*card);
+    const CBox slot{sidebar(*screen).x+screen->geometry.padding,
+        screen->base.y+screen->geometry.cardTop(std::distance(screen->cards.begin(),card),screen->scroll),screen->geometry.cardWidth,screen->geometry.cardHeight};
+    const double progress=flightProgress(*screen);
+    for (auto& flight:screen->flights) retargetFlight(flight,progress,monitor);
+    for (const auto& ghost:ghosts) {
+        const auto window=members[ghost.index];
+        const auto preview=std::ranges::find_if(card->previews,[&](const Preview& p) { return p.window==window; });
+        if (preview==card->previews.end()) continue;
+        std::erase_if(screen->flights,[&](const Flight& f) { return f.preview.window==window; });
+        const auto target=preview->target.copy().translate(slot.pos());
+        screen->flights.push_back({*preview,box(ghost.target),target,8,static_cast<float>(stage::previewRounding(
+            numberSetting("plugin:hymission:stage_window_rounding",-1,-1,4096),numberSetting("decoration:rounding",0),target.w,target.h)),true});
+        screen->flights.back().nativeDestination=true; // Preserve the sampled ghost, clipping at the output only.
+        screen->flights.back().previewOnly=true;
+        if (scrollingTiled(window)) {
+            screen->flights.back().fromViewport=stage::edgeViewport(ghost.target,0,0);
+            screen->flights.back().toViewport=cardViewport(*screen,slot);
+        }
+    }
+    screen->flightStart=Clock::now(); screen->flightDuration=duration;
+    armMotion(); damage(*screen);
 }
 
 void StageController::Impl::drawDragHover(const PHLMONITOR& monitor) {
@@ -3432,7 +3417,11 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
             const auto window = preview.window.lock();
             if (!window)
                 continue;
-            const auto old = std::ranges::find_if(previousFlights, [&](const Flight& flight) { return flight.preview.window == window; });
+            const auto old = std::ranges::find_if(previousFlights, [&](const Flight& flight) {
+                // A visible desktop and its returning card ghost are distinct
+                // presentations. A workspace switch starts from the desktop.
+                return flight.preview.window == window && (!flight.previewOnly || workspaceKey(workspace)!=previous);
+            });
             const auto origin = std::ranges::find_if(origins, [&](const auto& entry) { return entry.first == window; });
             const auto originalBox = origin == origins.end() ? preview.natural : origin->second;
             const auto from = old != previousFlights.end() ? std::optional<CBox>{box(flightFrame(*old, oldProgress, monitor).first)} :
@@ -3835,7 +3824,7 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
         const auto window = flight.preview.window.lock();
         if (!window || !window->mapped() || window->isHidden() || static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED) || window->m_monitor != monitor)
             continue;
-        if ((!swipe || &swipe->visual != &screen) && window->m_workspace == screenWorkspace(screen)) {
+        if (!flight.dropToCard && (!swipe || &swipe->visual != &screen) && window->m_workspace == screenWorkspace(screen)) {
             flight.to = setting("stage_window_decorations", 0) ? window->getFullWindowBoundingBox() : CBox{window->positionAnimation()->value(), window->sizeAnimation()->value()};
             if (flight.toViewport)
                 flight.toViewport = desktopViewport(screen);
@@ -4383,8 +4372,8 @@ std::optional<stage::OverviewEndpoint> StageController::overviewOrigin(const PHL
         return stage::OverviewEndpoint{frame.window, frame.viewport, rect(box(frame.viewport.box).intersection(box(output)))};
     }
     for (const auto& flight : screen->flights) {
-        if (flight.preview.window != window)
-            continue;
+        if (flight.preview.window != window || (flight.previewOnly && window->m_workspace == self->screenWorkspace(*screen)))
+            continue; // Overview starts from the real visible desktop, not its returning card copy.
         const auto [frame, viewport] = self->flightFrame(flight, self->flightProgress(*screen), monitor);
         const auto edge = viewport ? stage::edgeViewportForWindow(*viewport, frame) : stage::edgeViewport(output, 0, 0);
         return stage::OverviewEndpoint{frame, edge, rect(box(edge.box).intersection(box(output)))};

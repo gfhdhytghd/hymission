@@ -242,7 +242,7 @@ Stage 采用 **每个 tile 一列、所有列集中在整个 monitor 最左侧**
 
 Stage 缩略图可以跨列左右拖入另一 tile 的 active workspace，也可以落在其桌面区域；单窗口缩略图移动窗口，workspace/stage 组缩略图移动组内全部成员，保持组关系。目标为空白/已呈现 workspace 的区别在预览阶段确定。source workspace 不被销毁，未移动的窗口保持原位。
 
-单 tile 时从 Stage sidebar 拖出缩略图到桌面左/右半区，可预览原地 Split View：在落点侧新建 tile，源桌面保留另一侧；两个 tile 时同样在目标 tile 的左/右半拆出第三个，三个时不再提供 split 落点。桌面落点规则为：单 tile 的两半、来源 tile 的两半，或其他 tile 的外侧 20% 区域提供 split；其他 tile 的中部提供桌面移动落点。sidebar 始终先按所在列解析重排，工作区卡片跨列只转移整个 workspace 的归属和顺序，不合并其中窗口；同列重排不改变窗口 workspace，普通卡片从窗口预览处按下也保持整个 workspace 的语义，已有卡片只决定插入前后，不合并内容。Meta+缩略图是显式单窗口手势，拖到已有卡片时迁入该卡片 workspace；Super+原生 movewindow 拖入 tile 列的任意空白（含列底部和卡片间隙）则在该列创建新的隐藏 workspace，并通过 activation 事务迁入窗口。tiles 关闭时保留 Stage 的原行为：只有配置出的 synthetic empty slot 才会创建 workspace，任意背景空白不创建。详见 `workspace-tiles-feedback-round11.md` 和 `workspace-tiles-feedback-round6.md`。预览明确展示最终动作。新增宽度受 tile_min_width 限制；预览不满足条件时显示无效落点，不能松手后偷偷改变其他 tile。若目的仅为向已有 tile 移动，预览明确为该 tile 的桌面 drop，不创建额外 tile。
+单 tile 时从 Stage sidebar 拖出缩略图到桌面左/右半区，可预览原地 Split View：在落点侧新建 tile，源桌面保留另一侧；两个 tile 时同样在目标 tile 的左/右半拆出第三个，三个时不再提供 split 落点。桌面落点规则为：单 tile 的两半、来源 tile 的两半，或其他 tile 的外侧 20% 区域提供 split；其他 tile 的中部提供桌面移动落点。sidebar 始终先按所在列解析落点，工作区卡片跨列只转移整个 workspace 的归属，不合并其中窗口；每列从上到下始终按正编号升序，非正编号的 named workspace 排在正编号之后，按 displayName 的区分大小写字典序排列，special workspace 不进入 Stage 卡片列表。同列拖动不改顺序或窗口归属，松手使用现有 flight owner 返回编号槽位；跨列拖动落点只决定目标列，不决定前后插入位置。普通卡片从窗口预览处按下也保持整个 workspace 的语义。tiles 关闭时也禁止原有的 workspace 内容交换；Meta 单窗口手势不变。static、swipe 预演和飞行终点共用 cardsForWorkspace 的编号/名称排序，不读 MRU 或 tile 历史，不保存拖拽顺序。Meta+缩略图是显式单窗口手势，拖到已有卡片时迁入该卡片 workspace；Super+原生 movewindow 拖入 tile 列的任意空白（含列底部和卡片间隙）则在该列创建新的隐藏 workspace，并通过 activation 事务迁入窗口。tiles 关闭时保留 Stage 的原行为：只有配置出的 synthetic empty slot 才会创建 workspace，任意背景空白不创建。详见 `workspace-tiles-feedback-round11.md` 和 `workspace-tiles-feedback-round6.md`。预览明确展示最终动作。新增宽度受 tile_min_width 限制；预览不满足条件时显示无效落点，不能松手后偷偷改变其他 tile。若目的仅为向已有 tile 移动，预览明确为该 tile 的桌面 drop，不创建额外 tile。
 
 平时不绘制 tile 边界线，边界命中区仍支持拖动调整宽度。拖动缩略图时绘制半透明目标区域与分割线，反馈最终新/旧 tile 的几何。松手前 Esc、拖回原 sidebar 缩略图、锁屏、源窗口消失、断屏或拓扑 generation 变化均取消。取消不创建 workspace，不改变 binding/窗口/历史。drop 先验证完整计划和源成员，再调用与 tile_add / 窗口移动相同的事务；失败回滚新 workspace、几何和焦点。
 
@@ -498,7 +498,7 @@ stage_show_active=1 保留显示 active 卡片的行为。空列保留共同列�
 
 原生拖动仍由原生 drag controller 唯一驱动位置，绘制延迟到整屏末尾，
 位于各 tile 内容、边缘效果及 strip 之上、原生 top/overlay 层与光标之下，不继承源 tile clip。overview 使用现有
-strip 后绘制的单一 ghost；Stage 在所有列完成后只绘制一次 ghost，同列重排也保留
+strip 后绘制的单一 ghost；Stage 在所有列完成后只绘制一次 ghost，同列拖动也保留
 指针预览。松手或取消后下一帧自动恢复普通层级，锁屏与 snapshot 不走拖动上层。
 
 普通非 pinned 浮窗在各 tile 平铺内容之后、原生 top/overlay 层之前按原生全局堆叠
@@ -507,3 +507,10 @@ strip 后绘制的单一 ghost；Stage 在所有列完成后只绘制一次 ghos
 转入该 tile 当前 workspace，并保留全局位置和大小。归属 workspace 隐藏时随之隐藏。
 workspace 切换及非交互窗口几何动画、overview/Stage owner、布局内部 fullscreen 和 pinned 窗口不触发
 这一自动归属路径；临时浮起的原生 tiled drag 仍使用既有松手事务。
+
+## FB18：Stage 编号顺序
+
+本节及上述 sidebar 落点规则取代 FB6/FB11 的拖拽插入策略和 FB17 的保存拖拽顺序。
+窗口拖入 tile 列空白处仍按既有规则创建下一个可用正编号，新卡片按编号出现；
+关闭 tiles 时仍仅 synthetic empty slot 创建工作区。所有列的尺寸与自适应策略不变。
+详见 [FB18 验证记录](workspace-tiles-feedback-round18.md)。

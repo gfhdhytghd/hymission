@@ -61,22 +61,24 @@ def run(case,observe,request,root,env,runtime,processes,handles):
     if case=='off':
         before=membership();sc,c=card(1103)
         drag(1102,(c['x']+c['width']/2,c['y']+c['height']/2),'native-reorder')
+        check(membership()==before,'tiles-off card drag never swaps workspace contents')
+        check([c['workspace'] for c in stage()['screens'][0]['cards']]==sorted(c['workspace'] for c in stage()['screens'][0]['cards']),'tiles-off card order remains numeric')
         (root/'native-reorder-observation.json').write_text(json.dumps(dict(before=before,after=membership(),stage=stage()),indent=2))
         before=membership();sc,c=card(1102);band=sc['sidebar']
         drag(1102,(band['x']+band['width']/2,band['y']+band['height']-2),'native-outside-padding')
         check(membership()==before,'native drop outside reorder bounds cancels')
         print('PASS: tiles-disabled native reorder baseline');return
-    # Same-column lower padding is an order insertion, never a content swap.
+    # Same-column lower padding returns to the numeric slot, never a content swap.
     sc,c=card(1102);band=sc['sidebar'];before=membership()
     drag(1102,(band['x']+band['width']/2,band['y']+band['height']-2),'same-column-empty')
     check(membership()==before,'same-column blank preserves every workspace identity')
-    check(card(1102)[0]['cards'][-1]['workspace']==1102,'same-column blank inserts card at end')
+    check([c['workspace'] for c in card(1102)[0]['cards']]==sorted(c['workspace'] for c in card(1102)[0]['cards']),'same-column blank retains numeric order')
     if count>1:
         target=stage()['screens'][-1];band=target['sidebar'];destination=target['active_workspace'];before=membership()
         drag(1102,(band['x']+band['width']/2,band['y']+band['height']-2),'workspace-cross-column-empty')
         check(membership()==before,'whole-workspace transfer never merges windows')
         check(card(1102)[0]['tile_id']==target['tile_id'],'workspace card adopts destination column')
-        check(card(1102)[0]['cards'][-1]['workspace']==1102,'cross-column blank inserts card at end')
+        check([c['workspace'] for c in card(1102)[0]['cards']]==sorted(c['workspace'] for c in card(1102)[0]['cards']),'cross-column blank uses numeric position')
         # Meta explicitly moves an individual preview into an existing card.
         target=stage()["screens"][-1];band=target["sidebar"];destination=target["active_workspace"]
         source=1101;before=membership();address=next(a for a,w in before.items() if w==source)

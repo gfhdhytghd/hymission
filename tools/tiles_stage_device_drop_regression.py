@@ -77,6 +77,7 @@ def run(case,observe,request,root,env,runtime,processes,handles,layout="dwindle"
             first=sc['cards'][0];second=sc['cards'][1]
             index=sc['cards'].index(c)
             target=(first['x']+first['width']/2,first['y']+index*(second['y']-first['y'])+first['height']/2)
+        evaluate('hl.config({animations={enabled=true},plugin={hymission={stage_transition_ms=220}}})')
         pointer('move',x,y);meta(True)
         evaluate('hl.plugin.hymission_tiles_test.frame_capture("begin")')
         # Assert native grab exists: button travelled through InputManager and bindm.
@@ -87,9 +88,11 @@ def run(case,observe,request,root,env,runtime,processes,handles,layout="dwindle"
         check(membership()==before,name+': held drag preserves workspace membership')
         capture(name+'-held')
         if cancel:evaluate('hl.plugin.hymission_tiles_test.key(1)')
-        pointer('release',*target);meta(False);time.sleep(.3);capture(name+'-released')
+        pointer('release',*target);meta(False);time.sleep(.55);capture(name+'-released')
         evaluate('hl.plugin.hymission_tiles_test.frame_capture("end",'+json.dumps(str(root/name))+')')
         after=membership();ws=after[address]
+        from tiles_stage_order_regression import numeric_order, error
+        final=stage();numeric_order(final)
         if cancel:
             check(ws==source,'Esc cancels native blank drop before creation')
         elif case=='off' and not synthetic:
@@ -98,6 +101,12 @@ def run(case,observe,request,root,env,runtime,processes,handles,layout="dwindle"
             check(ws not in before.values(),'blank/synthetic drop creates a separate workspace')
             if case!='off':check(card(ws)[0]['tile_id']==sc['tile_id'],'new workspace belongs to destination column')
             check(all(after[a]==w for a,w in before.items() if a!=address),'native drop never merges unrelated windows')
+            target_card=next(c for sc in final['screens'] for c in sc['cards'] if c['workspace']==ws)
+            target_window=next(w for w in target_card['windows'] if w['address']==address)
+            frames=json.loads((root/(name+'.json')).read_text())
+            goals=[f['to'] for frame in frames for sc in frame['stage']['screens'] for f in sc['flights'] if f['workspace']==ws]
+            check(bool(goals) and max(error(g,target_window) for g in goals)<=1,name+': new workspace flight goal equals numeric static slot')
+        evaluate('hl.config({animations={enabled=false},plugin={hymission={stage_transition_ms=0}}})')
         return ws
     if case=='off':
         native_blank('off-arbitrary-blank')
@@ -117,14 +126,14 @@ def run(case,observe,request,root,env,runtime,processes,handles,layout="dwindle"
             drag(2,(band['x']+band['width']/2,band['y']+band['height']-8),'card-preview-to-blank',True)
             check(membership()==before,'card preview press transfers whole workspace identity')
             check(card(2)[0]['tile_id']==target['tile_id'],'whole workspace adopts destination column')
-            check(card(2)[0]['cards'][-1]['workspace']==2,'blank inserts at end')
+            check([c['workspace'] for c in card(2)[0]['cards']]==sorted(c['workspace'] for c in card(2)[0]['cards']),'blank uses numeric position')
             sc,c=card(3);before=membership()
             existing_source=4 if count==3 else 5
             drag(existing_source,(c['x']+c['width']/2,c['y']+c['height']/2),'card-preview-to-existing',True)
             check(membership()==before,'ordinary card onto existing card never merges contents')
             check(card(existing_source)[0]['tile_id']==sc['tile_id'],'existing card drop changes column ownership')
             ids=[c['workspace'] for c in card(existing_source)[0]['cards']]
-            check(existing_source in ids and 3 in ids and ids.index(existing_source)>ids.index(3),'lower half existing card inserts after target')
+            check(existing_source in ids and 3 in ids and ids==sorted(ids),'drop height cannot override numeric order')
             # Meta is the explicit individual-window gesture; keep its old policy.
             sc,c=card(5);before=membership();address=next(a for a,w in before.items() if w==6)
             meta(True);drag(6,(c['x']+c['width']/2,c['y']+c['height']/2),'meta-preview-existing',True);meta(False)
