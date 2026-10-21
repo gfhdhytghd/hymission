@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "overview_logic.hpp"
+#include "search_geometry.hpp"
 #include "numeric_config.hpp"
 #include <limits>
 
@@ -684,6 +685,23 @@ int main() {
 
     ok &= expect(hitTestWorkspaceStrip(topSlots, 120, 10) == std::optional<std::size_t>{1}, "strip hit-test should find the matching slot");
     ok &= expect(!hitTestWorkspaceStrip(topSlots, 100, 10).has_value(), "strip hit-test should miss strip gaps");
+
+    // Compose layer reservations, strip bands and the always-reserved search
+    // header. The search visibility is deliberately not an input to geometry.
+    for (const auto anchor : {WorkspaceStripAnchor::Top, WorkspaceStripAnchor::Left, WorkspaceStripAnchor::Right}) {
+        const Rect reservedSafe{20, 48, 1240, 672};
+        const auto strip = reserveWorkspaceStripBand(reservedSafe, anchor, 160, 24);
+        const auto search = reserveSearchHeader(strip.content);
+        ok &= expect(closeEnough(search.header.y, strip.content.y), "search starts below reserved area and top strip");
+        ok &= expect(closeEnough(search.content.y, search.header.y + 64), "content always reserves a search header");
+        ok &= expect(closeEnough(search.content.width, strip.content.width), "search follows side-strip horizontal space");
+    }
+    const auto topStripHeader = reserveSearchHeader(reserveWorkspaceStripBand({20, 48, 1240, 672}, WorkspaceStripAnchor::Top, 160, 24).content);
+    ok &= expectRect(topStripHeader.header, {20, 232, 1240, 64}, "top strip and exclusive zone are subtracted exactly once");
+    const auto plainHeader = reserveSearchHeader({0, 0, 1280, 720});
+    ok &= expectRect(plainHeader.content, {0, 64, 1280, 656}, "unreserved monitor still avoids search");
+    const auto tinyHeader = reserveSearchHeader({0, 0, 120, 30});
+    ok &= expectRect(tinyHeader.content, {0, 29, 120, 1}, "search reservation preserves a positive tiny viewport");
 
     return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

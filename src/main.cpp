@@ -370,7 +370,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("niri_mode", 0);
     FLOAT_CONF("niri_scroll_pixels_per_delta", 1.0F);
     FLOAT_CONF("niri_workspace_scale", 1.0F);
-    INT_CONF("niri_scrolling_preview_gap", 0);
+    INT_CONF("niri_scrolling_preview_gap", 24);
     INT_CONF("gesture_invert_vertical", 0);
     INT_CONF("one_workspace_per_row", 0);
     INT_CONF("only_active_workspace", 0);
@@ -428,9 +428,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("close_button_size", 18);
     INT_CONF("close_button_inset", 0);
     FLOAT_CONF("focus_hover_thickness", 2.0F);
-    FLOAT_CONF("focus_selected_thickness", 4.0F);
+    FLOAT_CONF("focus_selected_thickness", 3.0F);
     INT_CONF("backdrop_blur", 0);
-    COLOR_CONF("backdrop_color", 0x00000000LL);
+    COLOR_CONF("backdrop_color", 0x26000000LL);
     COLOR_CONF("workspace_strip_background_color", 0x3d081224LL);
     COLOR_CONF("workspace_strip_inactive_color", 0x2e0d1726LL);
     COLOR_CONF("workspace_strip_active_color", 0x3d1a2e52LL);
