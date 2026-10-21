@@ -169,9 +169,12 @@ void activate(GtkApplication* app, gpointer data) {
 
     auto* provider = gtk_css_provider_new();
     gtk_css_provider_load_from_string(provider,
-        "window.hymission-search { background: transparent; box-shadow: none; }"
-        ".searchbar { background: @window_bg_color; color: @window_fg_color; border-radius: 8px; padding: 12px 16px; margin: 12px; box-shadow: 0 3px 10px alpha(black,0.18); }"
-        ".searchbar label:last-child { opacity: 0.62; }");
+        // The surface is the search box itself: edge-to-edge and opaque even when a
+        // theme makes window_bg_color translucent, so blur rules have nothing to frost.
+        // GTK before 4.16 ignores the relative color and keeps the theme color.
+        "window.hymission-search { background: @window_bg_color; background: rgb(from @window_bg_color r g b); border-radius: 0; box-shadow: none; }"
+        ".searchbar { background: transparent; color: @window_fg_color; padding: 12px 16px; margin: 0; }"
+        ".searchbar label:last-child { color: mix(@window_fg_color, @window_bg_color, 0.38); color: rgb(from mix(@window_fg_color, @window_bg_color, 0.38) r g b); }");
     gtk_style_context_add_provider_for_display(gtk_widget_get_display(GTK_WIDGET(state->window)), GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(provider);
 
