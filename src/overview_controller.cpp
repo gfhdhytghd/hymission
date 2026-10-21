@@ -1,6 +1,7 @@
 #include "hook_broker.hpp"
 #include "overview_controller.hpp"
 #include "numeric_config.hpp"
+#include "search_geometry.hpp"
 #include "snapshot_framebuffer.hpp"
 #include "stage_controller.hpp"
 #include "tiles_controller.hpp"
@@ -288,7 +289,7 @@ constexpr auto   NATIVE_ANIMATION_DISABLE_DURATION = std::chrono::milliseconds(3
 constexpr double CLOSE_SETTLE_EPSILON = 0.75;
 constexpr std::size_t CLOSE_SETTLE_STABLE_FRAMES = 2;
 constexpr double BACKDROP_ALPHA = 0.42;
-constexpr double OUTLINE_THICKNESS = 4.0;
+constexpr double OUTLINE_THICKNESS = 3.0;
 constexpr double HOVER_THICKNESS = 2.0;
 constexpr double TITLE_PADDING = 12.0;
 constexpr double STRIP_CARD_PADDING = 0.0;
@@ -2879,7 +2880,8 @@ std::string OverviewController::overviewStateJson() const {
         {"version", 1},
         {"active", isVisible()},
         {"phase", phaseName()},
-        {"relayout_active",m_state.relayoutActive},
+        {"relayout_active", m_state.relayoutActive},
+        {"visualProgress", visualProgress()},
         {"initError", m_initError},
         {"groupedWindowsPolicy", groupedWindowsPolicy() == GroupedWindowsPolicy::Collapsed ? "collapsed" : "expanded"},
         {"windows", nlohmann::json::array()},
@@ -3779,7 +3781,8 @@ bool OverviewController::startSearchInput() {
         posix_spawn_file_actions_addclose(&actions, sockets[0]);
     if (sockets[1] != 3)
         posix_spawn_file_actions_addclose(&actions, sockets[1]);
-    char* argv[] = {const_cast<char*>(helper.c_str()), nullptr};
+    const std::string placement = searchInputPlacement();
+    char* argv[] = {const_cast<char*>(helper.c_str()), const_cast<char*>(placement.c_str()), nullptr};
     pid_t pid = -1;
     posix_spawnattr_t attributes;
     const int attrError = posix_spawnattr_init(&attributes);
@@ -3926,7 +3929,6 @@ void OverviewController::applySearchQuery(std::string query) {
     }
     clearSpatialPickCache();
     rebuildVisibleState(preferred, false);
-    sendSearchResultCount();
 }
 
 void OverviewController::sendSearchResultCount() const {
@@ -3934,6 +3936,8 @@ void OverviewController::sendSearchResultCount() const {
         return;
     const std::string packet = "C" + std::to_string(m_state.windows.size());
     send(m_searchInputFd, packet.data(), packet.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
+    const std::string geometry = "G" + searchInputPlacement();
+    send(m_searchInputFd, geometry.data(), geometry.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
 }
 
 bool OverviewController::windowMatchesActiveSearch(const PHLWINDOW& window) const {
@@ -5442,7 +5446,7 @@ bool OverviewController::backdropBlurEnabled() const {
 }
 
 CHyprColor OverviewController::backdropColor() const {
-    return getConfigColor(m_handle, "plugin:hymission:backdrop_color", 0x00000000);
+    return getConfigColor(m_handle, "plugin:hymission:backdrop_color", 0x26000000);
 }
 
 CHyprColor OverviewController::workspaceStripBackgroundColor() const {
@@ -5534,7 +5538,7 @@ double OverviewController::niriWorkspaceScale() const {
 }
 
 double OverviewController::niriScrollingPreviewGap() const {
-    return std::max(0.0, static_cast<double>(getConfigInt(m_handle, "plugin:hymission:niri_scrolling_preview_gap", 0)));
+    return std::max(0.0, static_cast<double>(getConfigInt(m_handle, "plugin:hymission:niri_scrolling_preview_gap", 24)));
 }
 
 bool OverviewController::debugLogsEnabled() const {
@@ -7318,6 +7322,7 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         clearOverviewWorkspaceTransition(targetWorkspace);
         carryOverWorkspaceStripSnapshots(next, m_state);
         m_state = std::move(next);
+        sendSearchResultCount();
         applyWorkspaceNameOverrides(m_state);
         refreshWorkspaceStripSnapshots();
         if (const auto focused = Desktop::focusState()->window()) {
@@ -8532,49 +8537,67 @@ void OverviewController::clearSpatialPickCache() {
     m_spatialPickCache.reset();
 }
 
+Rect OverviewController::monitorAvailableRect(const PHLMONITOR& monitor) const {
+    if (!monitor)
+        return {};
+    // Hiding an exclusive bar changes painting, not its reservation. Keep strip,
+    // search and previews in the same reserved-safe logical coordinate space.
+    const auto& reserved = monitor->m_reservedArea;
+    return makeRect(reserved.left(), reserved.top(),
+                    std::max(1.0, monitor->m_size.x - reserved.left() - reserved.right()),
+                    std::max(1.0, monitor->m_size.y - reserved.top() - reserved.bottom()));
+}
+
 Rect OverviewController::workspaceStripBandRectForMonitor(const PHLMONITOR& monitor, const State& state) const {
     if (!monitor || !workspaceStripEnabled(state))
         return {};
-
-    if (auto* tiles=TilesController::get();tiles && tiles->enabled(monitor)) {
-        const auto views=tiles->views(monitor);
-        const auto first=tileStripBand(monitor,views.front().id,state);
-        const auto last=tileStripBand(monitor,views.back().id,state);
-        return {first.x,first.y,last.x+last.width-first.x,first.height};
+    // Strip bands are global, including the per-tile columns. All content
+    // rectangles below are monitor-local; translate only at this boundary.
+    if (auto* tiles = TilesController::get(); tiles && tiles->enabled(monitor)) {
+        const auto views = tiles->views(monitor);
+        if (!views.empty()) {
+            const auto first = tileStripBand(monitor, views.front().id, state);
+            const auto last = tileStripBand(monitor, views.back().id, state);
+            return {first.x, first.y, last.x + last.width - first.x, first.height};
+        }
     }
-    const auto reservation =
-        reserveWorkspaceStripBand(makeRect(monitor->m_position.x, monitor->m_position.y, monitor->m_size.x, monitor->m_size.y),
-                                  parseWorkspaceStripAnchor(workspaceStripAnchor()), workspaceStripThickness(monitor), workspaceStripGap());
-    return makeRect(reservation.band.x, reservation.band.y, reservation.band.width, reservation.band.height);
+    const auto reservation = reserveWorkspaceStripBand(monitorAvailableRect(monitor),
+        parseWorkspaceStripAnchor(workspaceStripAnchor()), workspaceStripThickness(monitor), workspaceStripGap());
+    return makeRect(reservation.band.x + monitor->m_position.x, reservation.band.y + monitor->m_position.y,
+                    reservation.band.width, reservation.band.height);
+}
+
+Rect OverviewController::overviewAvailableRectForMonitor(const PHLMONITOR& monitor, const State& state) const {
+    if (!monitor)
+        return {};
+    const Rect available = monitorAvailableRect(monitor);
+    if (!workspaceStripEnabled(state))
+        return available;
+    if (auto* tiles = TilesController::get(); tiles && tiles->enabled(monitor)) {
+        const auto band = workspaceStripBandRectForMonitor(monitor, state);
+        return contentAfterGlobalStripColumns(available, band, monitor->m_position.x, workspaceStripGap());
+    }
+    return reserveWorkspaceStripBand(available, parseWorkspaceStripAnchor(workspaceStripAnchor()),
+                                      workspaceStripThickness(monitor), workspaceStripGap()).content;
 }
 
 Rect OverviewController::overviewContentRectForMonitor(const PHLMONITOR& monitor, const State& state) const {
     if (!monitor)
         return {};
+    return reserveSearchHeader(overviewAvailableRectForMonitor(monitor, state)).content;
+}
 
-    // Subtract layer-shell exclusive zones (e.g. waybar / quickshell-dms top
-    // bars and bottom docks) so preview tiles don't render under them. The
-    // user's outer_padding_* values still apply on top of this.
-    const double reservedTop    = monitor->m_reservedArea.top();
-    const double reservedRight  = monitor->m_reservedArea.right();
-    const double reservedBottom = monitor->m_reservedArea.bottom();
-    const double reservedLeft   = monitor->m_reservedArea.left();
-
-    const Rect available = makeRect(reservedLeft, reservedTop,
-                                    std::max(1.0, monitor->m_size.x - reservedLeft - reservedRight),
-                                    std::max(1.0, monitor->m_size.y - reservedTop - reservedBottom));
-
-    if (!workspaceStripEnabled(state))
-        return available;
-
-    if (auto* tiles=TilesController::get();tiles && tiles->enabled(monitor)) {
-        const auto band=workspaceStripBandRectForMonitor(monitor,state);
-        const double left=std::clamp(band.x+band.width+workspaceStripGap()-monitor->m_position.x,available.x,available.x+available.width-1);
-        return {left,available.y,available.x+available.width-left,available.height};
-    }
-    const auto reservation = reserveWorkspaceStripBand(available,
-                                                       parseWorkspaceStripAnchor(workspaceStripAnchor()), workspaceStripThickness(monitor), workspaceStripGap());
-    return makeRect(reservation.content.x, reservation.content.y, reservation.content.width, reservation.content.height);
+std::string OverviewController::searchInputPlacement() const {
+    const auto& monitor = m_state.ownerMonitor;
+    if (!monitor)
+        return {};
+    // Both scopes share one search query across all collected workspaces. In
+    // workspace overview each visible tile reserves the same header height;
+    // the helper remains centered over their combined content area.
+    const Rect header = reserveSearchHeader(overviewAvailableRectForMonitor(monitor, m_state)).header;
+    std::ostringstream placement;
+    placement << header.x << ' ' << header.y << ' ' << header.width << ' ' << header.height << ' ' << monitor->m_name;
+    return placement.str();
 }
 
 Rect OverviewController::tileStripBand(const PHLMONITOR& monitor,uint64_t tile,const State& state) const {
@@ -8589,15 +8612,18 @@ Rect OverviewController::tileStripBand(const PHLMONITOR& monitor,uint64_t tile,c
     return {};
 }
 Rect OverviewController::tileContentRect(const PHLMONITOR& monitor,uint64_t tile,const State& state) const {
-    if (!tile || !TilesController::get()) return overviewContentRectForMonitor(monitor,state);
-    for (const auto& view:TilesController::get()->views(monitor)) if (view.id==tile) {
-        const auto b=view.allocation.intersection(monitor->logicalBoxMinusReserved());
-        Rect area{b.x-monitor->m_position.x,b.y-monitor->m_position.y,b.w,b.h};
-        if (!workspaceStripEnabled(state)) return area;
-        const auto views=TilesController::get()->views(monitor);
-        const auto band=tileStripBand(monitor,views.back().id,state);
-        const double left=std::clamp(band.x+band.width+workspaceStripGap()-monitor->m_position.x,area.x,area.x+area.width-1);
-        return {left,area.y,area.x+area.width-left,area.height};
+    auto* tiles = TilesController::get();
+    if (!monitor || !tile || !tiles || !tiles->enabled(monitor))
+        return overviewContentRectForMonitor(monitor, state);
+    for (const auto& view : tiles->views(monitor)) {
+        if (view.id != tile)
+            continue;
+        const auto box = view.allocation.intersection(monitor->logicalBoxMinusReserved());
+        Rect area{box.x - monitor->m_position.x, box.y - monitor->m_position.y, box.w, box.h};
+        if (workspaceStripEnabled(state))
+            area = contentAfterGlobalStripColumns(area, workspaceStripBandRectForMonitor(monitor, state),
+                                                 monitor->m_position.x, workspaceStripGap());
+        return reserveSearchHeader(area).content;
     }
     return {};
 }
@@ -11860,6 +11886,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     m_deactivatePending = false;
     carryOverWorkspaceStripSnapshots(next, m_state);
     m_state = std::move(next);
+    sendSearchResultCount();
     warnAboutVimLabels();
     if (!pickLabelsEnabled() && !vimKeysEnabled())
         (void)startSearchInput();
@@ -13144,6 +13171,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
     carryOverWorkspaceStripSnapshots(next, m_state);
     restoreOverviewRenderState();
     m_state = std::move(next);
+    sendSearchResultCount();
     clearRelayoutProgressAnimation();
     armOverviewRenderState(m_state);
     applyWorkspaceNameOverrides(m_state);

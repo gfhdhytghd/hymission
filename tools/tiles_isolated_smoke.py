@@ -27,6 +27,7 @@ def main():
     ap.add_argument("--fixture")
     ap.add_argument("--integration", action="store_true")
     ap.add_argument("--default-off-regression", action="store_true")
+    ap.add_argument("--search-geometry-regression", action="store_true")
     ap.add_argument("--stage-edge-observe",action="store_true")
     ap.add_argument("--stage-edge-regression",choices=("off","single","two","three"))
     ap.add_argument("--stage-viewport-regression",choices=("off","single","two","three"))
@@ -290,6 +291,10 @@ def main():
             from tiles_top_clip_regression import run
             run(request,root,env,runtime,processes,handles)
             (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
+        if args.search_geometry_regression:
+            from tiles_search_geometry_regression import run
+            run(request,root,env,runtime,processes,handles)
             return
         if args.default_off_regression:
             from tiles_disabled_regression import run
