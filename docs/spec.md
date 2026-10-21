@@ -404,7 +404,7 @@ workspace 切换补充语义：
 - `niri_mode` 默认关闭；打开后只改变边缘 workspace strip 的排布：active-centered、monitor aspect ratio、允许缩略图列表溢出屏幕
 - `niri_scroll_pixels_per_delta` 影响 `hymission:scroll,layout` 在 overview 外连续发送 `layoutMsg move` 的幅度；默认 `1.0` 表示约把一次 `gestures:workspace_swipe_distance` 的手指位移映射为一个 viewport 的 scrolling-layout 位移；官方 `scrollMove` 不读取该配置
 - `niri_workspace_scale` 控制 niri mode 下 strip 内 workspace preview 相对 strip cross-axis 的缩放，默认 `1.0`，范围 `0.05..1.0`
-- `niri_scrolling_preview_gap` 控制 niri direct scrolling overview 中相邻 preview cell 在 scrolling 主轴上的额外间隔；默认 `0` 保持既有布局，负值按 `0` 处理
+- `niri_scrolling_preview_gap` 控制 niri direct scrolling overview 中相邻 preview cell 在 scrolling 主轴上的额外间隔；默认 `24` 留出预览间距，显式设为 `0` 可恢复紧凑布局，负值按 `0` 处理
 - `gesture_invert_vertical` 只影响被插件接管的 vertical overview gesture；它不改变普通 dispatcher、键盘输入或 Hyprland 其他 gesture 的方向
 - 如果退出 overview 时提交的真实目标窗口仍不在屏内，允许临时保持该窗口为真实 focus，直到下一次真实鼠标事件；只有当目标窗口在当前 monitor 上存在可见区域时，才允许顺带移动光标去对齐真实 focus
 - `only_active_workspace`、`only_active_monitor`、`show_special` 只影响默认 scope；`onlycurrentworkspace` 和 `forceall` dispatcher 参数优先级更高
@@ -420,6 +420,14 @@ workspace 切换补充语义：
 - `pick_labels_direct_activate` 只在 `pick_labels_enabled = 1` 时生效，控制命中 pick label 后是立即激活并退出 overview（`1`），还是只切换选中项、仍需 `Return` 确认（`0`，默认）
 - 除 `overview_focus_follows_mouse` 和 selected-preview hover relayout 的上述细项外，overview 状态机、动画、输入等配置不在 v1 第一阶段暴露
 - 在没有充分稳定前，不新增大量面向最终用户的细粒度行为开关
+
+### 搜索框安全区与默认视觉参数
+
+- layer-shell exclusive reserved 区域、workspace strip、64 logical pixel 搜索区依次扣除；顶部 strip 的绘制也采用同一 reserved 坐标。
+- 搜索框在所属输出的搜索区居中，未显示时仍保留搜索区，避免开始输入时重排。`outer_padding_top = 32` 是搜索区之后的额外间距。
+- 原先为避开搜索框设置 `outer_padding_top = 92` 的用户可迁移到 `32`；保留 `92` 仍有效，会多留 60 像素。隐藏 exclusive 顶栏仅影响绘制，不移除 reservation。
+- `focus_selected_thickness` 默认 `3`；`backdrop_color` 默认 ARGB `0x26000000`（配置字符串为 `rgba(00000026)`），`backdrop_blur` 仍为 `0`。
+- 无 blur 且透明时不提交背景 pass；非透明时只增加覆盖输出的 alpha 混合矩形，透明度随 overview progress 淡入淡出。Stage 单独显示不触发此 pass；strip/Stage 的快照及原生窗口捕获路径受 guard 保护。
 
 ## 9. 验收标准
 

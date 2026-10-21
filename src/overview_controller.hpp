@@ -652,6 +652,9 @@ class OverviewController {
     [[nodiscard]] std::vector<Rect> targetRects() const;
     [[nodiscard]] std::vector<std::size_t> pickOrderForCurrentState() const;
     [[nodiscard]] Rect         workspaceStripBandRectForMonitor(const PHLMONITOR& monitor, const State& state) const;
+    [[nodiscard]] Rect         monitorAvailableRect(const PHLMONITOR& monitor) const;
+    [[nodiscard]] Rect         overviewAvailableRectForMonitor(const PHLMONITOR& monitor, const State& state) const;
+    [[nodiscard]] std::string  searchInputPlacement() const;
     [[nodiscard]] Rect         overviewContentRectForMonitor(const PHLMONITOR& monitor, const State& state) const;
     [[nodiscard]] std::vector<Rect> stripRects() const;
     [[nodiscard]] const ManagedWindow* managedWindowFor(const State& state, const PHLWINDOW& window, bool includeTransient = false) const;

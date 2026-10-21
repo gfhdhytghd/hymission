@@ -297,6 +297,21 @@ Gesture notes:
 
 All user-facing settings live under `plugin.hymission` in `hl.config`.
 
+Overview reserves a 64 logical pixel search header after layer-shell exclusive
+zones and the workspace strip. The search box is centered in that header on the
+owning output, including when the strip is anchored at the top. The header stays
+reserved while search is hidden, so starting a search does not move previews.
+`outer_padding_top` adds space below the header; its default remains `32`.
+If you previously used `92` solely to avoid the search box, change it to `32`:
+keeping `92` is supported and adds another 60 pixels of breathing room.
+`hide_bar_when_strip` hides exclusive bars visually but keeps their reservation,
+so hiding a bar does not move the strip or search box into its reserved area.
+
+The default backdrop adds one translucent black quad per overview output, without
+blur or extra snapshot allocation. Transparent color with `backdrop_blur = 0`
+skips that pass; tint opacity follows the overview opening/closing progress.
+Stage alone is not dimmed, and strip/Stage snapshot rendering excludes the tint.
+
 Example:
 
 ```lua
@@ -304,7 +319,7 @@ hl.config({
     plugin = {
         hymission = {
             -- Layout: common geometry and sizing
-            outer_padding_top = 92,
+            outer_padding_top = 32, -- Additional gap below the automatic search header
             outer_padding_right = 32,
             outer_padding_bottom = 32,
             outer_padding_left = 32,
@@ -358,7 +373,7 @@ hl.config({
             niri_mode = 0,
             niri_scroll_pixels_per_delta = 1.0,
             niri_workspace_scale = 1.0,
-            niri_scrolling_preview_gap = 0,
+            niri_scrolling_preview_gap = 24,
 
             -- Workspace strip and bar
             workspace_strip_anchor = "left",
@@ -389,11 +404,11 @@ hl.config({
 
             -- Appearance and color customization
             backdrop_blur = 0,
-            backdrop_color = "rgba(00000000)",
+            backdrop_color = "rgba(00000026)",
             focus_hover_color = "rgba(f2f7ff8c)",
             focus_selected_color = "rgba(3dc7fff2)",
             focus_hover_thickness = 2,
-            focus_selected_thickness = 4,
+            focus_selected_thickness = 3,
             workspace_strip_inactive_tint_color = "rgba(00000000)",
 
             -- Debug
@@ -411,7 +426,7 @@ hl.config({
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `outer_padding` | int | `32` | Legacy fallback for all four edge paddings. |
-| `outer_padding_top` | int | `32` | Top padding for the overview content area. |
+| `outer_padding_top` | int | `32` | Additional top padding below the reserved search header. |
 | `outer_padding_right` | int | `32` | Right padding for the overview content area. |
 | `outer_padding_bottom` | int | `32` | Bottom padding for the overview content area. |
 | `outer_padding_left` | int | `32` | Left padding for the overview content area. |
@@ -558,7 +573,7 @@ selection committed when the modifier is released.
 | `niri_mode` | bool | `0` | Enable niri-like overflow behavior for the edge workspace strip. This is opt-in and does not turn the strip into the main overview content. |
 | `niri_scroll_pixels_per_delta` | float | `1.0` | Multiplier for `hymission:scroll,layout` movement outside overview. A value of `1.0` maps roughly one `gestures:workspace_swipe_distance` of finger travel to one viewport of scrolling-layout movement. Native `scrollMove` ignores this option. |
 | `niri_workspace_scale` | float | `1.0` | Niri mode strip thumbnail scale inside the configured strip thickness. Values are clamped to `0.05` - `1.0`; `1.0` uses the full strip cross-axis size. |
-| `niri_scrolling_preview_gap` | int | `0` | Extra gap in pixels between niri direct scrolling-layout preview cells along the scrolling axis. In horizontal scrolling layouts this is the horizontal preview gap. |
+| `niri_scrolling_preview_gap` | int | `24` | Extra gap in pixels between niri direct scrolling-layout preview cells along the scrolling axis. In horizontal scrolling layouts this is the horizontal preview gap. |
 
 With `niri_mode = 1`, the strip stays in the configured edge band and the main
 overview remains the scaled window overview. The strip uses monitor-aspect
@@ -636,7 +651,7 @@ Search filters the current overview scope by Unicode-normalized, case-insensitiv
 | --- | --- | --- | --- |
 | `backdrop_blur` | bool | `0` | Blur the full-monitor overview backdrop. |
 | `focus_hover_thickness` | float | `2` | Hover focus outline thickness. |
-| `focus_selected_thickness` | float | `4` | Selected focus outline thickness. |
+| `focus_selected_thickness` | float | `3` | Selected focus outline thickness. |
 
 ### Workspace strip and bar
 
@@ -800,7 +815,7 @@ Color values below use Hyprland `rgba(rrggbbaa)` syntax.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `backdrop_color` | color | `rgba(00000000)` | Optional full-monitor overview backdrop tint. Keep transparent for blur without dimming. |
+| `backdrop_color` | color | `rgba(00000026)` | Full-monitor overview backdrop tint; approximately 15% black by default. Use `rgba(00000000)` for no dimming. |
 | `focus_hover_color` | color | `rgba(f2f7ff8c)` | Hover focus outline color. |
 | `focus_selected_color` | color | `rgba(3dc7fff2)` | Selected focus outline color. |
 | `focus_title_color` | color | `rgba(ffffffff)` | Selected window title text color. |
