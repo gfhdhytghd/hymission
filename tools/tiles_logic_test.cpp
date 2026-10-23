@@ -133,5 +133,34 @@ int main() {
         }
         check(std::abs(end - (random.state().output.x + random.state().output.width)) < 1e-6);
     }
+    {
+        // Stage drag reorder renumbers workspaces; tile state follows the workspaces.
+        Model r({0, 0, 1920, 1080}, 2);
+        check(r.add(5).has_value());
+        check(r.activate(1).has_value() && r.activate(3).has_value());
+        const Renumbering changes{{3, 1}, {1, 2}, {2, 3}};
+        const auto map = [](Workspace old) { return old == 3 ? 1 : old == 1 ? 2 : old == 2 ? 3 : old; };
+        const auto before = r.state();
+        const auto moved = renumbered(before, changes);
+        check(moved.tiles.size() == before.tiles.size());
+        bool sawChange = false;
+        for (size_t i = 0; i < before.tiles.size(); ++i) {
+            check(moved.tiles[i].workspace == map(before.tiles[i].workspace));
+            sawChange |= moved.tiles[i].workspace != before.tiles[i].workspace;
+            check(moved.tiles[i].history.size() == before.tiles[i].history.size());
+            for (size_t k = 0; k < before.tiles[i].history.size(); ++k)
+                check(moved.tiles[i].history[k] == map(before.tiles[i].history[k]));
+        }
+        check(sawChange);
+        check(r.restore(moved, r.state().generation).has_value() && r.state().tiles == moved.tiles);
+        Ownership homes;
+        homes.claim(1, 7);
+        homes.claim(2, 8);
+        homes.claim(3, 9);
+        homes.renumber(changes);
+        State probe = r.state();
+        probe.tiles = {{.id = 7}, {.id = 8}, {.id = 9}};
+        check(homes.owner(probe, 1) == 9 && homes.owner(probe, 2) == 7 && homes.owner(probe, 3) == 8);
+    }
     std::cout << "PASS: three-tile transactions, geometry, focus/swap, history and 40000 randomized operations\n";
 }

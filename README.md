@@ -783,6 +783,7 @@ hl.config({
             stage_active_glow = 0,
             stage_even_spacing = 0,
             stage_drop_follow = 0,
+            stage_drag_reorder = 1,
             stage_click_hover_recenter_guard = 1,
             stage_maximize_cover_strip = 0,
         },
@@ -834,6 +835,7 @@ dispatcher is `hymission:stage_toggle`; Lua also supports `dispatch("stage_toggl
 | `stage_even_spacing` | `0` | Stretch the vertical card gaps so the stack spans the full sidebar height evenly instead of clustering at the top; `0` clusters cards at the top. Only meaningful with `stage_empty_slots > 0`. |
 | `stage_click_hover_recenter_guard` | `1` | After clicking a Stage card to switch workspaces, suppress hover-induced scrolling-layout recentering while moving right. The first leftward motion ends the guard. Hover focus and explicit click/keyboard focus remain available. `0` disables the guard. |
 | `stage_drop_follow` | `0` | After dropping a window, stay on the current workspace; `1` follows the moved window. |
+| `stage_drag_reorder` | `1` | Dragging a workspace card to another slot in its own sidebar column changes the real workspace numbers: numbers stay with the slots, the dragged workspace takes the number of the slot it is dropped on and the workspaces in between shift by one. Workspaces keep their windows and layout state; only their ids change, so `Super+N` and relative workspace navigation follow the new order. Only this monitor's (and tile column's) numbered cards take part; named workspaces never move, and dragging outside the sidebar cancels. `0` keeps the cards fixed in numeric order. |
 | `stage_maximize_cover_strip` | `0` | Maximization fills the right desktop; `1` lets maximization also cover the sidebar. True fullscreen always covers the output. |
 | `stage_refresh_ms` | `16` | Live preview repaint scheduling interval, clamped to `1`–`16` ms. Each repaint reads current window surfaces and sends native frame feedback; hidden sidebars stop repainting. Actual frame rate depends on output refresh, client updates and rendering load. |
 

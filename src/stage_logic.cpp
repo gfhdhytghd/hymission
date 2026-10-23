@@ -465,4 +465,58 @@ ScrollingFlightFrame edgeTransferFrame(const Rect& from, const Rect& to, const E
     }
     return {entering ? transitionBox(hidden, endpoint, (p - 0.5) * 2) : transitionBox(endpoint, hidden, p * 2), viewport};
 }
+std::size_t reorderTarget(const std::vector<double>& centres, double y, std::optional<std::size_t> current, double hysteresis) {
+    if (centres.empty())
+        return 0;
+    std::size_t nearest = 0;
+    for (std::size_t i = 1; i < centres.size(); ++i)
+        if (std::abs(centres[i] - y) < std::abs(centres[nearest] - y))
+            nearest = i;
+    if (!current || *current >= centres.size() || *current == nearest)
+        return nearest;
+    return std::abs(centres[nearest] - y) + std::max(0.0, hysteresis) < std::abs(centres[*current] - y) ? nearest : *current;
+}
+
+std::size_t reorderSlot(std::size_t index, std::size_t from, std::size_t to) {
+    if (index == from)
+        return to;
+    if (from < to && index > from && index <= to)
+        return index - 1;
+    if (to < from && index >= to && index < from)
+        return index + 1;
+    return index;
+}
+
+std::vector<WorkspaceIdChange> reorderSteps(const std::vector<int64_t>& slotIds, const std::vector<bool>& occupied, std::size_t from, std::size_t to,
+                                            int64_t temp) {
+    if (from == to || from >= slotIds.size() || to >= slotIds.size() || occupied.size() != slotIds.size() || !occupied[from] || temp <= 0 ||
+        std::ranges::find(slotIds, temp) != slotIds.end())
+        return {};
+    std::vector<WorkspaceIdChange> steps{{slotIds[from], temp}};
+    if (from < to) {
+        for (std::size_t k = from + 1; k <= to; ++k)
+            if (occupied[k])
+                steps.push_back({slotIds[k], slotIds[k - 1]});
+    } else {
+        for (std::size_t k = from; k-- > to;)
+            if (occupied[k])
+                steps.push_back({slotIds[k], slotIds[k + 1]});
+    }
+    steps.push_back({temp, slotIds[to]});
+    return steps;
+}
+
+std::vector<WorkspaceIdChange> reorderMapping(const std::vector<WorkspaceIdChange>& steps) {
+    std::vector<WorkspaceIdChange> mapping;
+    for (const auto& step : steps) {
+        const auto it = std::ranges::find_if(mapping, [&](const WorkspaceIdChange& m) { return m.to == step.from; });
+        if (it != mapping.end())
+            it->to = step.to;
+        else
+            mapping.push_back(step);
+    }
+    std::erase_if(mapping, [](const WorkspaceIdChange& m) { return m.from == m.to; });
+    return mapping;
+}
+
 } // namespace hymission::stage

@@ -1506,6 +1506,15 @@ bool TilesController::moveWorkspace(const PHLWORKSPACE& ws,const PHLMONITOR& mon
     o->ownership=saved;
     return false;
 }
+void TilesController::renumberWorkspaces(const PHLMONITOR& mon,const tiles::Renumbering& changes) {
+    auto* o=m->output(mon);
+    if (!o || changes.empty()) return;
+    // Ids are an attribute of the same workspaces: only the keys change, so
+    // ownership and presentation are carried over without a new publication.
+    auto draft=o->model;
+    if (draft.restore(tiles::renumbered(draft.state(),changes),draft.state().generation)) o->model=std::move(draft);
+    o->ownership.renumber(changes);
+}
 bool TilesController::moveWindows(const std::vector<PHLWINDOW>& windows,const PHLMONITOR& mon,tiles::Id id,const PHLWORKSPACE& destination,bool focusTile) {
     auto* o=m->output(mon);
     if (!m->ready || !o || windows.empty() || !o->model.index(id) || !destination || destination->m_monitor!=mon || destination->type()==Workspace::eWorkspaceType::SPECIAL || locked()) return false;

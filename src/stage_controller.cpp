@@ -262,6 +262,11 @@ struct StageController::Impl {
         bool previewsReady = false;
         double shift = 0;
         Clock::time_point shiftStart;
+        // Drag-reorder preview: offset from the card's own slot to the slot it
+        // previews, animated from previewFrom to previewTo.
+        double previewFrom = 0;
+        double previewTo = 0;
+        Clock::time_point previewStart;
         WorkspaceKey syntheticId = 0; // > 0: transparent empty slot for a workspace that does not exist yet
     };
     struct Screen {
@@ -281,6 +286,8 @@ struct StageController::Impl {
         std::string backgroundError;
         Clock::time_point backgroundRendered{};
         std::optional<std::size_t> reorderHover;
+        // Slot the lifted card previews (drag reorder); reorderHover is its source.
+        std::optional<std::size_t> reorderTo;
         bool covered = false;
         bool suspended = false;
         bool revealFromBottom = false;
@@ -590,6 +597,12 @@ struct StageController::Impl {
     std::vector<WindowSlot> sidebarGhostSlots(const std::vector<PHLWINDOW>& members, const Vector2D& point) const;
     void drawSidebarGhost(const PHLMONITOR& monitor);
     void returnSidebarCard(const PHLWORKSPACE& workspace, const PHLMONITOR& monitor, tiles::Id tile, const std::vector<WindowSlot>& ghosts, const std::vector<PHLWINDOW>& members);
+    bool dragReorder() const { return setting("stage_drag_reorder", 1) != 0; }
+    double previewDuration() const;
+    double previewOffset(const Card& card) const;
+    void updateReorderPreview();
+    void clearReorderPreview();
+    bool commitReorder(Screen& screen, const PHLWORKSPACE& workspace);
     void correctFloating(const PHLMONITOR& monitor, const CBox& desktop, const PHLWORKSPACE& workspace = nullptr);
     void damage(const Screen& screen);
     double cardTop(const Screen& screen, std::size_t index) const;
@@ -1570,6 +1583,7 @@ void StageController::Impl::cancelInput() {
     pressedSyntheticId = 0;
     pressMonitor.reset();
     reorderArmed = false;
+    clearReorderPreview();
     swallowedButtons.clear();
     lastDragged.reset();
     cancelDrop = false;
@@ -1587,13 +1601,14 @@ void StageController::Impl::cancelInput() {
         screen.suspended = true;
         screen.hovered.reset();
         screen.reorderHover.reset();
+        screen.reorderTo.reset();
         screen.flights.clear();
         screen.departingCards.clear();
         screen.paneTransition = false;
         screen.frozenWidth.reset();
         screen.shown = screen.slideFrom = screen.covered ? 0 : 1;
         for (auto& card : screen.cards)
-            card.shift = 0;
+            card.shift = card.previewFrom = card.previewTo = 0;
         damage(screen);
     }
     updatePreviewLiveness();
@@ -1874,6 +1889,7 @@ void StageController::Impl::sync() {
                     cards.push_back(target);
             }
             screen->cards = std::move(cards);
+            screen->reorderTo.reset();
         }
         if (dragged && !screen->frozenWidth && oldGeometry.enabled())
             screen->frozenWidth = oldGeometry.cardWidth;
@@ -1895,6 +1911,8 @@ void StageController::Impl::sync() {
                 card.shift = !finishingOverview && !blocked() && !changedOutput && numberSetting("animations:enabled", 1) && setting("stage_transition_ms", 300) > 0 && old != oldTops.end() ?
                     old->second - screen->geometry.cardTop(i, 0) : 0;
                 card.shiftStart = Clock::now();
+                // oldTops already include any reorder preview offset.
+                card.previewFrom = card.previewTo = 0;
                 if (card.shift != 0)
                     armMotion();
             }
@@ -2044,7 +2062,7 @@ void StageController::Impl::motion() {
         }
     }
     auto* drag = g_layoutManager->dragController().get();
-    const bool dragging = thumbnailDrag || (drag && drag->mode() == MBIND_MOVE && drag->target());
+    const bool dragging = thumbnailDrag || (drag && drag->mode() == MBIND_MOVE && drag->target()) || (reorderArmed && dragReorder());
     const auto point = g_pInputManager->getMouseCoordsInternal();
     for (auto& screen : screens) {
         if (screen.paneTransition) {
@@ -2054,6 +2072,15 @@ void StageController::Impl::motion() {
                 screen.departingCards.clear();
                 request();
             } else
+                again = true;
+            damage(screen);
+        }
+        for (auto& card : screen.cards) {
+            if (card.previewFrom == card.previewTo)
+                continue;
+            if (std::chrono::duration<double, std::milli>(now - card.previewStart).count() >= previewDuration())
+                card.previewFrom = card.previewTo;
+            else
                 again = true;
             damage(screen);
         }
@@ -2099,6 +2126,8 @@ void StageController::Impl::motion() {
             damage(screen);
             request(false);
             again = true;
+            if (reorderArmed)
+                updateReorderPreview();
         }
     }
     updateDragHover();
@@ -2169,7 +2198,7 @@ void StageController::Impl::pointer() {
             for (const auto& ref:tileDragMembers) if (auto w=ref.lock();w && w->m_workspace==tileDragWorkspace) members.push_back(w);
             if (members.size()==tileDragMembers.size() && tiles->beginTransfer(members,tileDragMonitor.lock(),tileDragSource,tileDragOrigin,tileDragPress)) {
                 tileDragPending=true;
-                pressed.reset(); pressedSyntheticId=0; reorderArmed=false; cancelDrop=false;
+                pressed.reset(); pressedSyntheticId=0; reorderArmed=false; cancelDrop=false; clearReorderPreview();
                 thumbnailDrag.reset(); clearDragHover();
                 g_pSeatManager->setPointerFocus(nullptr,{});
             }
@@ -2212,6 +2241,10 @@ void StageController::Impl::pointer() {
             screen.reorderHover = reorderTarget;
             damage(screen);
         }
+    }
+    if (reorderArmed) {
+        updateReorderPreview();
+        armMotion();
     }
     auto* drag = g_layoutManager->dragController().get();
     if (drag && drag->mode() == MBIND_MOVE && drag->target()) {
@@ -2398,12 +2431,15 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
                 // The point selects ownership only. Every scene derives the
                 // destination slot from the workspace number after publication.
                 success=!crossing || controller->moveWorkspace(workspace,targetMonitor,targetTile);
+                // Same column: dropping on another slot renumbers the workspaces.
+                if (success && !crossing && commitReorder(*column,workspace)) sync();
                 if (success) returnSidebarCard(workspace,targetMonitor,targetTile,ghosts,members);
             }
             dropTrace={{{"event","tile_sidebar_drop"},{"success",success},{"tile",targetTile},{"workspace",workspace?workspaceKey(workspace):0}}};
             tileDragPending=tileDragCandidate=legacyTileOwner=false; tileDragMembers.clear();
             tileDragWorkspace.reset(); tileDragClicked.reset(); pressed.reset(); pressedSyntheticId=0; reorderArmed=false;
             for (auto& screen:screens) if (screen.reorderHover) { screen.reorderHover.reset(); damage(screen); }
+            clearReorderPreview();
             swallowedButtons.erase(event.button); info.cancelled=true; forceRefresh=true; request(); return;
         }
     }
@@ -2422,7 +2458,7 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
         auto workspace=tileDragWorkspace.lock(); auto clicked=tileDragClicked.lock(); auto mon=tileDragMonitor.lock();
         const auto id=tileDragSource;
         tileDragPending=false; tileDragWorkspace.reset(); tileDragClicked.reset();
-        swallowedButtons.erase(event.button); pressed.reset(); pressedSyntheticId=0; reorderArmed=false;
+        swallowedButtons.erase(event.button); pressed.reset(); pressedSyntheticId=0; reorderArmed=false; clearReorderPreview();
         info.cancelled=true;
         if (tiles) {
             tiles->finishTransfer(dragged && !cancelDrop && !suppressed);
@@ -2469,9 +2505,14 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
         if (event.button == BTN_LEFT && screen && index) {
             const auto& card = screen->cards[*index];
             if (reorderArmed) {
-                // Plain sidebar drags never exchange workspace contents. This
-                // includes tiles-off, whose former content-swap policy is retired.
-                returnSidebarCard(workspace,pressMonitor.lock(),screen->tile,sidebarGhostSlots(dragMembers,g_pInputManager->getMouseCoordsInternal()),dragMembers);
+                // Sidebar drags never exchange workspace contents. With
+                // stage_drag_reorder, a drop on another slot renumbers the
+                // workspaces; the card then returns to its (new) numbered slot.
+                const auto tile = screen->tile;
+                const auto ghosts = sidebarGhostSlots(dragMembers,g_pInputManager->getMouseCoordsInternal());
+                if (screen->monitor.lock() == pressMonitor.lock() && commitReorder(*screen, workspace))
+                    sync();
+                returnSidebarCard(workspace,pressMonitor.lock(),tile,ghosts,dragMembers);
             } else if (workspace && card.workspace == workspace) {
                 // Resolve the topmost visible preview before activating: switching
                 // workspaces rebuilds cards and can invalidate this reference.
@@ -2518,6 +2559,7 @@ void StageController::Impl::button(const IPointer::SButtonEvent& event, Event::S
             }
         }
         reorderArmed = false;
+        clearReorderPreview();
         return;
     }
     // Releases belonging to a press outside the strip (including application
@@ -3011,7 +3053,7 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
         const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - card.shiftStart).count();
         const double progress = swipe && &swipe->visual == screen ? stage::transitionProgress(swipe->progress, 1) :
             stage::transitionProgress(elapsed, std::clamp(setting("stage_transition_ms", 300), 0L, 2000L));
-        return geometry.cardTop(i, scroll) + card.shift * (1 - progress);
+        return geometry.cardTop(i, scroll) + card.shift * (1 - progress) + previewOffset(card);
       };
       std::vector<std::size_t> visible;
       for (std::size_t i = 0; i < cards.size(); ++i) {
@@ -3033,6 +3075,19 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
         const auto cardClip = physical(box).intersection(stripClip);
         if (cardClip.w <= 0 || cardClip.h <= 0)
             continue;
+        if (&cards == &screen->cards && screen->reorderTo && screen->reorderHover == i) {
+            // Drag reorder: the lifted card's slot travels to the previewed
+            // position as an empty, accent-tinted placeholder.
+            const auto accent = CHyprColor(static_cast<uint64_t>(setting("focus_selected_color", 0xF23DC7FF)));
+            const double round = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
+                numberSetting("decoration:rounding", 0), box.w, box.h);
+            const int ringRound = static_cast<int>(std::lround(round * monitor->m_scale));
+            renderContext().m_data.clipBox = stripClip;
+            g_pHyprOpenGL->renderRect(renderContext(), physical(box), accent.modifyA(0.12F), {.round = ringRound, .roundingPower = 2.0F});
+            g_pHyprOpenGL->renderBorder(renderContext(), physical(box), Config::CGradientValueData{accent},
+                {.round = ringRound, .roundingPower = 2.0F, .borderSize = 2, .a = 0.9F, .outerRound = -1});
+            continue;
+        }
         renderContext().m_data.clipBox = cardClip;
         // Backdrop: the desktop region of the cached background framebuffer
         // (wallpaper and background-layer content like desktop dashboards),
@@ -3103,7 +3158,7 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
                 renderContext().m_data.clipBox = stripClip;
             }
             // Mark the original numbered slot while its drag ghost is away.
-            if (screen->reorderHover == i) {
+            if (screen->reorderHover == i && !screen->reorderTo) {
                 const auto accent = CHyprColor(static_cast<uint64_t>(setting("focus_selected_color", 0xF23DC7FF)));
                 const double hoverRound = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
                     numberSetting("decoration:rounding", 0), box.w, box.h);
@@ -3210,6 +3265,135 @@ void StageController::Impl::drawSidebarGhost(const PHLMONITOR& monitor) {
         drawPreview(members[slot.index],monitor,box(slot.target),clip,8,stage::edgeViewport(rect(monitor->logicalBox()),0,0));
 }
 
+double StageController::Impl::previewDuration() const {
+    if (!numberSetting("animations:enabled", 1))
+        return 0;
+    return std::min<double>(200, std::clamp(setting("stage_transition_ms", 300), 0L, 2000L));
+}
+
+double StageController::Impl::previewOffset(const Card& card) const {
+    if (card.previewFrom == card.previewTo)
+        return card.previewTo;
+    const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - card.previewStart).count();
+    return card.previewFrom + (card.previewTo - card.previewFrom) * stage::transitionProgress(elapsed, previewDuration());
+}
+
+void StageController::Impl::updateReorderPreview() {
+    const auto workspace = pressed.lock();
+    const bool active = reorderArmed && workspace && workspace->numberedID() && dragReorder();
+    const auto point = g_pInputManager->getMouseCoordsInternal();
+    for (auto& screen : screens) {
+        std::optional<std::size_t> source, target;
+        if (active && screen.monitor.lock() == pressMonitor.lock()) {
+            const auto it = std::ranges::find_if(screen.cards, [&](const Card& card) { return card.workspace == workspace; });
+            if (it != screen.cards.end())
+                source = std::distance(screen.cards.begin(), it);
+        }
+        if (source) {
+            // Numbered slots (real and synthetic) come first; named workspaces
+            // follow them and never take part.
+            std::size_t slots = 0;
+            while (slots < screen.cards.size() && cardID(screen.cards[slots]) > 0)
+                ++slots;
+            const auto band = sidebar(screen);
+            const bool inside = point.x >= band.x && point.x < band.x + band.w && point.y >= screen.base.y && point.y < screen.base.y + screen.base.h;
+            target = source;
+            if (inside && *source < slots) {
+                std::vector<double> centres;
+                for (std::size_t i = 0; i < slots; ++i)
+                    centres.push_back(screen.base.y + screen.geometry.cardTop(i, screen.scroll) + screen.geometry.cardHeight / 2);
+                const double pitch = slots > 1 ? centres[1] - centres[0] : screen.geometry.cardHeight;
+                target = stage::reorderTarget(centres, point.y, screen.reorderTo ? screen.reorderTo : source, pitch * 0.15);
+            }
+        }
+        screen.reorderTo = target;
+        for (std::size_t i = 0; i < screen.cards.size(); ++i) {
+            auto& card = screen.cards[i];
+            const std::size_t slot = source && target ? stage::reorderSlot(i, *source, *target) : i;
+            const double to = screen.geometry.cardTop(slot, 0) - screen.geometry.cardTop(i, 0);
+            if (card.previewTo == to)
+                continue;
+            card.previewFrom = previewOffset(card);
+            card.previewTo = to;
+            card.previewStart = Clock::now();
+            damage(screen);
+            armMotion();
+        }
+    }
+}
+
+void StageController::Impl::clearReorderPreview() {
+    for (auto& screen : screens) {
+        screen.reorderTo.reset();
+        for (auto& card : screen.cards) {
+            if (card.previewTo == 0)
+                continue;
+            card.previewFrom = previewOffset(card);
+            card.previewTo = 0;
+            card.previewStart = Clock::now();
+            damage(screen);
+            armMotion();
+        }
+    }
+}
+
+// Workspace numbers belong to the sidebar slots: the dragged workspace takes
+// the number of the slot it was dropped on and the workspaces in between take
+// their neighbours' numbers. Workspace objects (windows, layout, scroll
+// position) are kept; only their ids change.
+bool StageController::Impl::commitReorder(Screen& screen, const PHLWORKSPACE& workspace) {
+    if (!workspace || !screen.reorderTo || !dragReorder())
+        return false;
+    const auto source = std::ranges::find_if(screen.cards, [&](const Card& card) { return card.workspace == workspace; });
+    if (source == screen.cards.end())
+        return false;
+    std::vector<int64_t> ids;
+    std::vector<bool> occupied;
+    for (const auto& card : screen.cards) {
+        if (cardID(card) <= 0)
+            break;
+        ids.push_back(cardID(card));
+        occupied.push_back(card.workspace.lock() != nullptr);
+    }
+    const auto from = static_cast<std::size_t>(std::distance(screen.cards.begin(), source));
+    const auto to = *screen.reorderTo;
+    if (ids.empty())
+        return false;
+    const WorkspaceKey temp = std::max<WorkspaceKey>(blankWorkspaceKey(), ids.back() + 1);
+    const auto steps = stage::reorderSteps(ids, occupied, from, to, temp);
+    if (steps.empty() || temp > std::numeric_limits<Workspace::WorkspaceIDContainer>::max())
+        return false;
+    const auto change = [](int64_t from, int64_t to) {
+        const auto moving = workspaceForKey(from);
+        if (!moving || !moving->numberedID() || workspaceForKey(to))
+            return false;
+        moving->changeID(Workspace::SWorkspaceNumberedID{static_cast<Workspace::WorkspaceIDContainer>(to)});
+        return workspaceKey(moving) == to;
+    };
+    std::vector<stage::WorkspaceIdChange> done;
+    for (const auto& step : steps) {
+        if (!change(step.from, step.to)) {
+            for (auto undo = done.rbegin(); undo != done.rend(); ++undo)
+                change(undo->to, undo->from);
+            dropTrace = {{{"event", "sidebar_reorder"}, {"success", false}, {"from", step.from}, {"to", step.to}}};
+            return false;
+        }
+        done.push_back(step);
+    }
+    const auto mapping = stage::reorderMapping(steps);
+    if (auto* tiles = TilesController::get()) {
+        tiles::Renumbering renumbering;
+        for (const auto& change : mapping)
+            renumbering.emplace_back(change.from, change.to);
+        tiles->renumberWorkspaces(screen.monitor.lock(), renumbering);
+    }
+    nlohmann::json changes = nlohmann::json::array();
+    for (const auto& change : mapping)
+        changes.push_back({change.from, change.to});
+    dropTrace = {{{"event", "sidebar_reorder"}, {"success", true}, {"changes", changes}}};
+    return true;
+}
+
 void StageController::Impl::returnSidebarCard(const PHLWORKSPACE& workspace, const PHLMONITOR& monitor, tiles::Id tile,
                                              const std::vector<WindowSlot>& ghosts, const std::vector<PHLWINDOW>& members) {
     auto* screen=screenFor(monitor,tile);
@@ -3300,7 +3484,7 @@ double StageController::Impl::cardTop(const Screen& screen, std::size_t index) c
     const auto& card = screen.cards[index];
     const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - card.shiftStart).count();
     const double p = stage::transitionProgress(elapsed, std::clamp(setting("stage_transition_ms", 300), 0L, 2000L));
-    return screen.geometry.cardTop(index, screen.scroll) + card.shift * (1 - p);
+    return screen.geometry.cardTop(index, screen.scroll) + card.shift * (1 - p) + previewOffset(card);
 }
 
 std::optional<std::size_t> StageController::Impl::cardHit(const Screen& screen, const Vector2D& point, bool activation) const {
@@ -4123,6 +4307,8 @@ std::string StageController::Impl::stateJson() const {
                                      {"background_error", screen.backgroundError},
                                      {"sidebar_side", screen.right ? "right" : "left"}, {"sidebar_transition", screen.paneTransition},
                                      {"swipe_active", swipe && swipe->monitor == monitor && swipe->tile==screen.tile},
+                                     {"reorder_source", screen.reorderTo && screen.reorderHover ? nlohmann::json(*screen.reorderHover) : nlohmann::json()},
+                                     {"reorder_target", screen.reorderTo ? nlohmann::json(*screen.reorderTo) : nlohmann::json()},
                                      {"swipe_progress", swipe && swipe->monitor == monitor && swipe->tile==screen.tile ? swipe->progress : 0},
                                      {"flights",flights},{"transition_windows", rendered.flights.size()}, {"transition_progress", rendered.flights.empty() ? 1.0 : sampledFlightProgress},
                                      {"sidebar",{{"x",sidebar(screen).x},{"y",sidebar(screen).y},{"width",sidebar(screen).w},{"height",sidebar(screen).h}}},{"desktop_geometry",{{"x",desktop(screen).x},{"y",desktop(screen).y},{"width",desktop(screen).w},{"height",desktop(screen).h}}},{"desktop_width", desktop(screen).w}, {"desktop_height", desktop(screen).h}, {"reservation", screen.geometry.reservation},
@@ -4430,6 +4616,7 @@ void StageController::prepareOverviewExit(const std::vector<PHLMONITOR>& monitor
         destination.paneTransition = false;
         destination.hovered.reset();
         destination.reorderHover.reset();
+        destination.reorderTo.reset();
         destination.suspended = false;
         const auto mode = Fullscreen::controller()->getFullscreenModes(target).internal;
         destination.covered = mode == Fullscreen::FSMODE_FULLSCREEN || (self->maximizeCover && mode == Fullscreen::FSMODE_MAXIMIZED);
@@ -4718,7 +4905,7 @@ void StageController::cancelTileTransfer() {
     self->tileDragPending=false;
     self->tileDragCandidate=false; self->tileDragMembers.clear();
     self->tileDragWorkspace.reset(); self->tileDragClicked.reset(); self->tileDragMonitor.reset();
-    self->pressed.reset(); self->pressedSyntheticId=0; self->reorderArmed=false;
+    self->pressed.reset(); self->pressedSyntheticId=0; self->reorderArmed=false; self->clearReorderPreview();
     self->thumbnailDrag.reset(); self->clearDragHover();
     // Retain the consumed press until its release, including while overview owns input.
     self->request();

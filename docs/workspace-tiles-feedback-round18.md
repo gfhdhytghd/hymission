@@ -167,3 +167,12 @@ directories. `fb18-evidence-identity.json` indexes the artifacts and gate result
 No push, host reload, `hyprpm update`, host plugin load/unload or physical-device
 input was performed. These are isolated compositor/build results, not physical
 session acceptance.
+
+## Later change: drag reorder
+
+`stage_drag_reorder` (default `1`) supersedes the "same-column drag never
+reorders" part of this contract: a same-column drop renumbers the workspaces so
+the dragged workspace takes the dropped slot's number. Cards still always follow
+numeric order (the single `cardsForWorkspace()` authority is unchanged) and no
+drag order is saved; the numbers themselves move. Cross-column drops still only
+transfer ownership. `stage_drag_reorder = 0` keeps the behavior described above.

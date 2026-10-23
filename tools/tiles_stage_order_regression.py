@@ -19,7 +19,9 @@ def prepare(case,recent,evaluate,read,wait,pointer,root):
     """Try conflicting drop heights through public pointer input, then collapse."""
     import time
     from PIL import Image
-    evaluate(f'hl.config({{plugin={{hymission={{multi_workspace_sort_recent_first={recent}}}}}}})')
+    # These conflicting drops exercise FB18's fixed numeric slots; drag reorder
+    # (stage_drag_reorder, default on) is covered by tiles_disabled_regression.
+    evaluate(f'hl.config({{plugin={{hymission={{multi_workspace_sort_recent_first={recent},stage_drag_reorder=0}}}}}})')
     if case=='single':evaluate('hl.plugin.hymission.tile_add({workspace="301"})')
     wait('j/hymission-stage-state',lambda s:len(s['screens'])>=(1 if case=='off' else 2))
     results=[]

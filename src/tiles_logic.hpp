@@ -34,6 +34,10 @@ struct State {
 };
 enum class Activation { Focus, Swap };
 using Result = std::expected<void, std::string>;
+// Workspace id changes applied all at once (old id -> new id).
+using Renumbering = std::vector<std::pair<Workspace, Workspace>>;
+// Displayed workspaces and histories follow renumbered workspaces.
+State renumbered(State state, const Renumbering& changes);
 
 // One physical output. All mutations validate a draft and publish it once.
 // Workspace identity belongs to the adapter; display names never participate.
@@ -66,6 +70,7 @@ class Ownership {
     Id owner(const State&, Workspace) const;
     void claim(Workspace workspace, Id tile) { m_homes[workspace] = tile; }
     void forget(Workspace workspace) { m_homes.erase(workspace); }
+    void renumber(const Renumbering& changes);
     void sync(const State&);
     std::optional<Workspace> previous(const State&, Id, const std::vector<Workspace>& alive) const;
   private:

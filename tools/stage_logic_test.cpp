@@ -660,5 +660,44 @@ int main() {
     const auto leaving = transitionBox(desktopWindow, hiddenCard, 1);
     ok &= expect(near(entering.x, -180) && near(entering.width, 160) && near(entered.width, 1280) &&
         near(leaving.x, -180) && near(leaving.width, 160), "hidden sidebar endpoints retain thumbnail size and remain outside the output");
+    {
+        // Sidebar drag reorder: numbers stay with the slots, contents rotate.
+        const std::vector<double> centres{100, 220, 340, 460};
+        ok &= expect(reorderTarget(centres, 330, std::nullopt, 30) == 2, "a lifted card previews at the nearest slot");
+        ok &= expect(reorderTarget(centres, 285, 1, 30) == 1, "hysteresis keeps the current slot just past the midline");
+        ok &= expect(reorderTarget(centres, 310, 1, 30) == 2, "a clearly closer slot takes over");
+        ok &= expect(reorderTarget(centres, -50, 3, 30) == 0 && reorderTarget(centres, 900, 0, 30) == 3, "targets clamp to the first and last slot");
+        const std::vector<std::size_t> up{1, 2, 3, 0};
+        for (std::size_t i = 0; i < 4; ++i)
+            ok &= expect(reorderSlot(i, 3, 0) == up[i], "moving the last card to the top shifts the others down one slot");
+        ok &= expect(reorderSlot(0, 0, 2) == 2 && reorderSlot(1, 0, 2) == 0 && reorderSlot(2, 0, 2) == 1 && reorderSlot(3, 0, 2) == 3,
+            "moving down shifts the cards in between up and leaves the rest");
+        ok &= expect(reorderSlot(1, 2, 2) == 1, "a preview at the source slot moves nothing");
+
+        // [1 term, 2 web, 3 code, 4 empty, 5 chat]
+        const std::vector<int64_t> ids{1, 2, 3, 4, 5};
+        const std::vector<bool> occupied{true, true, true, false, true};
+        const auto top = reorderSteps(ids, occupied, 2, 0, 6);
+        ok &= expect(top == std::vector<WorkspaceIdChange>{{3, 6}, {2, 3}, {1, 2}, {6, 1}}, "moving 3 to the top borrows a free id and shifts 2 and 1");
+        ok &= expect(reorderMapping(top) == std::vector<WorkspaceIdChange>{{3, 1}, {2, 3}, {1, 2}}, "the mapping lists each workspace's final id once");
+        const auto intoEmpty = reorderSteps(ids, occupied, 4, 3, 6);
+        ok &= expect(intoEmpty == std::vector<WorkspaceIdChange>{{5, 6}, {6, 4}} && reorderMapping(intoEmpty) == std::vector<WorkspaceIdChange>{{5, 4}},
+            "dropping onto an empty slot renumbers only the moved workspace");
+        const auto down = reorderSteps(ids, occupied, 0, 4, 6);
+        ok &= expect(down == std::vector<WorkspaceIdChange>{{1, 6}, {2, 1}, {3, 2}, {5, 4}, {6, 5}}, "moving down skips empty slots and keeps every destination free");
+        // Hidden active workspace 3 is not a card: the sidebar slots are 1, 2, 4, 5.
+        const auto gap = reorderSteps({1, 2, 4, 5}, {true, true, true, true}, 3, 0, 6);
+        ok &= expect(reorderMapping(gap) == std::vector<WorkspaceIdChange>{{5, 1}, {4, 5}, {2, 4}, {1, 2}}, "numbers outside the sidebar sequence are never touched");
+        ok &= expect(reorderSteps(ids, occupied, 2, 2, 6).empty() && reorderSteps(ids, occupied, 3, 0, 6).empty() && reorderSteps(ids, occupied, 0, 2, 5).empty() &&
+            reorderSteps(ids, occupied, 0, 9, 6).empty(), "no-op, empty source, used temporary id and out-of-range moves produce no steps");
+        // Every step's destination is free when it runs.
+        std::vector<int64_t> used{1, 2, 3, 5};
+        bool free = true;
+        for (const auto& step : down) {
+            free &= std::ranges::find(used, step.to) == used.end();
+            std::ranges::replace(used, step.from, step.to);
+        }
+        ok &= expect(free && std::ranges::is_permutation(used, std::vector<int64_t>{1, 2, 4, 5}), "steps never collide and end on the original id set");
+    }
     return ok ? 0 : 1;
 }

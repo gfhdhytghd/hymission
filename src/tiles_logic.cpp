@@ -179,6 +179,24 @@ Id Ownership::owner(const State& state, Workspace workspace) const {
         for (const auto& tile : state.tiles) if (tile.id == it->second) return tile.id;
     return state.tiles.front().id;
 }
+static Workspace renumberedId(Workspace workspace, const Renumbering& changes) {
+    const auto it = std::ranges::find_if(changes, [&](const auto& change) { return change.first == workspace; });
+    return it == changes.end() ? workspace : it->second;
+}
+State renumbered(State state, const Renumbering& changes) {
+    for (auto& tile : state.tiles) {
+        tile.workspace = renumberedId(tile.workspace, changes);
+        for (auto& entry : tile.history)
+            entry = renumberedId(entry, changes);
+    }
+    return state;
+}
+void Ownership::renumber(const Renumbering& changes) {
+    std::map<Workspace, Id> homes;
+    for (const auto& [workspace, id] : m_homes)
+        homes[renumberedId(workspace, changes)] = id;
+    m_homes = std::move(homes);
+}
 void Ownership::sync(const State& state) {
     const auto survives = [&](Id id) { return std::ranges::any_of(state.tiles, [id](const auto& tile) { return tile.id == id; }); };
     for (auto& [workspace, id] : m_homes) if (!survives(id)) {

@@ -243,6 +243,20 @@ Empty-workspace slots are transparent. Hovering does not draw a frame.
 Retained cards animate vertical position changes using the transition duration;
 hit testing and drop mapping follow their displayed positions throughout.
 
+With `stage_drag_reorder = 1` (default), dragging a numbered workspace card more
+than 10 px lifts it: its slot becomes an accent-tinted placeholder that follows the
+nearest slot under the pointer (with hysteresis), and the cards in between slide
+one slot to make room. Releasing renumbers the workspaces through Hyprland's
+`changeID` in an order where every destination id is free (the dragged workspace
+first borrows an unused id); the card then flies into its new numbered slot.
+Workspace objects, windows, scrolling columns and tile ownership are kept, only
+ids change, so the cards remain in numeric order and keyboard navigation follows
+the new order. The active workspace hidden by `stage_show_active = 0`, other
+monitors' workspaces and named workspaces keep their ids. Synthetic empty slots
+take part as positions: dropping onto one only renumbers the dragged workspace.
+Moving the pointer out of the sidebar cancels; near the sidebar's top or bottom
+edge the column scrolls. `stage_drag_reorder = 0` restores FB18's fixed slots.
+
 Mapped, non-hidden
 non-pinned windows belonging to each target workspace
 retain their original positions, relative sizes, overlap and stacking order.

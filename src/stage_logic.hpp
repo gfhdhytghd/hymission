@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -185,6 +186,27 @@ ScrollingFlightFrame scrollingFlightFrame(const Rect& from, const Rect& to, cons
 // Exit the source clip before entering the destination clip. Size changes while hidden.
 ScrollingFlightFrame edgeTransferFrame(const Rect& from, const Rect& to, const EdgeViewport& fromViewport,
     const EdgeViewport& toViewport, double progress);
+
+// Sidebar drag reorder. Workspace numbers belong to slots: moving a card from
+// slot `from` to slot `to` shifts the cards in between by one slot and then
+// every workspace takes the number of the slot it occupies.
+// The slot a lifted card previews: the nearest slot centre, but the current
+// target is kept until another centre is closer by `hysteresis`.
+std::size_t reorderTarget(const std::vector<double>& centres, double y, std::optional<std::size_t> current, double hysteresis);
+// The slot that card `index` occupies while card `from` previews at `to`.
+std::size_t reorderSlot(std::size_t index, std::size_t from, std::size_t to);
+struct WorkspaceIdChange {
+    int64_t from = 0;
+    int64_t to = 0;
+    bool operator==(const WorkspaceIdChange&) const = default;
+};
+// Id changes, in an order where every destination is free when it is used.
+// `temp` must be an id no workspace uses. Empty (synthetic) slots own no
+// workspace and are skipped. Empty for an invalid or no-op move.
+std::vector<WorkspaceIdChange> reorderSteps(const std::vector<int64_t>& slotIds, const std::vector<bool>& occupied, std::size_t from, std::size_t to,
+                                            int64_t temp);
+// Original id -> final id of every workspace that `steps` renumber.
+std::vector<WorkspaceIdChange> reorderMapping(const std::vector<WorkspaceIdChange>& steps);
 
 // Keep this policy independent of compositor enum values for state tests.
 enum class CoverMode { None, Maximized, Fullscreen };

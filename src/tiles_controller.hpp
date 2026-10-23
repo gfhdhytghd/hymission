@@ -39,6 +39,8 @@ class TilesController {
     bool focus(const PHLMONITOR&, tiles::Id, bool warp = false);
     bool activate(const PHLMONITOR&, tiles::Id, const PHLWORKSPACE&, bool swap = false);
     bool moveWorkspace(const PHLWORKSPACE&, const PHLMONITOR&, tiles::Id);
+    // Keep tile state attached to workspaces whose ids changed (old -> new).
+    void renumberWorkspaces(const PHLMONITOR&, const tiles::Renumbering&);
     bool moveWindow(const PHLWINDOW&, const PHLMONITOR&, tiles::Id);
     bool moveWindows(const std::vector<PHLWINDOW>&, const PHLMONITOR&, tiles::Id, const PHLWORKSPACE&, bool focusTile = false);
     bool busy() const;
