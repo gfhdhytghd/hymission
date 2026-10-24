@@ -40,21 +40,54 @@ def run(case,observe,request,root,env,runtime,processes,handles,three=False):
         prefix.with_suffix('.json').write_text(json.dumps(frames,indent=2))
         subprocess.run(['grim','-o',read('j/monitors')[0]['name'],str(root/(name+'-screencopy.png'))],env=child,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         return frames
+    def shadow_interior(window, image):
+        b=window['contentGeometry'];y=int(b['y']+b['height']*.5)
+        left=max(320,int(b['x']+15));right=min(image.width-10,int(b['x']+b['width']-15))
+        clip=window.get('stageTransitionClip')
+        if clip:
+            # contentGeometry is the moving *uncropped* window. A Stage/tile
+            # handoff can hide most of it; gaps outside that viewport are not
+            # holes in opaque window content. Keep the original 16 px limit.
+            edges=window.get('stageTransitionEdges',[0,0,0,0])
+            left=max(left,int(clip['x']+max(15,edges[0])+1))
+            right=min(right,int(clip['x']+clip['width']-max(15,edges[1])))
+            if not clip['y']+max(15,edges[2])<y<clip['y']+clip['height']-max(15,edges[3]):return None
+        return (left,right,y) if 90<y<image.height-30 and left<right else None
     def shadow_runs(frames):
         runs=[]
         for i,frame in enumerate(frames):
             if frame['overview']['phase']!='opening':continue
             im=Image.open(frame['pixels']).convert('RGB');best=0
             for window in frame['overview']['windows']:
-                b=window['contentGeometry'];y=int(b['y']+b['height']*.5)
-                left=max(320,int(b['x']+15));right=min(im.width-10,int(b['x']+b['width']-15))
-                if not (90<y<im.height-30 and left<right):continue
+                interior=shadow_interior(window,im)
+                if not interior:continue
+                left,right,y=interior
                 pixels=[im.getpixel((x,y)) for x in range(left,right)]
                 dark=[25<p[2]<140 and p[0]<100 and p[1]<150 for p in pixels]
                 best=max(best,max([len(list(v)) for key,v in itertools.groupby(dark) if key]+[0]))
             runs.append(best)
         assert len(runs)>=3,('missing intermediate opening frames',runs)
         return max(runs)
+    def check_shadow_negative_control(frames,name):
+        # A visible opaque-body hole must still trip exactly the same gate.
+        # This is explicitly synthetic evidence, not a compositor capture.
+        for frame in frames:
+            if frame['overview']['phase']!='opening':continue
+            im=Image.open(frame['pixels']).convert('RGB')
+            for window in frame['overview']['windows']:
+                interior=shadow_interior(window,im)
+                if not interior:continue
+                left,right,y=interior
+                for x in range(left,right-24):
+                    if not all((p:=im.getpixel((xx,y)))[1]>200 and p[0]<30 and p[2]<30 for xx in range(x,x+24)):continue
+                    im.paste((60,80,100),(x,y,x+24,y+1))
+                    path=root/(name+'-synthetic-hole.png');im.save(path)
+                    seeded=dict(frame,pixels=str(path))
+                    detected=shadow_runs([seeded]*3)
+                    assert detected>=24,('shadow oracle lost sensitivity',detected)
+                    (root/(name+'-synthetic-hole.json')).write_text(json.dumps(dict(synthetic=True,source=frame['pixels'],x=x,y=y,width=24,detected=detected),indent=2))
+                    return
+        raise AssertionError('no visible green interior for shadow negative control')
     child=env.copy();child.pop('LD_PRELOAD',None)
     child['WAYLAND_DISPLAY']=next(p.name for p in runtime.glob('wayland-*') if p.is_socket())
     xml=Path(subprocess.check_output(['pkg-config','--variable=pkgdatadir','wayland-protocols'],text=True).strip())/'stable/xdg-shell/xdg-shell.xml'
@@ -100,6 +133,7 @@ def run(case,observe,request,root,env,runtime,processes,handles,three=False):
         evaluate('hl.config({animations={enabled=true}})')
         for scope in ('onlycurrentworkspace','forceall'):
             opened=record(f'{case}-{scope}-stage{stage}-open',f'hl.plugin.hymission.open("{scope}")')
+            if case=='shadow':check_shadow_negative_control(opened,f'{scope}-stage{stage}')
             wait('j/hymission-overview-state',lambda s:s['phase']=='active')
             if case=='switch' and scope=='onlycurrentworkspace':
                 before=overview()

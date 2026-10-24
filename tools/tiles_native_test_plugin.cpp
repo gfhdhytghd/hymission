@@ -54,8 +54,11 @@ CHyprSignalListener captureDamageListener;
 std::vector<CapturedFrame> capturedFrames;
 template<class Framebuffer>
 bool readFramePixels(Framebuffer& fb,std::vector<uint8_t>& bytes) {
-    if constexpr (requires { fb.readPixelsRGBA8(bytes); }) return fb.readPixelsRGBA8(bytes);
-    else {
+    const bool fp16=fb.getTexture() && fb.getTexture()->m_drmFormat==0x48344241;
+    if constexpr (requires { fb.readPixelsRGBA8(bytes); }) {
+        if (!fp16) return fb.readPixelsRGBA8(bytes);
+    }
+    {
         // Upstream main lacks the HDR tree's convenience readback API. Keep
         // this fixture buildable there, preserving all pack/read bindings.
         GLint readFB=0,alignment=0,rowLength=0,skipRows=0,skipPixels=0,buffer=0;
@@ -65,7 +68,13 @@ bool readFramePixels(Framebuffer& fb,std::vector<uint8_t>& bytes) {
         glBindFramebuffer(GL_READ_FRAMEBUFFER,fb.getFBID());glBindBuffer(GL_PIXEL_PACK_BUFFER,0);
         glPixelStorei(GL_PACK_ALIGNMENT,1);glPixelStorei(GL_PACK_ROW_LENGTH,0);
         glPixelStorei(GL_PACK_SKIP_ROWS,0);glPixelStorei(GL_PACK_SKIP_PIXELS,0);
-        glReadPixels(0,0,fb.m_size.x,fb.m_size.y,GL_RGBA,GL_UNSIGNED_BYTE,bytes.data());
+        if (fp16) {
+            // GLES requires a float read type for a floating attachment. Keep
+            // this SDR marker diagnostic linear; do not claim HDR output parity.
+            std::vector<float> linear(bytes.size());
+            glReadPixels(0,0,fb.m_size.x,fb.m_size.y,GL_RGBA,GL_FLOAT,linear.data());
+            for (size_t i=0;i<bytes.size();++i) bytes[i]=std::lround(std::clamp(linear[i],0.F,1.F)*255.F);
+        } else glReadPixels(0,0,fb.m_size.x,fb.m_size.y,GL_RGBA,GL_UNSIGNED_BYTE,bytes.data());
         const bool ok=glGetError()==GL_NO_ERROR;
         glBindFramebuffer(GL_READ_FRAMEBUFFER,readFB);glBindBuffer(GL_PIXEL_PACK_BUFFER,buffer);
         glPixelStorei(GL_PACK_ALIGNMENT,alignment);glPixelStorei(GL_PACK_ROW_LENGTH,rowLength);
@@ -128,7 +137,7 @@ class CaptureFramePass final:public IPassElement {
         frame.state={{"overview",overviewBeforeReadback}, {"tiles",tiles}};
         frame.state["layout"]=layoutBeforeReadback;
         frame.state["monitor"]=ctx.m_data.pMonitor->m_name;
-        frame.state["framebuffer"]={{"current",fb->getFBID()},{"main",dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.mainFB)->getFBID()},{"damage",nlohmann::json::array()}};
+        frame.state["framebuffer"]={{"drm_format",fb->getTexture()->m_drmFormat},{"current",fb->getFBID()},{"main",dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.mainFB)->getFBID()},{"damage",nlohmann::json::array()}};
         ctx.m_data.damage.forEachRect([&](const auto& rect) { frame.state["framebuffer"]["damage"].push_back({rect.x1,rect.y1,rect.x2,rect.y2}); });
         frame.state["stage"]=stageBeforeReadback;
         frame.state["readback_ms"]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-readbackStart).count();

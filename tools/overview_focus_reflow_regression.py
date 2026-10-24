@@ -168,7 +168,9 @@ def run(mode, observe, request, root, env, runtime, processes, handles, expand=F
                 wait('j/hymission-overview-state', lambda s: not s['active'])
         if bisect:
             continue
-        # Structural controls: open/close membership and tile bounds must update.
+        # Structural controls concern core slots, not the selected-window ripple
+        # pose. Keep expansion exercised by the paired focus trials above.
+        evaluate('hl.config({plugin={hymission={selected_expand_scale=1,hover_expand_scale=1}}}); hl.plugin.hymission_tiles_test.refresh()')
         evaluate(f'hl.plugin.hymission.open("{scope}")')
         before = settled()
         count = len(read('j/clients'))
@@ -186,9 +188,22 @@ def run(mode, observe, request, root, env, runtime, processes, handles, expand=F
             before = settled()
             evaluate('hl.plugin.hymission.tile_resize({delta="+80px"})')
             after = settled()
-            assert changed(geometry(before), geometry(after)), 'tile bounds did not reflow layout'
+            if scope == 'onlycurrentworkspace':
+                assert changed(geometry(before), geometry(after)), 'tile bounds did not reflow workspace regions'
+            else:
+                # All overview remains one output-wide region (FB2). A real
+                # topology change may reflow the solver, but must neither lose
+                # windows nor turn the region into per-tile clusters.
+                assert after['window_layout_scope'] == 'all' and not after['tile_groups']
+                assert set(geometry(before)) == set(geometry(after))
+                monitor = read('j/monitors')[0]
+                for rect in geometry(after).values():
+                    assert rect['width'] > 0 and rect['height'] > 0
+                    assert monitor['x']-1 <= rect['x'] and rect['x']+rect['width'] <= monitor['x']+monitor['width']/monitor['scale']+1
+                    assert monitor['y']-1 <= rect['y'] and rect['y']+rect['height'] <= monitor['y']+monitor['height']/monitor['scale']+1
         evaluate('hl.plugin.hymission.close()')
         wait('j/hymission-overview-state', lambda s: not s['active'])
+        evaluate('hl.config({plugin={hymission={selected_expand_scale='+str(scale)+',hover_expand_scale='+str(scale)+'}}}); hl.plugin.hymission_tiles_test.refresh()')
     (root/'configerrors.txt').write_text(request('/configerrors'))
     assert not (root/'configerrors.txt').read_text().strip()
     if not observe:

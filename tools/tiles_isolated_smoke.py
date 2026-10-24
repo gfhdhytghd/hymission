@@ -75,6 +75,9 @@ def main():
     ap.add_argument("--focus-reflow-bisect", action="store_true")
     ap.add_argument("--feedback3-regression",choices=("hover","workspace","stage","stage-multi","stage-perf","stage-adaptive","drag"))
     ap.add_argument("--feedback2-regression",choices=("panel","gesture","overview","stage"))
+    ap.add_argument("--fb19-regression", choices=("off","single","two","three","reference"))
+    ap.add_argument("--fb19-observe", action="store_true")
+    ap.add_argument("--fb19-fp16", action="store_true")
     ap.add_argument("--plugin", required=True)
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
@@ -176,7 +179,7 @@ def main():
 
         for _ in range(100):
             try:
-                state = json.loads(request("j/hymission-stage-state" if (args.overview_reveal_regression or args.default_off_regression or args.stage_animation_profile or args.stage_height_regression or args.focus_reflow_regression or args.stage_switch_regression or args.stage_flight_clip_regression) else "j/hymission-tiles-state"))
+                state = json.loads(request("j/hymission-stage-state" if (args.fb19_regression or args.overview_reveal_regression or args.default_off_regression or args.stage_animation_profile or args.stage_height_regression or args.focus_reflow_regression or args.stage_switch_regression or args.stage_flight_clip_regression) else "j/hymission-tiles-state"))
                 break
             except (ValueError, OSError):
                 time.sleep(0.1)
@@ -190,6 +193,10 @@ def main():
         else:
             raise RuntimeError("nested output did not appear")
         expected_width = monitors[0]["width"] / monitors[0].get("scale", 1)
+        if args.fb19_regression:
+            from overview_fb19_regression import run
+            run(args.fb19_regression,args.fb19_observe,args.fb19_fp16,request,root,env,runtime,processes,handles)
+            return
         if args.stage_edge_regression:
             from tiles_stage_edge_regression import run
             run(args.stage_edge_regression,args.stage_edge_observe,request,root,env,runtime,processes,handles)
@@ -461,7 +468,7 @@ def main():
                 client_log=open(root / f"client-{_}.log","w"); handles.append(client_log)
                 processes.append(subprocess.Popen(["weston-simple-shm"],env=client_env,stdout=client_log,stderr=subprocess.STDOUT))
                 wait_json("j/clients",lambda clients:len(clients)==_+1,"clients")
-            evaluate('hl.config({plugin={hymission={stage_enabled=1,stage_show_active=1,stage_transition_ms=0,stage_refresh_ms=16,workspace_strip_force_show=1,workspace_strip_empty_mode="always"}}})')
+            evaluate('hl.config({plugin={hymission={stage_enabled=1,stage_drag_reorder=0,stage_show_active=1,stage_transition_ms=0,stage_refresh_ms=16,workspace_strip_force_show=1,workspace_strip_empty_mode="always"}}})')
             evaluate('hl.plugin.hymission.stage_open()')
             def stage_ready(count):
                 return wait_json("j/hymission-stage-state",lambda s:s["enabled"] and s["hooks_ready"] and s["visibility_progress"]==1 and len(s["screens"])==count and any(c.get("windows") for sc in s["screens"] for c in sc["cards"]),"stage-ready")

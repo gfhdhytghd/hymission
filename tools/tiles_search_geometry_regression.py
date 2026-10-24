@@ -58,7 +58,9 @@ def run(request, root, env, runtime, processes, handles):
     def intersects(a, b):
         return min(a['x']+a['width'], b['x']+b['width']) > max(a['x'], b['x']) + .5 and min(a['y']+a['height'], b['y']+b['height']) > max(a['y'], b['y']) + .5
 
-    evaluate('hl.config({animations={enabled=false},plugin={hymission={tiles_enabled=1,tile_min_width=120,pick_labels_enabled=1,vim_keys=0,workspace_strip_empty_mode="always",stage_enabled=0}}}); hl.plugin.hymission_tiles_test.refresh()')
+    # Isolate search/header reservations from intentional hover expansion and
+    # ripple presentation; focus expansion has its own rendered-frame suite.
+    evaluate('hl.config({animations={enabled=false},plugin={hymission={selected_expand_scale=1,hover_expand_scale=1,tiles_enabled=1,tile_min_width=120,pick_labels_enabled=1,vim_keys=0,workspace_strip_empty_mode="always",stage_enabled=0}}}); hl.plugin.hymission_tiles_test.refresh()')
     for ws in (1, 2, 3):
         evaluate(f'hl.workspace_rule({{workspace="{ws}",persistent=true}}); hl.dispatch(hl.dsp.focus({{workspace={ws}}}))')
         spawn(marker, 'marker-' + str(ws))

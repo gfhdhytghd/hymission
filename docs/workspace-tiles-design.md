@@ -514,3 +514,12 @@ workspace 切换及非交互窗口几何动画、overview/Stage owner、布局�
 窗口拖入 tile 列空白处仍按既有规则创建下一个可用正编号，新卡片按编号出现；
 关闭 tiles 时仍仅 synthetic empty slot 创建工作区。所有列的尺寸与自适应策略不变。
 详见 [FB18 验证记录](workspace-tiles-feedback-round18.md)。
+
+### FB19: strip desktop geometry versus overview layout
+
+The main overview region keeps its FB7 focus-stable arrangement. Workspace strip
+cards independently capture live native desktop geometry, including scrolling
+column widths and camera position, with focus-triggered refresh plus the existing
+`workspace_strip_refresh_ms` timer. A strip thumbnail must not run the overview
+layout engine or reuse frozen main-region target boxes. Existing transient drop
+prediction is separate. See [FB19 evidence and contracts](overview-feedback-round19.md).

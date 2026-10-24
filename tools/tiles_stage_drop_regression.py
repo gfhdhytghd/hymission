@@ -31,7 +31,7 @@ def run(case,observe,request,root,env,runtime,processes,handles):
     subprocess.run(['wayland-scanner','private-code',str(xml),str(root/'xdg-shell-protocol.c')],check=True)
     flags=subprocess.check_output(['pkg-config','--cflags','--libs','wayland-client'],text=True).split()
     binary=root/'marker';subprocess.run(['cc',str(Path(__file__).with_name('tiles_top_marker_client.c')),str(root/'xdg-shell-protocol.c'),'-I'+str(root),*flags,'-o',str(binary)],check=True)
-    evaluate('hl.config({general={layout="dwindle"},animations={enabled=false},plugin={hymission={tiles_enabled=1,tile_min_width=120,niri_mode=0,stage_enabled=0,stage_show_active=1,stage_show_empty=1,stage_empty_slots=0,stage_transition_ms=0}}}); hl.plugin.hymission_tiles_test.refresh()')
+    evaluate('hl.config({general={layout="dwindle"},animations={enabled=false},plugin={hymission={tiles_enabled=1,tile_min_width=120,niri_mode=0,stage_enabled=0,stage_drag_reorder=0,stage_show_active=1,stage_show_empty=1,stage_empty_slots=0,stage_transition_ms=0}}}); hl.plugin.hymission_tiles_test.refresh()')
     for ws in range(1101,1107):
         evaluate(f'hl.workspace_rule({{workspace="{ws}",persistent=true}}); hl.dispatch(hl.dsp.focus({{workspace={ws}}}))')
         log=open(root/f'client-{ws}.log','w');handles.append(log)

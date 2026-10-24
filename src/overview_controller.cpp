@@ -2479,7 +2479,15 @@ bool OverviewController::initialize() {
         pruneWindowActivationHistory(window);
         handleWindowSetChange(window, WindowSetChangeKind::General, true);
     });
-    m_windowActiveListener = events.window.active.listen([this](PHLWINDOW window, Desktop::eFocusReason) { recordWindowActivation(window); });
+    m_windowActiveListener = events.window.active.listen([this](PHLWINDOW window, Desktop::eFocusReason) {
+        recordWindowActivation(window);
+        // Main overview slots remain frozen on focus (FB7). The strip is a
+        // desktop mirror: focus may resize a scrolling column or move its camera.
+        if (isVisible() && workspaceStripEnabled(m_state)) {
+            m_stripSnapshotsDirty = true;
+            scheduleWorkspaceStripSnapshotRefresh();
+        }
+    });
     m_windowMoveWorkspaceListener =
         events.window.moveToWorkspace.listen([this](PHLWINDOW window, PHLWORKSPACE) { handleWindowSetChange(window, WindowSetChangeKind::MoveToWorkspace); });
     m_workspaceActiveListener = events.workspace.active.listen([this](PHLWORKSPACE workspace) { handleWorkspaceChange(workspace); });
@@ -4424,7 +4432,9 @@ void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, co
         0, static_cast<int>(std::lround((static_cast<double>(window->presentation().rounding()) * roundingScale * decorationScale + borderSize - correctionOffset) * renderScale)));
     const int renderRange = std::max(1, static_cast<int>(std::lround(shadowRange * renderScale)));
 
-    const float previewAlpha = managedPreviewAlphaFor(window, alpha) * static_cast<float>(easeInOutCubic(visualProgress()));
+    // Desktop decorations do not disappear as the overview reaches its native
+    // endpoint. Use the window's real alpha, exactly as the border/body do.
+    const float previewAlpha = managedPreviewAlphaFor(window, alpha);
     if (immediate)
         g_pHyprOpenGL->renderRoundedShadow(renderContext(), shadowBox, shadowRound, static_cast<float>(roundingPower), renderRange, Config::CGradientValueData{shadowColor}, previewAlpha, window->presentation().renderPresentation());
     else {
@@ -14081,21 +14091,8 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             previewState.participatingMonitors = {monitor};
             previewState.focusDuringOverview = Desktop::focusState()->window();
         }
-        if (entry.tileId && targetWorkspace) {
+        if (entry.tileId && targetWorkspace)
             std::erase_if(previewState.windows,[&](const auto& managed) { return managed.window->m_workspace!=targetWorkspace; });
-            std::vector<WindowInput> inputs;
-            for (size_t i=0;i<previewState.windows.size();++i) {
-                const auto& managed=previewState.windows[i];
-                const auto local=rectToMonitorLocal(managed.naturalGlobal,monitor);
-                inputs.push_back(layoutInputForWindow(previewState, managed.window, local, i));
-            }
-            MissionControlLayout layout;
-            for (const auto& slot:layout.compute(inputs,tileContentRect(monitor,entry.tileId,previewState),layoutConfigForState(previewState))) {
-                auto& managed=previewState.windows[slot.index]; managed.slot=slot;
-                managed.targetGlobal=overviewContentTargetForSlot(managed.window,monitor,slot);
-                managed.relayoutFromGlobal=managed.exitGlobal=managed.targetGlobal;
-            }
-        }
         previewState.phase = Phase::Active;
         previewState.animationProgress = 1.0;
         previewState.animationFromVisual = 1.0;
@@ -14211,6 +14208,19 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
                     .isFloating = preview.window->isFloating(),
                     .isPinned = static_cast<bool>(preview.window->m_state & Desktop::View::WINDOW_STATE_PINNED),
                 });
+            }
+        }
+
+        if (!entryIsHoveredDragTarget) {
+            // A strip card is the current desktop, not a second overview layout.
+            // Re-sample every refresh (including native scrolling camera motion)
+            // independently of the main region's frozen FB7 layout session.
+            for (auto& managed : previewState.windows) {
+                const auto geometry = stateSnapshotGlobalRectForWindow(managed.window, shouldUseGoalGeometryForStateSnapshot(managed.window));
+                managed.naturalGlobal = managed.exitGlobal = managed.relayoutFromGlobal = managed.targetGlobal = geometry;
+                const auto local = rectToMonitorLocal(geometry, monitor);
+                managed.slot.natural = managed.slot.target = local;
+                managed.slot.scale = 1.0;
             }
         }
 
