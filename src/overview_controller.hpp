@@ -681,6 +681,9 @@ class OverviewController {
     [[nodiscard]] std::vector<Rect> targetRects() const;
     [[nodiscard]] std::vector<std::size_t> pickOrderForCurrentState() const;
     [[nodiscard]] Rect         workspaceStripBandRectForMonitor(const PHLMONITOR& monitor, const State& state) const;
+    [[nodiscard]] Rect         monitorAvailableRect(const PHLMONITOR& monitor) const;
+    [[nodiscard]] Rect         overviewAvailableRectForMonitor(const PHLMONITOR& monitor, const State& state) const;
+    [[nodiscard]] std::string  searchInputPlacement() const;
     [[nodiscard]] Rect         overviewContentRectForMonitor(const PHLMONITOR& monitor, const State& state) const;
     [[nodiscard]] Rect tileContentRect(const PHLMONITOR&, uint64_t, const State&) const;
     [[nodiscard]] Rect tileStripBand(const PHLMONITOR&, uint64_t, const State&) const;

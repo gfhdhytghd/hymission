@@ -110,7 +110,11 @@ if(BUILD_TESTING)
     get_target_property(WORKSPACE_KEY_INCLUDES hymission INCLUDE_DIRECTORIES)
     target_include_directories(hymission-workspace-key-test PRIVATE src ${WORKSPACE_KEY_INCLUDES})
     target_link_directories(hymission-workspace-key-test PRIVATE ${HYPR_DEPS_LIBRARY_DIRS} ${LUA_LIBRARY_DIRS} ${GLIB_LIBRARY_DIRS})
-    target_link_libraries(hymission-workspace-key-test PRIVATE ${HYPR_DEPS_LIBRARIES} ${LUA_LIBRARIES} ${GLIB_LIBRARIES})
+    # Header-only workspace checks only need the logger's hyprutils destructor.
+    # Let the selected compositor resolve its own logger/native symbols; linking
+    # all deps can load a second Aquamarine SONAME into a private dev binary.
+    pkg_check_modules(WORKSPACE_KEY_UTILS REQUIRED IMPORTED_TARGET hyprutils)
+    target_link_libraries(hymission-workspace-key-test PRIVATE PkgConfig::WORKSPACE_KEY_UTILS)
     add_test(NAME hymission-workspace-key-test
       COMMAND ${CMAKE_COMMAND} -E env
         "LD_PRELOAD=$<TARGET_FILE:hymission-workspace-key-test>"

@@ -1,4 +1,5 @@
 build/
+/build-defaults/
 build-meson/
 build-cmake/
 Testing/
