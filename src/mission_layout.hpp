@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -60,11 +61,23 @@ enum class LayoutEngine {
     Grid,
     Natural,
     Thumbnail,
-    Natural2,
+    Natural2 = Natural, // Compatibility alias; there is only one natural solver.
 };
 
+inline LayoutEngine parseOverviewLayoutEngine(std::string_view value) {
+    std::string lowered(value);
+    for (auto& ch : lowered)
+        if (ch >= 'A' && ch <= 'Z')
+            ch += 'a' - 'A';
+    if (lowered == "natural" || lowered == "natural2" || lowered == "apple" || lowered == "apple-like" || lowered == "expose" || lowered == "mission-control")
+        return LayoutEngine::Natural;
+    if (lowered == "thumbnail" || lowered == "thumbnails")
+        return LayoutEngine::Thumbnail;
+    return LayoutEngine::Grid;
+}
+
 struct LayoutConfig {
-    LayoutEngine engine = LayoutEngine::Grid;
+    LayoutEngine engine = LayoutEngine::Natural;
     double outerPaddingTop = 48.0;
     double outerPaddingRight = 48.0;
     double outerPaddingBottom = 48.0;
@@ -78,10 +91,11 @@ struct LayoutConfig {
     double layoutSpaceWeight = 0.10;
     double layoutScaleWeight = 1.0;
     double minSlotScale = 0.10;
+    // Deprecated compatibility field; ignored by every engine.
     double naturalScaleFlex = 0.22;
     bool   preserveInputOrder = false;
     bool   forceRowGroups = false;
-    bool   rankScaleByInputOrder = false;
+    bool   rankScaleByInputOrder = false; // Deprecated; no rank-based size gradient.
 };
 
 enum class LayoutReflowKind {

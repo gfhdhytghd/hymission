@@ -407,7 +407,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     FLOAT_CONF("max_preview_scale", 0.95F);
     FLOAT_CONF("workspace_overview_max_preview_scale", 0.95F);
     FLOAT_CONF("min_slot_scale", 0.10F);
-    FLOAT_CONF("natural_scale_flex", 0.22F);
+    FLOAT_CONF("natural_scale_flex", 0.22F); // Deprecated no-op; accept existing configurations.
     FLOAT_CONF("layout_scale_weight", 1.0F);
     FLOAT_CONF("layout_space_weight", 0.10F);
     // Deprecated compatibility sink. It remains registered to avoid a config
@@ -506,7 +506,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("debug_logs", 0);
     INT_CONF("gesture_close_restores_focus", 1);
     INT_CONF("debug_surface_logs", 0);
-    STRING_CONF("layout_engine", "grid");
+    STRING_CONF("layout_engine", "natural");
     STRING_CONF("layout_engine_forceall", "");
     STRING_CONF("layout_engine_all", "");
     STRING_CONF("layout_engine_onlycurrentworkspace", "");

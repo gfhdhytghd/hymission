@@ -178,6 +178,7 @@
   <nav class="toc" aria-labelledby="toc-title">
     <h2 id="toc-title">Versions</h2>
     <ol>
+      <li><a href="#unreleased">Unreleased <span>next</span></a></li>
       <li><a href="#v0-11-0-v0-56-2">0.11.0 <span>2026-10-11</span></a></li>
       <li><a href="#v0-10-2-v0-56-2">0.10.2 <span>2026-10-11</span></a></li>
       <li><a href="#v0-10-1-v0-56-2">0.10.1 <span>2026-10-11</span></a></li>
@@ -205,6 +206,21 @@
   </nav>
   <main id="changelog" tabindex="-1">
     <ol class="timeline" aria-label="Releases, newest first">
+      <li>
+        <article class="entry unreleased" id="unreleased" aria-labelledby="unreleased-title">
+          <div class="entry-head">
+            <h2 id="unreleased-title"><a href="#unreleased">Unreleased</a></h2>
+            <div class="meta"><span class="badge pending">Not yet released</span><span>Since v0.11.0-v0.56.2</span></div>
+          </div>
+          <p class="summary">Natural is now the default layout. Set layout_engine = &quot;grid&quot; to keep the previous grid layout.</p>
+          <h3>Natural layout by default</h3>
+          <ul>
+            <li>The default layout_engine is now natural, using the former natural2 algorithm with stable session allocations and workspace/column-aware packing. Set layout_engine = &quot;grid&quot; to keep the previous grid layout.</li>
+            <li>natural2 remains an alias for natural in every scope override. The old natural solver has been removed; natural_scale_flex is accepted as a deprecated no-op. Grid scoring weights remain available for grid.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/compare/v0.11.0-v0.56.2...master">Compare v0.11.0-v0.56.2…master</a></div>
+        </article>
+      </li>
       <li>
         <article class="entry" id="v0-11-0-v0-56-2" aria-labelledby="v0-11-0-v0-56-2-title">
           <div class="entry-head">

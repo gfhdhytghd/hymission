@@ -5179,7 +5179,7 @@ CRegion OverviewController::surfaceVisibleRegionHook(void* surfacePassThisptr, b
 LayoutConfig OverviewController::loadLayoutConfig() const {
     const double outerPadding = std::clamp(getConfigInt(m_handle, "plugin:hymission:outer_padding", 32), 0L, 4096L);
     return normalizeLayoutConfig({
-        .engine = parseLayoutEngine(getConfigString(m_handle, "plugin:hymission:layout_engine", "grid")),
+        .engine = parseLayoutEngine(getConfigString(m_handle, "plugin:hymission:layout_engine", "natural")),
         .outerPaddingTop = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_top", static_cast<long>(outerPadding))),
         .outerPaddingRight = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_right", static_cast<long>(outerPadding))),
         .outerPaddingBottom = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_bottom", static_cast<long>(outerPadding))),
@@ -5193,7 +5193,6 @@ LayoutConfig OverviewController::loadLayoutConfig() const {
         .layoutSpaceWeight = getConfigFloat(m_handle, "plugin:hymission:layout_space_weight", 0.10, 0, 100),
         .layoutScaleWeight = getConfigFloat(m_handle, "plugin:hymission:layout_scale_weight", 1.0, 0, 100),
         .minSlotScale = getConfigFloat(m_handle, "plugin:hymission:min_slot_scale", 0.10, 0, 4),
-        .naturalScaleFlex = getConfigFloat(m_handle, "plugin:hymission:natural_scale_flex", 0.22, 0, 0.25),
     });
 }
 
@@ -5736,7 +5735,7 @@ void OverviewController::refreshNiriScrollingOverviewAfterLayoutScroll(const cha
     if (!isVisible() || m_state.phase != Phase::Active || !niriModeEnabled() || !m_state.ownerMonitor || !isScrollingWorkspace(activeLayoutWorkspace()))
         return;
 
-    if (m_state.engine == LayoutEngine::Natural2 || layoutConfigForState(m_state).engine == LayoutEngine::Natural2) {
+    if (m_state.engine == LayoutEngine::Natural || layoutConfigForState(m_state).engine == LayoutEngine::Natural) {
         rebuildVisibleState(m_state.focusDuringOverview);
         return;
     }
@@ -13057,7 +13056,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
         });
     const bool sameLayoutShape = sameWindowSet && sameMonitorSet && sameRowGroups && sameTileLayouts;
     const bool selectionRelayoutForced = forceRelayout && expandSelectedWindowEnabled();
-    const bool freezeExistingLayout = sameLayoutShape && !forceRelayout && next.engine != LayoutEngine::Natural2 && m_state.engine != LayoutEngine::Natural2;
+    const bool freezeExistingLayout = sameLayoutShape && !forceRelayout && next.engine != LayoutEngine::Natural && m_state.engine != LayoutEngine::Natural;
 
     bool shouldAnimateRelayout = false;
     if (freezeExistingLayout) {
@@ -15227,7 +15226,7 @@ struct OverviewController::LayoutIdentityOwners {
 
 WindowInput OverviewController::layoutInputForWindow(State& state, const PHLWINDOW& window, const Rect& local, std::size_t index, std::size_t rowGroup) const {
     WindowInput input{.index = index, .natural = local, .label = window ? window->metadata().title() : "", .rowGroup = rowGroup};
-    if (state.engine != LayoutEngine::Natural2 || !window)
+    if (state.engine != LayoutEngine::Natural || !window)
         return input;
 
     // State copies may be used as transition/drag predictions. Detach before
@@ -15509,7 +15508,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     std::unordered_map<MONITORID, std::size_t> directNiriOverviewWindowsByMonitor;
     LayoutConfig config = layoutConfigForState(state);
     state.engine = config.engine;
-    if (config.engine == LayoutEngine::Natural2 && previousLayoutState && previousLayoutState->engine == config.engine &&
+    if (config.engine == LayoutEngine::Natural && previousLayoutState && previousLayoutState->engine == config.engine &&
         previousLayoutState->ownerMonitor == state.ownerMonitor &&
         previousLayoutState->collectionPolicy.requestedScope == state.collectionPolicy.requestedScope &&
         previousLayoutState->collectionPolicy.onlyActiveMonitor == state.collectionPolicy.onlyActiveMonitor &&
@@ -15521,8 +15520,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     const bool useWorkspaceRows = workspaceRowsEnabled(m_handle) || config.engine == LayoutEngine::Thumbnail;
     config.preserveInputOrder = preserveExistingOrder || orderByRecentUse;
     config.forceRowGroups = useWorkspaceRows;
-    config.rankScaleByInputOrder = orderByRecentUse;
-    const bool allowDirectNiriOverviewLayout = state.collectionPolicy.onlyActiveWorkspace && config.engine != LayoutEngine::Natural2;
+    const bool allowDirectNiriOverviewLayout = state.collectionPolicy.onlyActiveWorkspace && config.engine != LayoutEngine::Natural;
     const auto slotWithBorderOuterTarget = [&](const PHLWINDOW& window, const PHLMONITOR& monitor, WindowSlot slot) {
         if (!monitor)
             return slot;

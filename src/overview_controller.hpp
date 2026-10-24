@@ -331,7 +331,7 @@ class OverviewController {
         PHLMONITOR                             ownerMonitor;
         PHLWORKSPACE                           ownerWorkspace;
         CollectionPolicy                       collectionPolicy;
-        LayoutEngine                           engine = LayoutEngine::Grid;
+        LayoutEngine                           engine = LayoutEngine::Natural;
         OverviewLayoutSession                  layoutSession;
         std::shared_ptr<LayoutIdentityOwners>   layoutIdentityOwners;
         bool                                   suppressWorkspaceStrip = false;

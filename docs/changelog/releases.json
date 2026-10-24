@@ -532,5 +532,18 @@
         }
       ]
     }
-  ]
+  ],
+  "unreleased": {
+    "since": "v0.11.0-v0.56.2",
+    "sections": [
+      {
+        "title": "Natural layout by default",
+        "items": [
+          "The default layout_engine is now natural, using the former natural2 algorithm with stable session allocations and workspace/column-aware packing. Set layout_engine = \"grid\" to keep the previous grid layout.",
+          "natural2 remains an alias for natural in every scope override. The old natural solver has been removed; natural_scale_flex is accepted as a deprecated no-op. Grid scoring weights remain available for grid."
+        ]
+      }
+    ],
+    "summary": "Natural is now the default layout. Set layout_engine = \"grid\" to keep the previous grid layout."
+  }
 }

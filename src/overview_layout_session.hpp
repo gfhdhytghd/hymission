@@ -34,20 +34,6 @@ inline std::optional<ScrollingColumnGeometry> scrollingColumnGeometry(std::size_
     return std::nullopt;
 }
 
-inline LayoutEngine parseOverviewLayoutEngine(std::string_view value) {
-    std::string lowered(value);
-    for (auto& ch : lowered)
-        if (ch >= 'A' && ch <= 'Z')
-            ch += 'a' - 'A';
-    if (lowered == "natural2")
-        return LayoutEngine::Natural2;
-    if (lowered == "natural" || lowered == "apple" || lowered == "apple-like" || lowered == "expose" || lowered == "mission-control")
-        return LayoutEngine::Natural;
-    if (lowered == "thumbnail" || lowered == "thumbnails")
-        return LayoutEngine::Thumbnail;
-    return LayoutEngine::Grid;
-}
-
 // Keep the owner alive for this overview snapshot. A closed window/column's
 // address cannot then be recycled into a hidden reservation's identity.
 template <typename Owner>
@@ -75,7 +61,7 @@ class OverviewLayoutSession {
     std::vector<WindowSlot> compute(const OverviewLayoutRegion& region, const std::vector<WindowInput>& inputs, const Rect& area,
                                     const LayoutConfig& config) {
         MissionControlLayout layout;
-        if (config.engine != LayoutEngine::Natural2) {
+        if (config.engine != LayoutEngine::Natural) {
             m_contexts.clear();
             return layout.compute(inputs, area, config);
         }

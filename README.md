@@ -2,6 +2,8 @@
 
 `hymission` is a Hyprland plugin that provides a Mission Control-style overview with live compositor-side previews, scope-aware collection, trackpad gestures, and a workspace strip for active-workspace overview mode.
 
+**Default layout change:** `layout_engine` now defaults to `"natural"`, using the former natural2 algorithm. To keep the previous grid layout, set `layout_engine = "grid"`. `"natural2"` remains a compatible alias.
+
 See the [changelog](https://gfhdhytghd.github.io/hymission/) for release history and unreleased changes.
 
 > [!IMPORTANT]
@@ -367,13 +369,12 @@ hl.config({
             one_workspace_per_row = 0,
 
             -- Layout: engine selection and per-engine settings
-            layout_engine = "grid",
+            layout_engine = "natural",
             layout_engine_forceall = "",
             layout_engine_all = "",
             layout_engine_onlycurrentworkspace = "",
             layout_scale_weight = 1.0,
             layout_space_weight = 0.10,
-            natural_scale_flex = 0.22,
 
             -- Behavior: workspace scope and transitions
             multi_workspace_sort_recent_first = 1,
@@ -479,15 +480,14 @@ An empty scope override inherits `layout_engine`.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `layout_engine` | string | `grid` | Default geometry solver. `grid` uses row search. `natural`, `apple`, `expose`, and `mission-control` are aliases for the Apple-like natural solver. |
+| `layout_engine` | string | `natural` | Geometry solver. `natural` uses the former natural2 algorithm; `natural2`, `apple`, `apple-like`, `expose`, and `mission-control` are aliases. `grid` keeps row search; `thumbnail` / `thumbnails` preserves workspace miniature geometry. |
 | `layout_engine_forceall` | string | empty | Engine override for the explicit `forceall` dispatcher scope. Falls back to `layout_engine_all`, then `layout_engine`. |
 | `layout_engine_all` | string | empty | Engine override for the default all-workspace / multi-workspace scope. |
 | `layout_engine_onlycurrentworkspace` | string | empty | Engine override for `onlycurrentworkspace` and default active-workspace scope. |
 
 #### Grid / row-search engine
 
-The natural engine can also use the row-search path as an emergency fallback, so
-these weights still affect that fallback.
+These scoring weights affect `grid` (and a thumbnail grid fallback) only. The natural engine does not use them.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -496,12 +496,15 @@ these weights still affect that fallback.
 
 #### Natural engine
 
-The natural engine tries to preserve original window positions while removing
-overlap. It attempts every window count before falling back to row search.
+The default natural engine preserves source positions with uniform scaling when they fit without overlap. Otherwise it packs workspace bands and scrolling columns into centered rows, preserving aspect ratios and spatial order. Stable window identities retain allocations during one overview session, including filtering and local insertions; separate monitor/tile/workspace regions own separate history.
+
+Padding is applied once to the supplied region. `row_spacing` and `column_spacing` set minimum gaps; `min_window_length` reserves space for small windows and `small_window_boost` weights their allocation. Preview scale caps remain in effect. `min_slot_scale` and `min_preview_short_edge` are readability goals: infeasible layouts reduce spacing and then size rather than dropping windows or distorting aspect ratios. `one_workspace_per_row` forces separate workspace bands.
+
+Recent-use sorting does not impose a size gradient or override natural spatial ordering. The legacy natural solver, its iterative repulsion, corner filling and per-window free-scale optimization have been removed.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `natural_scale_flex` | float | `0.22` | Natural-engine-only free scale range. Values are clamped to `0.0` - `0.25`; recent-first multi-workspace ordering keeps earlier windows visibly larger, while natural layouts may use larger per-window scale differences to fill sparse space. |
+| `natural_scale_flex` | float | `0.22` | Deprecated, ignored. Still accepted so existing configurations do not produce errors. |
 
 Non-finite numeric settings use their defaults. Layout padding, spacing and minimum lengths are limited to 0–4096 logical pixels; preview scales to 0–4, small-window boost to 0.1–4, and layout weights to 0–100. The minimum slot scale cannot exceed the maximum preview scale. Workspace strip refresh intervals are limited to 0–60000 ms (0 keeps frame-driven refresh). Gesture finger counts must be decimal integers from 2 to 9; scales must be finite and are limited to 0.1–10.
 
