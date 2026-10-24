@@ -414,7 +414,7 @@ LayoutConfig demoConfig(const Options& options) {
     if (options.naturalScaleFlex)
         config.naturalScaleFlex = *options.naturalScaleFlex;
     config.forceRowGroups = options.forceRowGroups;
-    config.preserveInputOrder = options.preserveInputOrder || options.rankScaleByInputOrder;
+    config.preserveInputOrder = options.preserveInputOrder;
     config.rankScaleByInputOrder = options.rankScaleByInputOrder;
     return config;
 }

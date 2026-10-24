@@ -5,6 +5,8 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <random>
+#include "overview_expansion.hpp"
 #include <vector>
 
 #include "mission_layout.hpp"
@@ -666,6 +668,146 @@ bool natural2Regression(const MissionControlLayout& engine) {
     return ok;
 }
 
+// Reproduce native focus width changes, column repartitioning and frame-order
+// jitter through the actual controller session adapter, not the raw core API.
+bool focusGeometryFreezeRegression() {
+    using namespace hymission;
+    bool ok = true;
+    for (unsigned seed = 0; seed < 64; ++seed) {
+        std::mt19937 rng(seed);
+        auto config = deterministicConfig();
+        config.engine = seed % 2 ? LayoutEngine::Natural : LayoutEngine::Natural2;
+        config.columnSpacing = config.rowSpacing = 24;
+        const Rect area{100, 200, 1200, 800};
+        const OverviewLayoutRegion region{1, seed % 3, 42};
+        OverviewLayoutSession session;
+        std::vector<WindowInput> inputs;
+        for (std::size_t i = 0; i < 9; ++i)
+            inputs.push_back({.index = i,
+                              .natural = {double(i % 3) * 400, double(i / 3) * 270, 360, 220},
+                              .label = "same",
+                              .stableId = i,
+                              .groupId = 42});
+        const auto before = session.compute(region, inputs, area, config);
+        for (unsigned frame = 0; frame < 48; ++frame) {
+            std::shuffle(inputs.begin(), inputs.end(), rng);
+            for (std::size_t i = 0; i < inputs.size(); ++i) {
+                auto &w = inputs[i];
+                w.index = i;
+                w.natural = {double(int(rng() % 4000) - 2000), double(int(rng() % 2000) - 1000), double(100 + rng() % 2000),
+                             double(100 + rng() % 1200)};
+                w.columnId = rng() % 4;
+                w.columnIndex = rng() % 4;
+                w.columnMemberIndex = rng() % 3;
+                w.columnAxis = frame % 2 ? LayoutAxis::Horizontal : LayoutAxis::Vertical;
+                w.floating = frame % 2;
+                w.layoutEmphasis = 1.18;
+            }
+            auto jitteredArea = area;
+            jitteredArea.width += frame % 2 ? 1e-6 : -1e-6;
+            const auto after = session.compute(region, inputs, jitteredArea, config);
+            ok &= expect(session.allRegionsRetained(), "native focus geometry and metadata must not reach a core resize/topology reflow");
+            for (const auto &w : inputs) {
+                const auto *old = slotFor(before, *w.stableId);
+                const auto *now = slotFor(after, w.index);
+                ok &= expect(old && now && sameRectExactly(old->target, now->target) && sameRectExactly(old->natural, now->natural),
+                             "all frozen source/target rectangles must survive randomized native focus frames exactly");
+            }
+        }
+        if (!ok) {
+            std::cerr << "focus freeze failure seed " << seed << '\n';
+            return false;
+        }
+        auto speculative = session;
+        auto resized = area;
+        resized.width += 100;
+        (void)speculative.compute(region, inputs, resized, config);
+        ok &= expect(!speculative.allRegionsRetained() && session.allRegionsRetained(),
+                     "a viewport change must reflow an isolated copy, not freeze or mutate the accepted session");
+        auto replacement = inputs;
+        replacement[0].stableId = 100;
+        const auto changed = session.compute(region, replacement, area, config);
+        const auto *newSlot = slotFor(changed, replacement[0].index);
+        ok &= expect(newSlot && sameRectExactly(newSlot->natural, replacement[0].natural),
+                     "same-count identity replacement is structural and must not freeze an unrelated window");
+        replacement.pop_back();
+        ok &= expect(session.compute(region, replacement, area, config).size() == 8,
+                     "closing/filtering a window must still update membership");
+    }
+    return ok;
+}
+
+bool rippleOrderRegression() {
+    using namespace hymission;
+    bool ok = true;
+    std::size_t grew = 0, moved = 0;
+    for (unsigned seed = 0; seed < 128; ++seed) {
+        std::mt19937 rng(seed);
+        std::vector<Rect> base;
+        // Equal-distance peers, very small center offsets and crowded boundaries.
+        for (std::size_t i = 0; i < 9; ++i)
+            base.push_back({40 + double(i % 3) * 300 + double(rng() % 3) * 1e-8, 40 + double(i / 3) * 200 + double(rng() % 3) * 1e-8,
+                            double(160 + rng() % 70), double(100 + rng() % 40)});
+        const Rect bounds{0, 0, 1000, 700};
+        auto config = deterministicConfig();
+        config.columnSpacing = config.rowSpacing = 24;
+        std::vector<std::size_t> peers{0, 1, 2, 3, 4, 5, 6, 7, 8};
+        auto rendered = base;
+        for (unsigned retarget = 0; retarget < 24; ++retarget) {
+            const auto selected = rng() % base.size();
+            // Selected and independent hover are one synchronous batch. The
+            // second pass retains the first pass's targets but the same order.
+            const auto first = expansion::compute(base, base, selected, peers, bounds, config, 1.05 + double(rng() % 65) / 100);
+            const auto result = expansion::compute(first.targets, base, (selected + 1) % base.size(), peers, bounds, config, 1.18);
+            const auto repeat = expansion::compute(first.targets, base, (selected + 1) % base.size(), peers, bounds, config, 1.18);
+            ok &= expect(expansion::preservesOrder(base, result.targets),
+                         "ripple must preserve every original center order and separating axis");
+            for (std::size_t i = 0; i < base.size(); ++i) {
+                ok &= expect(sameRectExactly(result.targets[i], repeat.targets[i]),
+                             "equal-distance and jittered ripple peers must produce deterministic targets");
+                if (result.targets[i].width > base[i].width + 1)
+                    ++grew;
+                if (std::hypot(result.targets[i].centerX() - base[i].centerX(), result.targets[i].centerY() - base[i].centerY()) > 1)
+                    ++moved;
+            }
+            // Retarget from an unfinished animation: every common-clock
+            // interpolation sample must remain ordered and non-overlapping.
+            const auto animationFrom = rendered;
+            for (unsigned step = 0; step <= 8; ++step) {
+                const double t = double(step) / 8;
+                std::vector<Rect> sample;
+                for (std::size_t i = 0; i < base.size(); ++i) {
+                    const auto &a = animationFrom[i];
+                    const auto &b = result.targets[i];
+                    sample.push_back({a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.width + (b.width - a.width) * t,
+                                      a.height + (b.height - a.height) * t});
+                }
+                ok &= expect(expansion::preservesOrder(base, sample),
+                             "mid-animation hover retarget must not cross a peer or reverse any strict order");
+                for (std::size_t i = 0; i < sample.size(); ++i)
+                    for (std::size_t j = 0; j < i; ++j) {
+                        const auto &a = sample[i];
+                        const auto &b = sample[j];
+                        const double overlapX = std::min(a.x + a.width, b.x + b.width) - std::max(a.x, b.x);
+                        const double overlapY = std::min(a.y + a.height, b.y + b.height) - std::max(a.y, b.y);
+                        ok &= expect(overlapX < 1e-6 || overlapY < 1e-6, "animated ripple rectangles must not overlap while retargeting");
+                    }
+                if (!ok) {
+                    std::cerr << "ripple failure seed " << seed << " retarget " << retarget << '\n';
+                    return false;
+                }
+                if (step == 3)
+                    rendered = sample;
+            }
+        }
+        const auto unchanged = expansion::compute(base, base, 4, peers, bounds, config, 1.0);
+        for (std::size_t i = 0; i < base.size(); ++i)
+            ok &= expect(sameRectExactly(base[i], unchanged.targets[i]), "scale one must not apply unsolicited ripple pressure");
+    }
+    ok &= expect(grew > 0 && moved > 0, "the order guard must preserve selected growth and local ripple displacement");
+    return ok;
+}
+
 } // namespace
 
 int main() {
@@ -816,6 +958,8 @@ int main() {
                      "lighter selected emphasis should keep previews non-overlapping");
     }
 
+    ok &= focusGeometryFreezeRegression();
+    ok &= rippleOrderRegression();
     ok &= natural2Regression(engine);
     ok &= natural2WarmTopologyRegression(engine);
     ok &= overviewLayoutSessionRegression();

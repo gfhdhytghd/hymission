@@ -218,6 +218,11 @@
             <li>The default layout_engine is now natural, using the former natural2 algorithm with stable session allocations and workspace/column-aware packing. Set layout_engine = &quot;grid&quot; to keep the previous grid layout.</li>
             <li>natural2 remains an alias for natural in every scope override. The old natural solver has been removed; natural_scale_flex is accepted as a deprecated no-op. Grid scoring weights remain available for grid.</li>
           </ul>
+          <h3>Stable overview focus</h3>
+          <ul>
+            <li>Keep natural overview slots frozen when native focus resizes or rearranges the real windows. Selected/hovered enlargement uses a separate ripple that preserves preview order and separating axes, including mid-animation retargeting.</li>
+            <li>Preserve the active enlargement animation during passive overview rebuilds. Window membership, viewport and layout-constraint changes still update the base layout.</li>
+          </ul>
           <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/compare/v0.11.0-v0.56.2...master">Compare v0.11.0-v0.56.2…master</a></div>
         </article>
       </li>

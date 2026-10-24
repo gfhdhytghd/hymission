@@ -60,5 +60,6 @@ ASAN_OPTIONS=detect_leaks=1 /tmp/hymission-natural-replace-sanitized
 ```
 
 No host plugin reload, install, push or runtime configuration changes were made.
-The separately reported focus/hover ordering bug is tracked as a follow-up;
-this migration preserves the accepted core's geometry.
+The focus/hover ordering follow-up is implemented in a separate commit; see
+[natural focus stability](natural-focus-stability.md). The core algorithm itself
+retains the accepted geometry.

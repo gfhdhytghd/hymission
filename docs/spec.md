@@ -103,6 +103,8 @@ v1 overview 排除：
 - 无重叠且可行时使用统一缩放，保留源窗口相对位置与宽高比
 - 否则按 workspace band、scrolling column 元数据和几何顺序排列居中的行；不调用旧 grid 作为 natural fallback
 - 每个 monitor/tile/workspace 区域持有独立会话历史，稳定身份支持过滤保留与局部插入
+- overview 内窗口集合不变时冻结基础槽位、源几何和列元数据，focus 造成的真实尺寸变化不得触发 resize 重排；窗口开/关、过滤、区域或布局约束改变才更新基础布局
+- 选中/悬停放大独立于 core emphasis，只做保序的环形让位；放大不足时减小倍率。保持原中心方向及原分隔轴，动画共享插值时钟，中途 hover 切换和被动重建均不得产生交叉或瞬间复位
 - padding 只扣一次；row/column spacing 是最小间距；不可行时逐步降低间距和可读性下限，不拉伸宽高比
 - `min_window_length`、`small_window_boost` 决定小窗口空间权重，preview scale cap 仍然生效
 - `one_workspace_per_row` 强制 workspace band；最近使用顺序不强制 natural 窗口尺寸梯度

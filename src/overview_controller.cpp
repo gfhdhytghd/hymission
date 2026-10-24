@@ -1,6 +1,7 @@
 #include "hook_broker.hpp"
 #include "overview_controller.hpp"
 #include "numeric_config.hpp"
+#include "overview_expansion.hpp"
 #include "search_geometry.hpp"
 #include "snapshot_framebuffer.hpp"
 #include "stage_controller.hpp"
@@ -899,12 +900,7 @@ Rect translateRect(const Rect& rect, double dx, double dy) {
     return makeRect(rect.x + dx, rect.y + dy, rect.width, rect.height);
 }
 
-Rect scaleRectAroundCenter(const Rect& rect, double scale) {
-    const double clampedScale = std::max(0.0, scale);
-    const double width = rect.width * clampedScale;
-    const double height = rect.height * clampedScale;
-    return makeRect(rect.centerX() - width * 0.5, rect.centerY() - height * 0.5, width, height);
-}
+
 
 Rect clampRectInside(const Rect& rect, const Rect& bounds) {
     const double width = std::min(rect.width, bounds.width);
@@ -925,30 +921,11 @@ Rect clampRectInside(const Rect& rect, const Rect& bounds) {
     return makeRect(x, y, width, height);
 }
 
-bool rectFitsInsideBounds(const Rect& rect, const Rect& bounds, double epsilon = 0.5) {
-    return rect.x >= bounds.x - epsilon && rect.y >= bounds.y - epsilon && rect.x + rect.width <= bounds.x + bounds.width + epsilon &&
-        rect.y + rect.height <= bounds.y + bounds.height + epsilon;
-}
 
-double maxCenteredScaleForBounds(const Rect& rect, const Rect& bounds) {
-    if (rect.width <= 1.0 || rect.height <= 1.0)
-        return 1.0;
 
-    const double halfWidth = std::max(0.0, std::min(rect.centerX() - bounds.x, bounds.x + bounds.width - rect.centerX()));
-    const double halfHeight = std::max(0.0, std::min(rect.centerY() - bounds.y, bounds.y + bounds.height - rect.centerY()));
-    const double maxWidth = halfWidth * 2.0;
-    const double maxHeight = halfHeight * 2.0;
-    return std::max(1.0, std::min(maxWidth / rect.width, maxHeight / rect.height));
-}
 
-double maxCenteredScaleForPerSideGrowth(const Rect& rect, double maxGrowXPerSide, double maxGrowYPerSide) {
-    if (rect.width <= 1.0 || rect.height <= 1.0)
-        return 1.0;
 
-    const double scaleX = 1.0 + std::max(0.0, maxGrowXPerSide) * 2.0 / rect.width;
-    const double scaleY = 1.0 + std::max(0.0, maxGrowYPerSide) * 2.0 / rect.height;
-    return std::max(1.0, std::min(scaleX, scaleY));
-}
+
 
 struct EdgeMotionAffinity {
     double verticalEdge = 0.0;
@@ -1049,31 +1026,7 @@ Rect moveRectOutsideBoundsAlongDirection(const Rect& rect, const Rect& bounds, d
     return translateRect(rect, directionX * fallbackDistance, directionY * fallbackDistance);
 }
 
-std::optional<double> overlapExitDistanceAlongDirection(const Rect& moving, const Rect& obstacle, double dirX, double dirY) {
-    if (!rectsOverlap(moving, obstacle))
-        return 0.0;
 
-    std::optional<double> exitDistance;
-    const auto consider = [&](double candidate) {
-        if (candidate < 0.0)
-            return;
-        candidate += 0.5;
-        if (!exitDistance || candidate < *exitDistance)
-            exitDistance = candidate;
-    };
-
-    if (dirX > 0.001)
-        consider((obstacle.x + obstacle.width - moving.x) / dirX);
-    else if (dirX < -0.001)
-        consider((moving.x + moving.width - obstacle.x) / -dirX);
-
-    if (dirY > 0.001)
-        consider((obstacle.y + obstacle.height - moving.y) / dirY);
-    else if (dirY < -0.001)
-        consider((moving.y + moving.height - obstacle.y) / -dirY);
-
-    return exitDistance;
-}
 
 CBox toBox(const Rect& rect) {
     return {
@@ -11149,229 +11102,20 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
         return;
     }
 
-    struct RipplePeer {
-        std::size_t index = 0;
-        Rect        base;
-        double      distance = 0.0;
-    };
-
-    const Rect selectedBase = baseTargets[currentManagedIndex];
-    const LayoutConfig layoutConfig = loadLayoutConfig();
-    const double minGapX = std::max(0.0, layoutConfig.columnSpacing * 0.25);
-    const double minGapY = std::max(0.0, layoutConfig.rowSpacing * 0.25);
-    const double maxGrowthXPerSide = std::max(0.0, layoutConfig.columnSpacing * 2.0);
-    const double maxGrowthYPerSide = std::max(0.0, layoutConfig.rowSpacing * 2.0);
-    const double scaleCapByGrowth = maxCenteredScaleForPerSideGrowth(selectedBase, maxGrowthXPerSide, maxGrowthYPerSide);
-    const double scaleCapByBounds = maxCenteredScaleForBounds(selectedBase, boundsGlobal);
-    const double preferredScale = m_state.windows.size() <= 1 ? 1.0 : expansionScale.value_or(selectedExpandScale());
-    const double scaleCap = std::max(1.0, std::min({preferredScale, scaleCapByGrowth, scaleCapByBounds}));
-    const double rippleRadius =
-        std::max(std::hypot(selectedBase.width, selectedBase.height) * 2.5, std::hypot(boundsGlobal.width, boundsGlobal.height) * 0.55);
-    const double pressureCenterX = selectedBase.centerX();
-    const double pressureCenterY = selectedBase.centerY();
-
-    std::vector<RipplePeer> peers;
-    peers.reserve(m_state.windows.size());
+    std::vector<std::size_t> peers;
+    std::vector<Rect> orderTargets;
+    orderTargets.reserve(m_state.windows.size());
     for (std::size_t index = 0; index < m_state.windows.size(); ++index) {
         const auto& managed = m_state.windows[index];
-        if (index == currentManagedIndex || managed.targetMonitor != currentManaged->targetMonitor ||
-            (expansionTile && tiles->preferredTile(managed.window->m_workspace,managed.targetMonitor)!=expansionTile))
-            continue;
-
-        const Rect base = baseTargets[index];
-        const double distance = std::hypot(base.centerX() - pressureCenterX, base.centerY() - pressureCenterY);
-        peers.push_back({.index = index, .base = base, .distance = distance});
+        orderTargets.push_back(managed.targetMonitor ? overviewContentTargetForSlot(managed.window, managed.targetMonitor, managed.slot) : baseTargets[index]);
+        if (index != currentManagedIndex && managed.targetMonitor == currentManaged->targetMonitor &&
+            (!expansionTile || tiles->preferredTile(managed.window->m_workspace, managed.targetMonitor) == expansionTile))
+            peers.push_back(index);
     }
-
-    std::stable_sort(peers.begin(), peers.end(), [](const RipplePeer& lhs, const RipplePeer& rhs) { return lhs.distance < rhs.distance; });
-
-    const auto applyTargets = [&](const std::vector<Rect>& targets) {
-        for (std::size_t index = 0; index < m_state.windows.size() && index < targets.size(); ++index)
-            m_state.windows[index].targetGlobal = targets[index];
-    };
-
-    const auto tryApplyScale = [&](double scale, std::vector<Rect>& outTargets, double& outMaxShift) -> bool {
-        outTargets = baseTargets;
-        outMaxShift = 0.0;
-
-        const Rect selectedTarget = scaleRectAroundCenter(selectedBase, scale);
-        if (!rectFitsInsideBounds(selectedTarget, boundsGlobal))
-            return false;
-        outTargets[currentManagedIndex] = selectedTarget;
-
-        const double pressureGap = std::max({1.0, minGapX, minGapY});
-        const double radialPressure =
-            std::max(pressureGap, std::hypot(selectedTarget.width - selectedBase.width, selectedTarget.height - selectedBase.height) * 0.5 + pressureGap);
-
-        std::vector<std::size_t> placed;
-        placed.reserve(peers.size() + 1);
-        placed.push_back(currentManagedIndex);
-
-        const auto overlapsPlaced = [&](const Rect& target) {
-            return std::ranges::any_of(placed, [&](std::size_t obstacleIndex) {
-                return rectsOverlap(target, inflateRect(outTargets[obstacleIndex], minGapX, minGapY));
-            });
-        };
-
-        const auto resolveAlongBearing = [&](Rect target, double dirX, double dirY) -> std::optional<Rect> {
-            for (std::size_t pass = 0; pass < 6; ++pass) {
-                bool changed = false;
-                for (const auto obstacleIndex : placed) {
-                    const Rect obstacle = inflateRect(outTargets[obstacleIndex], minGapX, minGapY);
-                    if (!rectsOverlap(target, obstacle))
-                        continue;
-
-                    if (std::abs(dirX) < 0.001 && std::abs(dirY) < 0.001) {
-                        dirX = target.centerX() >= pressureCenterX ? 1.0 : -1.0;
-                        dirY = target.centerY() >= pressureCenterY ? 1.0 : -1.0;
-                        const double length = std::hypot(dirX, dirY);
-                        if (length <= 0.001)
-                            return std::nullopt;
-                        dirX /= length;
-                        dirY /= length;
-                    }
-
-                    const auto exitDistance = overlapExitDistanceAlongDirection(target, obstacle, dirX, dirY);
-                    if (!exitDistance)
-                        continue;
-
-                    target = translateRect(target, dirX * *exitDistance, dirY * *exitDistance);
-                    target = clampRectInside(target, boundsGlobal);
-                    changed = true;
-                }
-
-                if (!changed)
-                    break;
-            }
-
-            if (!rectFitsInsideBounds(target, boundsGlobal) || overlapsPlaced(target))
-                return std::nullopt;
-
-            return target;
-        };
-
-        const auto motionDirectionsForPeer = [&](const Rect& base, double radialX, double radialY) {
-            std::vector<std::pair<double, double>> directions;
-            directions.reserve(10);
-
-            const auto appendDirection = [&](double dx, double dy) {
-                const double length = std::hypot(dx, dy);
-                if (length <= 0.001)
-                    return;
-                dx /= length;
-                dy /= length;
-                const auto duplicate = std::ranges::any_of(directions, [&](const auto& existing) {
-                    return std::abs(existing.first - dx) <= 0.001 && std::abs(existing.second - dy) <= 0.001;
-                });
-                if (!duplicate)
-                    directions.push_back({dx, dy});
-            };
-
-            const EdgeMotionAffinity affinity = edgeMotionAffinityForRect(base, boundsGlobal);
-            const double             awayX = std::abs(radialX) > 0.001 ? radialX : (base.centerX() >= pressureCenterX ? 1.0 : -1.0);
-            const double             awayY = std::abs(radialY) > 0.001 ? radialY : (base.centerY() >= pressureCenterY ? 1.0 : -1.0);
-
-            if (affinity.verticalEdge > 0.15) {
-                appendDirection(0.0, awayY);
-                appendDirection(0.0, 1.0);
-                appendDirection(0.0, -1.0);
-            }
-            if (affinity.horizontalEdge > 0.15) {
-                appendDirection(awayX, 0.0);
-                appendDirection(1.0, 0.0);
-                appendDirection(-1.0, 0.0);
-            }
-
-            appendDirection(radialX, radialY);
-            appendDirection(radialX, 0.0);
-            appendDirection(0.0, radialY);
-            appendDirection(1.0, 0.0);
-            appendDirection(-1.0, 0.0);
-            appendDirection(0.0, 1.0);
-            appendDirection(0.0, -1.0);
-            return directions;
-        };
-
-        for (const auto& peer : peers) {
-            const double deltaX = peer.base.centerX() - pressureCenterX;
-            const double deltaY = peer.base.centerY() - pressureCenterY;
-            double directionX = deltaX;
-            double directionY = deltaY;
-            const double directionLength = std::hypot(directionX, directionY);
-            if (directionLength > 0.001) {
-                directionX /= directionLength;
-                directionY /= directionLength;
-            } else {
-                directionX = peer.base.centerX() >= pressureCenterX ? 1.0 : -1.0;
-                directionY = peer.base.centerY() >= pressureCenterY ? 1.0 : -1.0;
-                const double fallbackLength = std::hypot(directionX, directionY);
-                if (fallbackLength <= 0.001)
-                    return false;
-                directionX /= fallbackLength;
-                directionY /= fallbackLength;
-            }
-
-            const double influence = clampUnit(1.0 - peer.distance / std::max(1.0, rippleRadius));
-            const double easedInfluence = influence * influence;
-            Rect target = translateRect(peer.base, directionX * radialPressure * easedInfluence, directionY * radialPressure * easedInfluence);
-            target = clampRectInside(target, boundsGlobal);
-
-            std::optional<Rect> resolved;
-            double              resolvedScore = std::numeric_limits<double>::max();
-            for (const auto& [candidateDirX, candidateDirY] : motionDirectionsForPeer(peer.base, directionX, directionY)) {
-                auto candidate = resolveAlongBearing(target, candidateDirX, candidateDirY);
-                if (!candidate)
-                    candidate = resolveAlongBearing(clampRectInside(peer.base, boundsGlobal), candidateDirX, candidateDirY);
-                if (!candidate)
-                    continue;
-
-                const double score = edgeAwareMotionDistance2(peer.base, *candidate, boundsGlobal);
-                if (!resolved || score < resolvedScore) {
-                    resolved = candidate;
-                    resolvedScore = score;
-                }
-            }
-            if (!resolved)
-                return false;
-
-            outTargets[peer.index] = *resolved;
-            placed.push_back(peer.index);
-            outMaxShift = std::max(outMaxShift, std::hypot(resolved->centerX() - peer.base.centerX(), resolved->centerY() - peer.base.centerY()));
-        }
-
-        return true;
-    };
-
-    std::vector<Rect> bestTargets = baseTargets;
-    std::vector<Rect> candidateTargets;
-    double            bestMaxShift = 0.0;
-    double            maxShift = 0.0;
-    double            appliedScale = 1.0;
-
-    if (tryApplyScale(scaleCap, bestTargets, bestMaxShift)) {
-        appliedScale = scaleCap;
-        maxShift = bestMaxShift;
-    } else {
-        const bool baseResolved = tryApplyScale(1.0, bestTargets, bestMaxShift);
-        maxShift = baseResolved ? bestMaxShift : 0.0;
-
-        double low = 1.0;
-        double high = scaleCap;
-        for (std::size_t iteration = 0; iteration < 12 && high - low > 0.001; ++iteration) {
-            const double mid = (low + high) * 0.5;
-            double       candidateMaxShift = 0.0;
-            if (tryApplyScale(mid, candidateTargets, candidateMaxShift)) {
-                appliedScale = mid;
-                maxShift = candidateMaxShift;
-                bestTargets = candidateTargets;
-                low = mid;
-            } else {
-                high = mid;
-            }
-        }
-    }
-
-    applyTargets(bestTargets);
+    const auto result = expansion::compute(baseTargets, orderTargets, currentManagedIndex, peers, boundsGlobal, loadLayoutConfig(),
+                                           m_state.windows.size() <= 1 ? 1.0 : expansionScale.value_or(selectedExpandScale()));
+    for (std::size_t index = 0; index < m_state.windows.size(); ++index)
+        m_state.windows[index].targetGlobal = result.targets[index];
 
     for (auto& managed : m_state.windows) {
         if (!rectApproxEqual(managed.relayoutFromGlobal, managed.targetGlobal, 0.5))
@@ -11382,13 +11126,13 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
         std::ostringstream out;
         out << "[hymission] expand-target ripple push target=" << debugWindowLabel(currentSelectedWindow)
             << " peers=" << peers.size()
-            << " radius=" << rippleRadius
-            << " scale=" << appliedScale
-            << " scaleCap=" << scaleCap
-            << " growthCap=" << scaleCapByGrowth
-            << " boundsCap=" << scaleCapByBounds
-            << " minGap=" << minGapX << 'x' << minGapY
-            << " maxShift=" << maxShift
+            << " radius=" << result.rippleRadius
+            << " scale=" << result.appliedScale
+            << " scaleCap=" << result.scaleCap
+            << " growthCap=" << result.scaleCapByGrowth
+            << " boundsCap=" << result.scaleCapByBounds
+            << " minGap=" << result.minGapX << 'x' << result.minGapY
+            << " maxShift=" << result.maxShift
             << " selectedTarget=" << rectToString(m_state.windows[currentManagedIndex].targetGlobal);
         debugLog(out.str());
     }
@@ -13055,8 +12799,10 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
             });
         });
     const bool sameLayoutShape = sameWindowSet && sameMonitorSet && sameRowGroups && sameTileLayouts;
-    const bool selectionRelayoutForced = forceRelayout && expandSelectedWindowEnabled();
-    const bool freezeExistingLayout = sameLayoutShape && !forceRelayout && next.engine != LayoutEngine::Natural && m_state.engine != LayoutEngine::Natural;
+    const bool naturalGeometryRetained = next.engine == LayoutEngine::Natural && next.layoutSession.allRegionsRetained();
+    const bool freezeExistingLayout = sameLayoutShape && next.engine == m_state.engine &&
+        (next.engine == LayoutEngine::Natural ? naturalGeometryRetained : !forceRelayout);
+    const bool selectionRelayoutForced = forceRelayout && expandSelectedWindowEnabled() && !freezeExistingLayout;
 
     bool shouldAnimateRelayout = false;
     if (freezeExistingLayout) {
@@ -13068,7 +12814,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
             window.targetMonitor = previousManaged->targetMonitor;
             window.slot = previousManaged->slot;
             window.targetGlobal = previousManaged->targetGlobal;
-            window.relayoutFromGlobal = previousManaged->targetGlobal;
+            window.relayoutFromGlobal = naturalGeometryRetained ? previousManaged->relayoutFromGlobal : previousManaged->targetGlobal;
             window.exitGlobal = previousManaged->exitGlobal;
         }
     } else if (previousPhase == Phase::Active || selectionRelayoutForced) {
@@ -13117,7 +12863,10 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
     for (const auto& window : m_state.transientClosingWindows)
         appendTransientClosingWindow(window);
 
-    if (freezeExistingLayout) {
+    if (freezeExistingLayout && naturalGeometryRetained) {
+        // Keep the in-flight ripple and its common animation clock. A passive
+        // native geometry notification must not cancel/restart a hover change.
+    } else if (freezeExistingLayout) {
         next.relayoutActive = false;
         next.relayoutProgress = 1.0;
         next.relayoutStart = {};
@@ -13169,7 +12918,8 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
     restoreOverviewRenderState();
     m_state = std::move(next);
     sendSearchResultCount();
-    clearRelayoutProgressAnimation();
+    if (!freezeExistingLayout || !naturalGeometryRetained)
+        clearRelayoutProgressAnimation();
     armOverviewRenderState(m_state);
     applyWorkspaceNameOverrides(m_state);
     syncHiddenStripLayerProxies();

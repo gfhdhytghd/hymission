@@ -500,6 +500,8 @@ The default natural engine preserves source positions with uniform scaling when 
 
 Padding is applied once to the supplied region. `row_spacing` and `column_spacing` set minimum gaps; `min_window_length` reserves space for small windows and `small_window_boost` weights their allocation. Preview scale caps remain in effect. `min_slot_scale` and `min_preview_short_edge` are readability goals: infeasible layouts reduce spacing and then size rather than dropping windows or distorting aspect ratios. `one_workspace_per_row` forces separate workspace bands.
 
+While overview is open, an unchanged window set keeps its base slots and source geometry frozen, including native resizes caused by focus. Selected/hovered enlargement is a separate, order-preserving ripple; it reduces growth when necessary to avoid crossing another preview. Opening/closing/filtering windows, changing regions or changing layout constraints can update the layout.
+
 Recent-use sorting does not impose a size gradient or override natural spatial ordering. The legacy natural solver, its iterative repulsion, corner filling and per-window free-scale optimization have been removed.
 
 | Option | Type | Default | Description |
