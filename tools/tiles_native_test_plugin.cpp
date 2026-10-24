@@ -55,6 +55,30 @@ std::vector<CapturedFrame> capturedFrames;
 template<class Framebuffer>
 bool readFramePixels(Framebuffer& fb,std::vector<uint8_t>& bytes) {
     const bool fp16=fb.getTexture() && fb.getTexture()->m_drmFormat==0x48344241;
+    // The HDR tree's RGBA8 readback rejects FP16 attachments. Resolve a private
+    // normalized copy instead of crashing the nested compositor while recording.
+    if (fp16) { // DRM_FORMAT_ABGR16161616F
+        GLint read=0,draw=0,texture=0,pack=0,alignment=0,rowLength=0,skipRows=0,skipPixels=0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&read);glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D,&texture);glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING,&pack);
+        glGetIntegerv(GL_PACK_ALIGNMENT,&alignment);glGetIntegerv(GL_PACK_ROW_LENGTH,&rowLength);
+        glGetIntegerv(GL_PACK_SKIP_ROWS,&skipRows);glGetIntegerv(GL_PACK_SKIP_PIXELS,&skipPixels);
+        GLuint resolved=0,target=0;glGenFramebuffers(1,&resolved);glGenTextures(1,&target);
+        glBindTexture(GL_TEXTURE_2D,target);glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,fb.m_size.x,fb.m_size.y,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER,resolved);glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,target,0);
+        const GLenum attachment=GL_COLOR_ATTACHMENT0;glDrawBuffers(1,&attachment);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,fb.getFBID());
+        glBlitFramebuffer(0,0,fb.m_size.x,fb.m_size.y,0,0,fb.m_size.x,fb.m_size.y,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,resolved);glBindBuffer(GL_PIXEL_PACK_BUFFER,0);glPixelStorei(GL_PACK_ALIGNMENT,1);
+        glPixelStorei(GL_PACK_ROW_LENGTH,0);glPixelStorei(GL_PACK_SKIP_ROWS,0);glPixelStorei(GL_PACK_SKIP_PIXELS,0);
+        glReadPixels(0,0,fb.m_size.x,fb.m_size.y,GL_RGBA,GL_UNSIGNED_BYTE,bytes.data());
+        const bool ok=glGetError()==GL_NO_ERROR;
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,read);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,draw);
+        glBindTexture(GL_TEXTURE_2D,texture);glBindBuffer(GL_PIXEL_PACK_BUFFER,pack);glPixelStorei(GL_PACK_ALIGNMENT,alignment);
+        glPixelStorei(GL_PACK_ROW_LENGTH,rowLength);glPixelStorei(GL_PACK_SKIP_ROWS,skipRows);glPixelStorei(GL_PACK_SKIP_PIXELS,skipPixels);
+        glDeleteFramebuffers(1,&resolved);glDeleteTextures(1,&target);
+        if (ok) return true;
+    }
     if constexpr (requires { fb.readPixelsRGBA8(bytes); }) {
         if (!fp16) return fb.readPixelsRGBA8(bytes);
     }
@@ -137,7 +161,7 @@ class CaptureFramePass final:public IPassElement {
         frame.state={{"overview",overviewBeforeReadback}, {"tiles",tiles}};
         frame.state["layout"]=layoutBeforeReadback;
         frame.state["monitor"]=ctx.m_data.pMonitor->m_name;
-        frame.state["framebuffer"]={{"drm_format",fb->getTexture()->m_drmFormat},{"current",fb->getFBID()},{"main",dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.mainFB)->getFBID()},{"damage",nlohmann::json::array()}};
+        frame.state["framebuffer"]={{"drm_format",fb->getTexture()->m_drmFormat},{"format",fb->m_drmFormat},{"mirror_format",fb->getMirrorTexture()?fb->getMirrorTexture()->m_drmFormat:0},{"current",fb->getFBID()},{"main",dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.mainFB)->getFBID()},{"damage",nlohmann::json::array()}};
         ctx.m_data.damage.forEachRect([&](const auto& rect) { frame.state["framebuffer"]["damage"].push_back({rect.x1,rect.y1,rect.x2,rect.y2}); });
         frame.state["stage"]=stageBeforeReadback;
         frame.state["readback_ms"]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-readbackStart).count();
@@ -149,7 +173,10 @@ class CaptureFramePass final:public IPassElement {
                 {"size",{window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT).x,window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT).y}},{"workspace",ws->displayName()},{"offset",{offset.x,offset.y}},
                 {"floating_offset",{window->presentation().floatingOffset().x,window->presentation().floatingOffset().y}},
                 {"workspace_alpha",ws->m_alpha->value()},{"workspace_animated",ws->m_renderOffset->isBeingAnimated()},{"workspace_alpha_animated",ws->m_alpha->isBeingAnimated()},{"visible",ws->visible()},{"forced",ws->m_forceRendering},
-                {"alpha",window->presentation().alphaTotal()},{"fullscreen_alpha",window->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN)},
+                {"alpha",window->presentation().alphaTotal()},
+                {"active_alpha",window->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_ACTIVE)},
+                {"presentation_alpha",window->presentation().renderPresentation().alpha},
+                {"presentation_fade",window->presentation().renderPresentation().fadeAlpha},{"fullscreen_alpha",window->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN)},
                 {"position",{window->positionAnimation()->value().x,window->positionAnimation()->value().y}}});
         }
         capturedFrames.push_back(std::move(frame));return {};

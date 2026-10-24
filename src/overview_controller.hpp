@@ -225,7 +225,9 @@ class OverviewController {
         Rect         relayoutFromGlobal;
         Rect         targetGlobal;
         WindowSlot   slot;
-        float        previewAlpha = 1.0F;
+        // Snapshot animation/occlusion channels; apply the live active channel
+        // during planning/drawing so focus does not freeze user opacity.
+        float        previewAlphaWithoutActive = 1.0F;
         bool         isFloating = false;
         bool         isPinned = false;
         bool         isNiriFloatingOverlay = false;

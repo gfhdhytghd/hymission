@@ -323,25 +323,23 @@ constexpr auto   HYPRBARS_PASS_ELEMENT_NAME = "CBarPassElement";
 constexpr auto   HYPRGLASS_PASS_ELEMENT_NAME = "CGlassPassElement";
 OverviewController* g_controller = nullptr;
 
-float overviewPreviewAlphaForWindow(const PHLWINDOW& window, bool revealGroupedWindow = false) {
+float overviewPreviewAlphaForWindow(const PHLWINDOW& window, bool revealGroupedWindow = false, bool withoutActive = false) {
     if (!window)
         return 0.0F;
 
-    if (revealGroupedWindow && window->grouping().group()) {
-        float alpha = 1.0F;
-        for (uint8_t value = Desktop::View::WINDOW_ALPHA_FADE; value < Desktop::View::WINDOW_ALPHA_LAST; ++value) {
-            const auto type = static_cast<Desktop::View::eWindowAlpha>(value);
-            if (type == Desktop::View::WINDOW_ALPHA_FULLSCREEN || type == Desktop::View::WINDOW_ALPHA_LAYOUT)
-                continue;
-            alpha *= window->presentation().alphaValue(type);
-        }
-        return std::clamp(alpha, 0.0F, 1.0F);
+    // Fullscreen is compositor occlusion, not user opacity. Expanded group
+    // members also need their layout occlusion removed. Keep active opacity
+    // separate so focus/rule updates can be applied without re-sampling fade.
+    float alpha = 1.0F;
+    for (uint8_t value = Desktop::View::WINDOW_ALPHA_FADE; value < Desktop::View::WINDOW_ALPHA_LAST; ++value) {
+        const auto type = static_cast<Desktop::View::eWindowAlpha>(value);
+        if (type == Desktop::View::WINDOW_ALPHA_FULLSCREEN ||
+            (type == Desktop::View::WINDOW_ALPHA_LAYOUT && revealGroupedWindow && window->grouping().group()) ||
+            (type == Desktop::View::WINDOW_ALPHA_ACTIVE && withoutActive))
+            continue;
+        alpha *= window->presentation().alphaValue(type);
     }
-
-    // WINDOW_ALPHA_FULLSCREEN is compositor occlusion state, not user-facing
-    // opacity. Hidden siblings of a fullscreen/maximized window must become
-    // opaque again inside overview while fade/layout/rule alpha is preserved.
-    return std::clamp(window->alpha().getTotalWithout(Desktop::View::WINDOW_ALPHA_FULLSCREEN), 0.0F, 1.0F);
+    return std::clamp(alpha, 0.0F, 1.0F);
 }
 
 enum class GestureDispatcherKind : uint8_t {
@@ -3150,7 +3148,7 @@ void OverviewController::beginGroupDrag(std::size_t windowIndex, const Vector2D&
         injected.exitGlobal = baseRect;
         injected.relayoutFromGlobal = baseRect;
         injected.targetGlobal = baseRect;
-        injected.previewAlpha = overviewPreviewAlphaForWindow(member, true);
+        injected.previewAlphaWithoutActive = overviewPreviewAlphaForWindow(member, true, true);
         injected.isFloating = member->isFloating();
         injected.isPinned = static_cast<bool>(member->m_state & Desktop::View::WINDOW_STATE_PINNED);
         injected.collapsedGroup = false;
@@ -4225,7 +4223,8 @@ Render::SWindowRenderPresentation OverviewController::effectiveAlphaHook(const D
     if (!managed || !managed->window || isWindowClosePending(managed->window))
         return result;
 
-    const float visibleAlpha = resolveExpandedGroupEffectiveAlpha(result.alphaVisible ? 1.F : 0.F, managed->previewAlpha,
+    const float visibleAlpha = resolveExpandedGroupEffectiveAlpha(result.alphaVisible ? 1.F : 0.F,
+        managed->previewAlphaWithoutActive * presentation->alphaValue(Desktop::View::WINDOW_ALPHA_ACTIVE),
         isVisible(), nativeWindowRenderActive(), static_cast<bool>(managed->group), managed->collapsedGroup);
     result.alphaVisible = visibleAlpha > 0.F;
     return result;
@@ -8669,7 +8668,8 @@ PHLWINDOW OverviewController::selectedWindow() const {
 
 float OverviewController::managedPreviewAlphaFor(const PHLWINDOW& window, float fallback) const {
     const auto* managed = managedWindowFor(window);
-    float alpha = managed ? managed->previewAlpha : fallback;
+    float alpha = managed && window ? managed->previewAlphaWithoutActive *
+        std::clamp(window->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_ACTIVE), 0.0F, 1.0F) : fallback;
     if (managed && m_groupDragSession && m_groupDragSession->settling && m_groupDragSession->commitDrop && managed->group == m_groupDragSession->group) {
         const auto elapsed = std::chrono::steady_clock::now() - m_groupDragSession->settleStart;
         const double raw = clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
@@ -12861,7 +12861,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
             .relayoutFromGlobal = previewRect,
             .targetGlobal = previewRect,
             .slot = source.slot,
-            .previewAlpha = source.previewAlpha,
+            .previewAlphaWithoutActive = source.previewAlphaWithoutActive,
             .isFloating = source.isFloating,
             .isPinned = source.isPinned,
             .isNiriFloatingOverlay = source.isNiriFloatingOverlay,
@@ -13771,7 +13771,7 @@ bool OverviewController::switchCollapsedGroupMember(std::size_t windowIndex, std
     managed.title = member->metadata().title();
     managed.groupMembers = group->windows();
     managed.groupCurrentIndex = memberIndex;
-    managed.previewAlpha = overviewPreviewAlphaForWindow(member, true);
+    managed.previewAlphaWithoutActive = overviewPreviewAlphaForWindow(member, true, true);
     managed.isFloating = member->isFloating();
     managed.isPinned = static_cast<bool>(member->m_state & Desktop::View::WINDOW_STATE_PINNED);
 
@@ -14125,7 +14125,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
                     .relayoutFromGlobal = naturalGlobal,
                     .targetGlobal = naturalGlobal,
                     .slot = {.index = index},
-                    .previewAlpha = overviewPreviewAlphaForWindow(draggedWindow, static_cast<bool>(draggedWindow->grouping().group())),
+                    .previewAlphaWithoutActive = overviewPreviewAlphaForWindow(draggedWindow, static_cast<bool>(draggedWindow->grouping().group()), true),
                     .isFloating = draggedWindow->isFloating(),
                     .isPinned = static_cast<bool>(draggedWindow->m_state & Desktop::View::WINDOW_STATE_PINNED),
                     .group = draggedWindow->grouping().group(),
@@ -14204,7 +14204,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
                             .target = local,
                             .scale = 1.0,
                         },
-                    .previewAlpha = preview.alpha,
+                    .previewAlphaWithoutActive = overviewPreviewAlphaForWindow(preview.window, false, true),
                     .isFloating = preview.window->isFloating(),
                     .isPinned = static_cast<bool>(preview.window->m_state & Desktop::View::WINDOW_STATE_PINNED),
                 });
@@ -15450,7 +15450,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             .title = window->metadata().title(),
             .naturalGlobal = directNiriSlot ? directNiriSourceGlobal : naturalGlobal,
             .exitGlobal = directNiriSlot ? directNiriSourceGlobal : naturalGlobal,
-            .previewAlpha = overviewPreviewAlphaForWindow(window, static_cast<bool>(window->grouping().group())),
+            .previewAlphaWithoutActive = overviewPreviewAlphaForWindow(window, static_cast<bool>(window->grouping().group()), true),
             .isFloating = window->isFloating(),
             .isPinned = static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED),
             .isNiriFloatingOverlay = directNiriFloatingOverlay,

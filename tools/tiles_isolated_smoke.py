@@ -28,6 +28,16 @@ def main():
     ap.add_argument("--integration", action="store_true")
     ap.add_argument("--default-off-regression", action="store_true")
     ap.add_argument("--search-geometry-regression", action="store_true")
+    ap.add_argument("--opacity-regression", action="store_true")
+    ap.add_argument("--opacity-observe", action="store_true")
+    ap.add_argument("--opacity-fp16", action="store_true")
+    ap.add_argument("--opacity-tiles", action="store_true")
+    ap.add_argument("--opacity-stage", action="store_true")
+    ap.add_argument("--opacity-niri", action="store_true")
+    ap.add_argument("--opacity-hover", action="store_true")
+    ap.add_argument("--opacity-user", action="store_true")
+    ap.add_argument("--opacity-session", action="store_true", help="scrolling, enlarged hover, populated workspaces and a real transparent Kitty")
+    ap.add_argument("--opacity-cm", choices=("auto","wide","hdr"), default="auto")
     ap.add_argument("--stage-edge-observe",action="store_true")
     ap.add_argument("--stage-edge-regression",choices=("off","single","two","three"))
     ap.add_argument("--stage-viewport-regression",choices=("off","single","two","three"))
@@ -298,6 +308,10 @@ def main():
             from tiles_top_clip_regression import run
             run(request,root,env,runtime,processes,handles)
             (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
+        if args.opacity_regression:
+            from tiles_opacity_regression import run
+            run(request,root,env,runtime,processes,handles,args.opacity_observe,args.opacity_fp16,args.opacity_tiles,args.opacity_stage,args.opacity_cm,args.opacity_niri,args.opacity_hover,args.opacity_user,args.opacity_session)
             return
         if args.search_geometry_regression:
             from tiles_search_geometry_regression import run
