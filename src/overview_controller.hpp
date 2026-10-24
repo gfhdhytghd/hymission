@@ -47,6 +47,7 @@ struct SEventLoopDoLaterLock;
 #include <hyprland/src/render/pass/SurfacePassElement.hpp>
 
 #include "mission_layout.hpp"
+#include "overview_layout_session.hpp"
 #include "overview_logic.hpp"
 #include "stage_logic.hpp"
 
@@ -317,6 +318,8 @@ class OverviewController {
         SpatialPickMap            map;
     };
 
+    struct LayoutIdentityOwners;
+
     struct State {
         struct TileLayout {
             PHLMONITOR   monitor;
@@ -329,6 +332,8 @@ class OverviewController {
         PHLWORKSPACE                           ownerWorkspace;
         CollectionPolicy                       collectionPolicy;
         LayoutEngine                           engine = LayoutEngine::Grid;
+        OverviewLayoutSession                  layoutSession;
+        std::shared_ptr<LayoutIdentityOwners>   layoutIdentityOwners;
         bool                                   suppressWorkspaceStrip = false;
         std::vector<PHLMONITOR>                participatingMonitors;
         std::vector<PHLWORKSPACE>              managedWorkspaces;
@@ -915,8 +920,10 @@ class OverviewController {
     void clearPendingStripWorkspaceChange();
     [[nodiscard]] bool matchesPendingStripWorkspaceChange(const PHLWORKSPACE& workspace) const;
     void buildWorkspaceStripEntries(State& state) const;
+    WindowInput layoutInputForWindow(State& state, const PHLWINDOW& window, const Rect& local, std::size_t index, std::size_t rowGroup = 0) const;
     State  buildState(const PHLMONITOR& monitor, ScopeOverride requestedScope, const std::vector<WorkspaceOverride>& workspaceOverrides = {},
-                      bool keepEmptyParticipatingMonitors = false, bool suppressWorkspaceStrip = false, PHLWINDOW preferredSelectedWindow = {}) const;
+                      bool keepEmptyParticipatingMonitors = false, bool suppressWorkspaceStrip = false, PHLWINDOW preferredSelectedWindow = {},
+                      const State* previousLayoutState = nullptr) const;
     State  m_state;
     HANDLE m_handle = nullptr;
 
