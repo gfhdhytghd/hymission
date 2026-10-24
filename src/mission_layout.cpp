@@ -1,4 +1,5 @@
 #include "mission_layout.hpp"
+#include "natural_layout.hpp"
 #include "numeric_config.hpp"
 
 #include <algorithm>
@@ -1766,7 +1767,28 @@ LayoutConfig normalizeLayoutConfig(LayoutConfig config) {
 }
 
 std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowInput>& windows, const Rect& area, const LayoutConfig& rawConfig) const {
+    return compute(windows, area, rawConfig, static_cast<LayoutDegradation*>(nullptr));
+}
+
+std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowInput>& windows, const Rect& area, const LayoutConfig& rawConfig,
+                                                    LayoutContext& context, LayoutDegradation* degradation) const {
     const auto config = normalizeLayoutConfig(rawConfig);
+    if (config.engine == LayoutEngine::Natural2)
+        return natural2::compute(windows, area, config, &context, degradation);
+
+    // An engine switch ends the Natural2 history, even for an empty request.
+    context.reset();
+    return compute(windows, area, config, degradation);
+}
+
+std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowInput>& windows, const Rect& area, const LayoutConfig& rawConfig,
+                                                    LayoutDegradation* degradation) const {
+    const auto config = normalizeLayoutConfig(rawConfig);
+    if (config.engine == LayoutEngine::Natural2)
+        return natural2::compute(windows, area, config, nullptr, degradation);
+
+    if (degradation)
+        *degradation = {};
     if (windows.empty())
         return {};
 

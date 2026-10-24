@@ -561,14 +561,7 @@ std::string asciiLowerCopy(std::string value) {
 }
 
 LayoutEngine parseLayoutEngine(std::string value) {
-    value = asciiLowerCopy(std::move(value));
-    if (value == "natural" || value == "apple" || value == "apple-like" || value == "expose" || value == "mission-control")
-        return LayoutEngine::Natural;
-
-    if (value == "thumbnail" || value == "thumbnails")
-        return LayoutEngine::Thumbnail;
-
-    return LayoutEngine::Grid;
+    return parseOverviewLayoutEngine(value);
 }
 
 std::optional<uint32_t> switchReleaseModifierMask(const std::string& value) {
@@ -5739,6 +5732,11 @@ void OverviewController::refreshNiriScrollingOverviewAfterLayoutScroll(const cha
     if (!isVisible() || m_state.phase != Phase::Active || !niriModeEnabled() || !m_state.ownerMonitor || !isScrollingWorkspace(activeLayoutWorkspace()))
         return;
 
+    if (m_state.engine == LayoutEngine::Natural2 || layoutConfigForState(m_state).engine == LayoutEngine::Natural2) {
+        rebuildVisibleState(m_state.focusDuringOverview);
+        return;
+    }
+
     State next = buildState(m_state.ownerMonitor, m_state.collectionPolicy.requestedScope, {}, false, m_state.suppressWorkspaceStrip, m_state.focusDuringOverview);
     if (next.windows.empty())
         return;
@@ -6889,7 +6887,7 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
         .syntheticEmpty = syntheticEmpty,
     }};
 
-    State target = buildState(anchorMonitor, m_state.collectionPolicy.requestedScope, overrides, true);
+    State target = buildState(anchorMonitor, m_state.collectionPolicy.requestedScope, overrides, true, false, {}, &m_state);
     if (target.participatingMonitors.empty())
         return false;
 
@@ -7303,7 +7301,7 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
                 .syntheticEmpty = false,
             }};
 
-            if (State rebuilt = buildState(rebuildMonitor, m_state.collectionPolicy.requestedScope, overrides, true); !rebuilt.participatingMonitors.empty())
+            if (State rebuilt = buildState(rebuildMonitor, m_state.collectionPolicy.requestedScope, overrides, true, false, {}, &next); !rebuilt.participatingMonitors.empty())
                 next = std::move(rebuilt);
         }
 
@@ -11777,7 +11775,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     const auto layoutSelectedWindow =
         preferredSelectedWindow && preferredSelectedWindow->mapped() ? preferredSelectedWindow :
         (expandSelectedWindowEnabled() ? Desktop::focusState()->window() : PHLWINDOW{});
-    State next = buildState(monitor, requestedScope, workspaceOverrides, false, false, layoutSelectedWindow);
+    State next = buildState(monitor, requestedScope, workspaceOverrides, false, false, layoutSelectedWindow, wasVisible ? &m_state : nullptr);
     // An empty overview is a normal no-op, including when opened by a gesture.
     if (next.windows.empty() && next.stripEntries.empty())
         return;
@@ -12953,7 +12951,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
             out << " active=<null>";
         debugLog(out.str());
     }
-    State next = buildState(monitor, requestedScope, {}, m_searchActive, false, layoutSelectedWindow);
+    State next = buildState(monitor, requestedScope, {}, m_searchActive, false, layoutSelectedWindow, &m_state);
     if (!m_searchActive && next.windows.empty() && next.stripEntries.empty()) {
         beginClose(CloseMode::Abort);
         return;
@@ -13032,7 +13030,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
         });
     const bool sameLayoutShape = sameWindowSet && sameMonitorSet && sameRowGroups && sameTileLayouts;
     const bool selectionRelayoutForced = forceRelayout && expandSelectedWindowEnabled();
-    const bool freezeExistingLayout = sameLayoutShape && !forceRelayout;
+    const bool freezeExistingLayout = sameLayoutShape && !forceRelayout && next.engine != LayoutEngine::Natural2 && m_state.engine != LayoutEngine::Natural2;
 
     bool shouldAnimateRelayout = false;
     if (freezeExistingLayout) {
@@ -14312,7 +14310,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             for (size_t i=0;i<previewState.windows.size();++i) {
                 const auto& managed=previewState.windows[i];
                 const auto local=rectToMonitorLocal(managed.naturalGlobal,monitor);
-                inputs.push_back({.index=i,.natural=local,.label=managed.title});
+                inputs.push_back(layoutInputForWindow(previewState, managed.window, local, i));
             }
             MissionControlLayout layout;
             for (const auto& slot:layout.compute(inputs,tileContentRect(monitor,entry.tileId,previewState),layoutConfigForState(previewState))) {
@@ -14363,6 +14361,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             }
 
             LayoutConfig previewConfig = layoutConfigForState(previewState);
+            previewState.engine = previewConfig.engine;
             previewConfig.forceRowGroups = false;
             previewConfig.preserveInputOrder = true;
             std::vector<WindowInput> previewInputs;
@@ -14370,11 +14369,8 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             for (std::size_t previewIndex = 0; previewIndex < previewState.windows.size(); ++previewIndex) {
                 const auto& managed = previewState.windows[previewIndex];
                 const Rect outer = overviewBorderOuterRectForWindow(managed.window, managed.naturalGlobal);
-                previewInputs.push_back({
-                    .index = previewIndex,
-                    .natural = makeRect(outer.x - monitor->m_position.x, outer.y - monitor->m_position.y, outer.width, outer.height),
-                    .label = managed.title,
-                });
+                previewInputs.push_back(layoutInputForWindow(previewState, managed.window,
+                    makeRect(outer.x - monitor->m_position.x, outer.y - monitor->m_position.y, outer.width, outer.height), previewIndex));
             }
 
             MissionControlLayout previewLayout;
@@ -15195,9 +15191,68 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
     }
 }
 
+struct OverviewController::LayoutIdentityOwners {
+    std::vector<PHLWINDOW> windows;
+    std::vector<SP<Desktop::View::CGroup>> groups;
+    std::vector<SP<Layout::Tiled::SColumnData>> columns;
+};
+
+WindowInput OverviewController::layoutInputForWindow(State& state, const PHLWINDOW& window, const Rect& local, std::size_t index, std::size_t rowGroup) const {
+    WindowInput input{.index = index, .natural = local, .label = window ? window->metadata().title() : "", .rowGroup = rowGroup};
+    if (state.engine != LayoutEngine::Natural2 || !window)
+        return input;
+
+    // State copies may be used as transition/drag predictions. Detach before
+    // registering owners so even their identity lifetime stays speculative.
+    if (!state.layoutIdentityOwners)
+        state.layoutIdentityOwners = std::make_shared<LayoutIdentityOwners>();
+    else if (!state.layoutIdentityOwners.unique())
+        state.layoutIdentityOwners = std::make_shared<LayoutIdentityOwners>(*state.layoutIdentityOwners);
+    auto& owners = *state.layoutIdentityOwners;
+    const auto group = window->grouping().group();
+    input.stableId = groupedWindowsPolicy() == GroupedWindowsPolicy::Collapsed && group ?
+        keepLayoutIdentity(owners.groups, group) : keepLayoutIdentity(owners.windows, window);
+    const auto workspace = window->m_workspace ? window->m_workspace : state.ownerWorkspace;
+    if (workspace)
+        input.groupId = workspaceKey(workspace);
+    const auto target = window->layoutTarget();
+    input.floating = window->isFloating() || (target && target->floating());
+    if (*input.floating || !target || !workspace || !isScrollingWorkspace(workspace))
+        return input;
+
+    auto* scrolling = scrollingAlgorithmForWorkspace(workspace);
+    if (!scrolling || !scrolling->m_scrollingData)
+        return input;
+    const auto data = scrolling->dataFor(target);
+    const auto column = data ? data->column.lock() : nullptr;
+    if (!column)
+        return input;
+    const auto& columns = scrolling->m_scrollingData->columns;
+    const auto columnIt = std::find(columns.begin(), columns.end(), column);
+    const auto memberIt = std::find(column->targetDatas.begin(), column->targetDatas.end(), data);
+    if (columnIt == columns.end() || memberIt == column->targetDatas.end())
+        return input;
+    const auto nativeColumnIndex = static_cast<std::size_t>(std::distance(columns.begin(), columnIt));
+    // Guard the enum bridge at compile time so an upstream enum change cannot
+    // silently alter the pure direction/index mapping tested offline.
+    static_assert(static_cast<int>(ScrollingLayoutDirection::Right) == Layout::Tiled::SCROLL_DIR_RIGHT);
+    static_assert(static_cast<int>(ScrollingLayoutDirection::Left) == Layout::Tiled::SCROLL_DIR_LEFT);
+    static_assert(static_cast<int>(ScrollingLayoutDirection::Down) == Layout::Tiled::SCROLL_DIR_DOWN);
+    static_assert(static_cast<int>(ScrollingLayoutDirection::Up) == Layout::Tiled::SCROLL_DIR_UP);
+    const auto geometry = scrollingColumnGeometry(nativeColumnIndex, columns.size(),
+                                                  static_cast<ScrollingLayoutDirection>(scrolling->getDynamicDirection()));
+    if (!geometry)
+        return input;
+    input.columnId = keepLayoutIdentity(owners.columns, column);
+    input.columnIndex = geometry->columnIndex;
+    input.columnAxis = geometry->columnAxis;
+    input.columnMemberIndex = static_cast<std::size_t>(std::distance(column->targetDatas.begin(), memberIt));
+    return input;
+}
+
 OverviewController::State OverviewController::buildState(const PHLMONITOR& monitor, ScopeOverride requestedScope, const std::vector<WorkspaceOverride>& workspaceOverrides,
                                                          bool keepEmptyParticipatingMonitors, bool suppressWorkspaceStrip,
-                                                         PHLWINDOW preferredSelectedWindow) const {
+                                                         PHLWINDOW preferredSelectedWindow, const State* previousLayoutState) const {
     State state;
     if (!monitor || !monitor->m_activeWorkspace)
         return state;
@@ -15426,11 +15481,20 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     std::unordered_map<MONITORID, std::size_t> directNiriOverviewWindowsByMonitor;
     LayoutConfig config = layoutConfigForState(state);
     state.engine = config.engine;
+    if (config.engine == LayoutEngine::Natural2 && previousLayoutState && previousLayoutState->engine == config.engine &&
+        previousLayoutState->ownerMonitor == state.ownerMonitor &&
+        previousLayoutState->collectionPolicy.requestedScope == state.collectionPolicy.requestedScope &&
+        previousLayoutState->collectionPolicy.onlyActiveMonitor == state.collectionPolicy.onlyActiveMonitor &&
+        previousLayoutState->collectionPolicy.onlyActiveWorkspace == state.collectionPolicy.onlyActiveWorkspace &&
+        previousLayoutState->collectionPolicy.includeSpecial == state.collectionPolicy.includeSpecial) {
+        state.layoutSession = previousLayoutState->layoutSession;
+        state.layoutIdentityOwners = previousLayoutState->layoutIdentityOwners;
+    }
     const bool useWorkspaceRows = workspaceRowsEnabled(m_handle) || config.engine == LayoutEngine::Thumbnail;
     config.preserveInputOrder = preserveExistingOrder || orderByRecentUse;
     config.forceRowGroups = useWorkspaceRows;
     config.rankScaleByInputOrder = orderByRecentUse;
-    const bool allowDirectNiriOverviewLayout = state.collectionPolicy.onlyActiveWorkspace;
+    const bool allowDirectNiriOverviewLayout = state.collectionPolicy.onlyActiveWorkspace && config.engine != LayoutEngine::Natural2;
     const auto slotWithBorderOuterTarget = [&](const PHLWINDOW& window, const PHLMONITOR& monitor, WindowSlot slot) {
         if (!monitor)
             return slot;
@@ -15631,26 +15695,20 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         }
 
         const Rect layoutOuterGlobal = overviewBorderOuterRectForWindow(window, layoutGlobal);
-        inputsByMonitor[targetMonitor->m_id].push_back({
-            .index = windowIndex,
-            .natural =
+        // Expansion is applied after the stable base layout is computed.
+        // Selection changes must not enlarge a reserved base slot.
+        inputsByMonitor[targetMonitor->m_id].push_back(layoutInputForWindow(state, window,
                 {
                     layoutOuterGlobal.x - targetMonitor->m_position.x,
                     layoutOuterGlobal.y - targetMonitor->m_position.y,
                     layoutOuterGlobal.width,
                     layoutOuterGlobal.height,
-                },
-            .label = window->metadata().title(),
-            .rowGroup = rowGroupForWindow(window),
-            // Expansion is applied after the stable base layout is computed.
-            // Keeping slots un-emphasized prevents the initial selection from
-            // remaining enlarged after selection moves elsewhere.
-            .layoutEmphasis = 1.0,
-        });
+                }, windowIndex, rowGroupForWindow(window)));
     }
 
     std::vector<PHLMONITOR> activeParticipatingMonitors;
-    MissionControlLayout engine;
+    std::vector<OverviewLayoutRegion> layoutRegions;
+    const std::vector<WindowInput> emptyInputs;
     for (const auto& candidateMonitor : state.participatingMonitors) {
         if (!candidateMonitor)
             continue;
@@ -15664,14 +15722,22 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             continue;
 
         activeParticipatingMonitors.push_back(candidateMonitor);
-        if (inputsIt == inputsByMonitor.end() || inputsIt->second.empty())
-            continue;
+        const auto& monitorInputs = inputsIt == inputsByMonitor.end() ? emptyInputs : inputsIt->second;
+
+        const auto computeRegion = [&](const std::vector<WindowInput>& inputs, const Rect& area, uint64_t tile, const PHLWORKSPACE& workspace) {
+            const OverviewLayoutRegion region{static_cast<std::int64_t>(candidateMonitor->m_id), tile,
+                state.collectionPolicy.onlyActiveWorkspace && workspace ? std::optional<std::int64_t>(workspaceKey(workspace)) : std::nullopt};
+            layoutRegions.push_back(region);
+            return state.layoutSession.compute(region, inputs, area, config);
+        };
 
         if (auto* tiles=TilesController::get();state.collectionPolicy.onlyActiveWorkspace && tiles && tiles->enabled(candidateMonitor)) {
             for (const auto& view:tiles->views(candidateMonitor)) {
                 std::vector<WindowInput> inputs;
-                for (const auto& input:inputsIt->second) if (input.index<state.windows.size() && tiles->preferredTile(state.windows[input.index].window->m_workspace,candidateMonitor)==view.id) inputs.push_back(input);
-                const auto slots=engine.compute(inputs,tileContentRect(candidateMonitor,view.id,state),config);
+                for (const auto& input:monitorInputs) if (input.index<state.windows.size() && tiles->preferredTile(state.windows[input.index].window->m_workspace,candidateMonitor)==view.id) inputs.push_back(input);
+                const auto* override = overrideForMonitor(candidateMonitor);
+                const auto workspace = override && override->tileId == view.id ? override->workspace : view.workspace;
+                const auto slots=computeRegion(inputs,tileContentRect(candidateMonitor,view.id,state),view.id,workspace);
                 for (const auto& slot:slots) if (slot.index<state.windows.size()) {
                     auto& managed=state.windows[slot.index]; managed.slot=slot;
                     managed.targetGlobal=overviewContentTargetForSlot(managed.window,candidateMonitor,slot);
@@ -15681,10 +15747,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             continue;
         }
         const Rect previewArea = overviewContentRectForMonitor(candidateMonitor, state);
-        const auto slots =
-            engine.compute(inputsIt->second,
-                           previewArea,
-                           config);
+        const auto* override = overrideForMonitor(candidateMonitor);
+        const auto workspace = override ? override->workspace : candidateMonitor->m_activeWorkspace;
+        const auto slots = computeRegion(monitorInputs, previewArea, 0, workspace);
         for (const auto& slot : slots) {
             if (slot.index >= state.windows.size())
                 continue;
@@ -15699,6 +15764,8 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             state.slots.push_back(slot);
         }
     }
+
+    state.layoutSession.retainRegions(layoutRegions);
 
     const auto settleNiriFloatingOverlayOverlaps = [&]() {
         const double gap = std::max(2.0, std::min(12.0, std::min(config.columnSpacing, config.rowSpacing) * 0.25));
