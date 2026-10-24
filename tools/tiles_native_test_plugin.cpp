@@ -164,6 +164,8 @@ class CaptureFramePass final:public IPassElement {
         frame.state["framebuffer"]={{"drm_format",fb->getTexture()->m_drmFormat},{"format",fb->m_drmFormat},{"mirror_format",fb->getMirrorTexture()?fb->getMirrorTexture()->m_drmFormat:0},{"current",fb->getFBID()},{"main",dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.mainFB)->getFBID()},{"damage",nlohmann::json::array()}};
         ctx.m_data.damage.forEachRect([&](const auto& rect) { frame.state["framebuffer"]["damage"].push_back({rect.x1,rect.y1,rect.x2,rect.y2}); });
         frame.state["stage"]=stageBeforeReadback;
+        const auto focused=Desktop::focusState()->window();
+        frame.state["focus"]=focused?std::format("0x{:x}",reinterpret_cast<uintptr_t>(focused.get())):"";
         frame.state["readback_ms"]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-readbackStart).count();
         frame.state["native"]=nlohmann::json::array();
         for (const auto& window:Desktop::windowState()->windows()) {
@@ -175,6 +177,9 @@ class CaptureFramePass final:public IPassElement {
                 {"workspace_alpha",ws->m_alpha->value()},{"workspace_animated",ws->m_renderOffset->isBeingAnimated()},{"workspace_alpha_animated",ws->m_alpha->isBeingAnimated()},{"visible",ws->visible()},{"forced",ws->m_forceRendering},
                 {"alpha",window->presentation().alphaTotal()},
                 {"active_alpha",window->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_ACTIVE)},
+                {"dim",window->presentation().dimPercent()},
+                {"active_workspace",ws->m_monitor && ws->m_monitor->m_activeWorkspace==ws},
+                {"offset_goal",{ws->m_renderOffset->goal().x,ws->m_renderOffset->goal().y}},
                 {"presentation_alpha",window->presentation().renderPresentation().alpha},
                 {"presentation_fade",window->presentation().renderPresentation().fadeAlpha},{"fullscreen_alpha",window->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN)},
                 {"position",{window->positionAnimation()->value().x,window->positionAnimation()->value().y}}});

@@ -88,6 +88,14 @@ def main():
     ap.add_argument("--fb19-regression", choices=("off","single","two","three","reference"))
     ap.add_argument("--fb19-observe", action="store_true")
     ap.add_argument("--fb19-fp16", action="store_true")
+    ap.add_argument("--fb21-regression", choices=("off", "single", "two"))
+    ap.add_argument("--fb21-observe", action="store_true")
+    ap.add_argument("--fb21-layout", choices=("dwindle", "scrolling"), default="dwindle")
+    ap.add_argument("--fb21-fp16", action="store_true")
+    ap.add_argument("--fb21-opacity", action="store_true")
+    ap.add_argument("--fb21-hover-delay", type=float, default=.6)
+    ap.add_argument("--fb21-same-workspace", action="store_true")
+    ap.add_argument("--fb21-native-animations", action="store_true")
     ap.add_argument("--plugin", required=True)
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
@@ -308,6 +316,10 @@ def main():
             from tiles_top_clip_regression import run
             run(request,root,env,runtime,processes,handles)
             (root/"configerrors.txt").write_text(request("/configerrors"))
+            return
+        if args.fb21_regression:
+            from overview_fb21_regression import run
+            run(args.fb21_regression,args.fb21_observe,request,root,env,runtime,processes,handles,args.fb21_layout,args.fb21_fp16,args.fb21_opacity,args.fb21_hover_delay,args.fb21_same_workspace,args.fb21_native_animations)
             return
         if args.opacity_regression:
             from tiles_opacity_regression import run

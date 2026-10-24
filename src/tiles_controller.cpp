@@ -1456,7 +1456,12 @@ tiles::Id TilesController::preferredTile(const PHLWORKSPACE& ws, const PHLMONITO
     return o->ownership.owner(o->model.state(), ws ? workspaceKey(ws) : 0);
 }
 std::optional<TilesController::View> TilesController::view(const PHLWORKSPACE& w) const { return m->view(w); }
-bool TilesController::presented(const PHLWORKSPACE& w) const { return m->view(w).has_value(); }
+bool TilesController::presented(const PHLWORKSPACE& w) const {
+    // One logical tile delegates presentation to the native active workspace.
+    // Its cached binding can lag live overview focus until reconciliation; it
+    // must not keep that old desktop visible during a scope/exit handoff.
+    return w && m->active(w->m_monitor.lock()) && m->view(w).has_value();
+}
 bool TilesController::focus(const PHLMONITOR& mon, tiles::Id id, bool warp) {
     auto* o = m->output(mon);
     if (!o || !m->ready || locked()) return false;
