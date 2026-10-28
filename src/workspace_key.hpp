@@ -7,6 +7,8 @@
 #include <hyprland/src/workspace/RegularWorkspace.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 
+#include "idle_task.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <limits>
@@ -96,7 +98,7 @@ inline PHLWORKSPACE workspaceForKey(WorkspaceKey key) {
 struct PendingWorkspaceReady {
     uint64_t                  id = 0;
     PHLWORKSPACEREF           workspace;
-    UP<SEventLoopDoLaterLock> queued;
+    std::unique_ptr<IdleTask> queued;
 };
 inline std::vector<PendingWorkspaceReady> pendingWorkspaceReady;
 
@@ -110,9 +112,8 @@ inline void readyWorkspaceLater(const PHLWORKSPACE& workspace) {
     static uint64_t nextId = 0;
     const uint64_t id = ++nextId;
     const PHLWORKSPACEREF ref = workspace;
-    auto queued = g_pEventLoopManager->doLaterLock([id, ref] {
-        // The idle queue has already released this callback; dropping its
-        // lock only forgets the entry.
+    auto queued = IdleTask::later([id, ref] {
+        // The task is running; dropping it only forgets the entry.
         std::erase_if(pendingWorkspaceReady, [id](const PendingWorkspaceReady& pending) { return pending.id == id; });
         if (const auto created = ref.lock())
             created->ready();

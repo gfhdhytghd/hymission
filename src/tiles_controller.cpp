@@ -96,7 +96,7 @@ struct TilesController::Impl {
     std::vector<std::unique_ptr<Output>> outputs;
     std::vector<CHyprSignalListener> listeners;
     std::vector<hooks::Lease*> leases;
-    UP<SEventLoopDoLaterLock> deferred, floatingDeferred;
+    std::unique_ptr<IdleTask> deferred, floatingDeferred;
     bool ready = false, applying = false, frameFanout = false, stopping = false;
     std::string initError, edgeFailure;
     bool softEdgeDrawn=false, nativeDropCancelled=false, collapsing=false;
@@ -121,7 +121,7 @@ struct TilesController::Impl {
     std::optional<Swipe> swipe;
     struct Resize { PHLMONITORREF monitor; tiles::DividerDrag drag; double pointerX = 0; };
     std::optional<Resize> resize;
-    UP<SEventLoopDoLaterLock> resizeDeferred;
+    std::unique_ptr<IdleTask> resizeDeferred;
     bool resizeReleasePending = false;
     struct Transfer {
         PHLMONITORREF sourceMonitor, targetMonitor;
@@ -248,7 +248,7 @@ struct TilesController::Impl {
     }
     void request() {
         if (stopping || deferred || !g_pEventLoopManager) return;
-        deferred = g_pEventLoopManager->doLaterLock([this] { deferred.reset(); reconcile(); });
+        deferred = IdleTask::later([this] { deferred.reset(); reconcile(); });
     }
     void apply(Output& o, bool focusWindow = false, bool warp = false, bool internal = false);
     bool publish(Output& o, tiles::Model draft, const std::vector<PHLWINDOW>& windows={}, PHLWORKSPACE destination=nullptr, bool focus=true, bool warp=false) {
@@ -293,7 +293,7 @@ struct TilesController::Impl {
         if (!resize) return;
         info.cancelled=true;
         resize->pointerX=inputPosition(resize->monitor.lock(),pos).x;
-        if (!resizeDeferred) resizeDeferred=g_pEventLoopManager->doLaterLock([this] { flushResize(); });
+        if (!resizeDeferred) resizeDeferred=IdleTask::later([this] { flushResize(); });
     }
     bool dividerButton(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
         if (event.button!=BTN_LEFT) return false;
@@ -1410,7 +1410,7 @@ void TilesController::initialize() {
     m->listeners.emplace_back(e.render.preChecks.listen([this](PHLMONITOR mon) {
         if (m->active(mon)) {
             mon->m_solitaryClient.reset();
-            if (!m->floatingDeferred) m->floatingDeferred=g_pEventLoopManager->doLaterLock([this] { m->floatingHomes(); });
+            if (!m->floatingDeferred) m->floatingDeferred=IdleTask::later([this] { m->floatingHomes(); });
         }
     }));
     m->listeners.emplace_back(e.render.stage.listen([this](Event::SRenderStageEvent event) { m->chrome(event); m->overlayStage(event);

@@ -3,11 +3,13 @@
 #include <sstream>
 #include <string>
 
+#include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/config/values/types/ColorValue.hpp>
 #include <hyprland/src/config/values/types/FloatValue.hpp>
 #include <hyprland/src/config/values/types/IntValue.hpp>
 #include <hyprland/src/config/values/types/StringValue.hpp>
+#include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 
@@ -33,6 +35,12 @@ inline SP<IPC::Socket1::SCommand> g_stageRegionCommand;
 inline SP<IPC::Socket1::SCommand> g_overviewStateCommand;
 inline SP<IPC::Socket1::SCommand> g_rawWindowRenderCommand;
 inline SP<IPC::Socket1::SCommand> g_captureInputCommand;
+inline hymission::OwnerBinding<WP<Config::IConfigManager>> g_configManager;
+inline CHyprSignalListener g_configPreReload;
+
+wl_event_loop* hymission::hyprlandEventLoop() {
+    return g_pCompositor ? g_pCompositor->m_wlEventLoop : nullptr;
+}
 
 namespace {
 bool addConfigValue(SP<Config::Values::IValue> value) {
@@ -385,26 +393,7 @@ int luaGesture(lua_State* L) {
 }
 } // namespace
 
-APICALL EXPORT std::string PLUGIN_API_VERSION() {
-    return HYPRLAND_API_VERSION;
-}
-
-APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
-    g_pluginHandle = handle;
-
-    // PLUGIN_API_VERSION only names the generic plugin API. Hooks and inline
-    // headers depend on the exact compositor commit and its library versions;
-    // same-named tags of different trees (e.g. the fork and upstream v0.57.0)
-    // differ in layout. Refuse to load, before any hook, unless the headers
-    // this build used match the running compositor.
-    const std::string serverHash = __hyprland_api_get_hash();
-    const std::string clientHash = __hyprland_api_get_client_hash();
-    if (serverHash != clientHash) {
-        HyprlandAPI::addNotification(handle, "[hymission] built against different Hyprland headers; not loading. Rebuild the plugin for this compositor.",
-                                     CHyprColor(1.0, 0.2, 0.2, 1.0), 10000);
-        throw std::runtime_error("hymission: Hyprland header hash " + clientHash + " does not match running " + serverHash);
-    }
-
+static void registerConfigValues() {
 #define INT_CONF(name, value) addIntConfig("plugin:hymission:" name, Config::INTEGER{value})
 #define FLOAT_CONF(name, value) addFloatConfig("plugin:hymission:" name, Config::FLOAT{value})
 #define COLOR_CONF(name, value) addColorConfig("plugin:hymission:" name, Config::INTEGER{value})
@@ -532,6 +521,61 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 #undef COLOR_CONF
 #undef FLOAT_CONF
 #undef INT_CONF
+}
+
+static void registerLuaFunctions() {
+    if (Config::mgr() && Config::mgr()->type() == Config::CONFIG_LUA) {
+        const auto registerLuaFunction = [&](const char* name, PLUGIN_LUA_FN fn) {
+            if (!HyprlandAPI::addLuaFunction(g_pluginHandle, "hymission", name, fn)) {
+                HyprlandAPI::addNotification(
+                    g_pluginHandle,
+                    std::string("[hymission] failed to register lua function hl.plugin.hymission.") + name,
+                    CHyprColor(1.0, 0.2, 0.2, 1.0),
+                    5000);
+            }
+        };
+
+        registerLuaFunction("tile_add", lua_tile_add);
+        registerLuaFunction("tile_resize", lua_tile_resize);
+        registerLuaFunction("tile_remove", lua_tile_remove);
+        registerLuaFunction("tile_focus", lua_tile_focus);
+        registerLuaFunction("tile_move_window", lua_tile_move_window);
+        registerLuaFunction("tiles_state", luaTilesState);
+        registerLuaFunction("stage_toggle", luaStageToggle);
+        registerLuaFunction("stage_open", luaStageOpen);
+        registerLuaFunction("stage_close", luaStageClose);
+        registerLuaFunction("stage_region", luaStageRegion);
+        registerLuaFunction("toggle", luaToggle);
+        registerLuaFunction("open", luaOpen);
+        registerLuaFunction("close", luaClose);
+        registerLuaFunction("fullscreen", luaFullscreen);
+        registerLuaFunction("debug_current_layout", luaDebugCurrentLayout);
+        registerLuaFunction("dispatch", luaDispatch);
+        registerLuaFunction("gesture", luaGesture);
+    }
+}
+
+APICALL EXPORT std::string PLUGIN_API_VERSION() {
+    return HYPRLAND_API_VERSION;
+}
+
+APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+    g_pluginHandle = handle;
+
+    // PLUGIN_API_VERSION only names the generic plugin API. Hooks and inline
+    // headers depend on the exact compositor commit and its library versions;
+    // same-named tags of different trees (e.g. the fork and upstream v0.57.0)
+    // differ in layout. Refuse to load, before any hook, unless the headers
+    // this build used match the running compositor.
+    const std::string serverHash = __hyprland_api_get_hash();
+    const std::string clientHash = __hyprland_api_get_client_hash();
+    if (serverHash != clientHash) {
+        HyprlandAPI::addNotification(handle, "[hymission] built against different Hyprland headers; not loading. Rebuild the plugin for this compositor.",
+                                     CHyprColor(1.0, 0.2, 0.2, 1.0), 10000);
+        throw std::runtime_error("hymission: Hyprland header hash " + clientHash + " does not match running " + serverHash);
+    }
+
+    registerConfigValues();
 
     g_overviewController = std::make_unique<hymission::OverviewController>(g_pluginHandle);
     const bool overviewReady=g_overviewController->initialize();
@@ -631,35 +675,18 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to register hyprctl command hymission-capture-input",
                                      CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
 
-    if (Config::mgr() && Config::mgr()->type() == Config::CONFIG_LUA) {
-        const auto registerLuaFunction = [&](const char* name, PLUGIN_LUA_FN fn) {
-            if (!HyprlandAPI::addLuaFunction(g_pluginHandle, "hymission", name, fn)) {
-                HyprlandAPI::addNotification(
-                    g_pluginHandle,
-                    std::string("[hymission] failed to register lua function hl.plugin.hymission.") + name,
-                    CHyprColor(1.0, 0.2, 0.2, 1.0),
-                    5000);
-            }
-        };
-
-        registerLuaFunction("tile_add", lua_tile_add);
-        registerLuaFunction("tile_resize", lua_tile_resize);
-        registerLuaFunction("tile_remove", lua_tile_remove);
-        registerLuaFunction("tile_focus", lua_tile_focus);
-        registerLuaFunction("tile_move_window", lua_tile_move_window);
-        registerLuaFunction("tiles_state", luaTilesState);
-        registerLuaFunction("stage_toggle", luaStageToggle);
-        registerLuaFunction("stage_open", luaStageOpen);
-        registerLuaFunction("stage_close", luaStageClose);
-        registerLuaFunction("stage_region", luaStageRegion);
-        registerLuaFunction("toggle", luaToggle);
-        registerLuaFunction("open", luaOpen);
-        registerLuaFunction("close", luaClose);
-        registerLuaFunction("fullscreen", luaFullscreen);
-        registerLuaFunction("debug_current_layout", luaDebugCurrentLayout);
-        registerLuaFunction("dispatch", luaDispatch);
-        registerLuaFunction("gesture", luaGesture);
-    }
+    registerLuaFunctions();
+    // A full-reset reload replaces the config manager together with its Lua
+    // state, so the values and hl.plugin.hymission.* registered with the old
+    // manager are gone. Register them again before the new manager parses the
+    // config; an ordinary reload keeps the manager and needs nothing.
+    g_configManager.rebind(Config::mgr());
+    g_configPreReload = Event::bus()->m_events.config.preReload.listen([] {
+        if (g_configManager.rebind(Config::mgr())) {
+            registerConfigValues();
+            registerLuaFunctions();
+        }
+    });
 
     if (!HyprlandAPI::reloadConfig()) {
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] reloadConfig failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
@@ -674,6 +701,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    g_configPreReload.reset();
     // The pass survives endRender until the next beginRender. Its smart-pointer
     // deleters can live in this DSO even for native pass element types. Destroy
     // them before dlclose, while both the code and controller callbacks exist.
@@ -706,6 +734,6 @@ APICALL EXPORT void PLUGIN_EXIT() {
     if (g_pHyprRenderer)
         g_pHyprRenderer->context().m_pass.clear();
     // Last, after every controller: no queued readiness callback (plugin code)
-    // may stay in Hyprland's idle queue past dlclose.
+    // may stay queued past dlclose.
     hymission::finishWorkspaceReadiness();
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hook_broker.hpp"
+#include "idle_task.hpp"
 struct SEventLoopDoLaterLock;
 
 #include "workspace_key.hpp"
@@ -678,7 +679,8 @@ class OverviewController {
     [[nodiscard]] bool         shouldAutoCloseFor(const PHLWINDOW& window) const;
     [[nodiscard]] bool         shouldManageWindow(const PHLWINDOW& window, const State& state) const;
     bool pointInWindowTile(const ManagedWindow&,double x,double y) const;
-    UP<SEventLoopDoLaterLock> m_tilesRebuild;
+    std::unique_ptr<IdleTask> m_tilesRebuild;
+    IdleTasks                 m_idleTasks;
     [[nodiscard]] std::string  collectionSummary(const PHLMONITOR& monitor) const;
     [[nodiscard]] std::vector<Rect> targetRects() const;
     [[nodiscard]] std::vector<std::size_t> pickOrderForCurrentState() const;

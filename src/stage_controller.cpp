@@ -461,10 +461,10 @@ struct StageController::Impl {
         bool activating = false;
     };
     std::vector<CanvasScroll> canvasScrolls;
-    UP<SEventLoopDoLaterLock> canvasRelease;
+    std::unique_ptr<IdleTask> canvasRelease;
     void restoreCanvasScroll(const PHLWORKSPACE& workspace);
     void beginCanvasActivation(const PHLWORKSPACE& workspace);
-    UP<SEventLoopDoLaterLock> deferred;
+    std::unique_ptr<IdleTask> deferred;
     SP<CEventLoopTimer> refreshTimer;
     SP<CEventLoopTimer> motionTimer;
     std::optional<bool> runtimeVisible;
@@ -1658,7 +1658,7 @@ void StageController::Impl::request(bool dirty) {
     forceRefresh |= dirty;
     if (deferred || !g_pEventLoopManager)
         return;
-    deferred = g_pEventLoopManager->doLaterLock([this] {
+    deferred = IdleTask::later([this] {
         deferred.reset();
         sync();
     });
@@ -4897,7 +4897,7 @@ void StageController::Impl::beginCanvasActivation(const PHLWORKSPACE& workspace)
         return;
     // Keep the guard through the card click's post-activation focus, then
     // release it. Subsequent deliberate navigation must own the camera again.
-    canvasRelease = g_pEventLoopManager->doLaterLock([this] {
+    canvasRelease = IdleTask::later([this] {
         canvasRelease.reset();
         for (const auto& entry : canvasScrolls)
             if (entry.activating)

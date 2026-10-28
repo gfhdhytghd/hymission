@@ -2348,8 +2348,10 @@ OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
 }
 
 OverviewController::~OverviewController() {
-    clearStripWindowDragState();
+    // Cancel deferred callbacks first: none may run once the plugin unloads.
+    m_idleTasks.clear();
     m_tilesRebuild.reset();
+    clearStripWindowDragState();
     cancelAndClearTimer(m_hiddenStripProxyRefreshTimer);
     cancelAndClearTimer(m_stripRefreshTimer);
     stopSearchInput();
@@ -7176,7 +7178,7 @@ void OverviewController::requestOverviewWorkspaceTransitionCommit(bool followGes
     if (debugLogsEnabled())
         debugLog("[hymission] defer overview workspace transition commit until after render");
 
-    g_pEventLoopManager->doLater([this, generation] {
+    m_idleTasks.post([this, generation] {
         if (g_controller != this || sessionLocked() || generation != m_workspaceTransitionCommitGeneration)
             return;
 
@@ -8123,7 +8125,7 @@ void* OverviewController::findFunction(const std::string& symbolName, const std:
 
 void OverviewController::handleTilesChange() {
     if (!isVisible() || m_tilesRebuild || !g_pEventLoopManager) return;
-    m_tilesRebuild=g_pEventLoopManager->doLaterLock([this] {
+    m_tilesRebuild=IdleTask::later([this] {
         m_tilesRebuild.reset();
         if ((m_state.phase!=Phase::Active && m_state.phase!=Phase::Opening) || sessionLocked()) return;
         clearStripWindowDragState();
@@ -10057,7 +10059,7 @@ void OverviewController::updateGroupDragSettlement() {
     const auto frontWindow = m_groupDragSession->frontMember < m_groupDragSession->members.size() ?
         m_groupDragSession->members[m_groupDragSession->frontMember].lock() : PHLWINDOW{};
     const auto generation = inputGeneration;
-    g_pEventLoopManager->doLater([this, generation, commitDrop, targetWorkspace, targetTile, frontWindow] {
+    m_idleTasks.post([this, generation, commitDrop, targetWorkspace, targetTile, frontWindow] {
         if (g_controller != this || sessionLocked() || generation != inputGeneration || !m_groupDragSession)
             return;
 
@@ -11190,7 +11192,7 @@ void OverviewController::scheduleVisibleStateRebuild() {
 
     m_visibleStateRebuildScheduled = true;
     const auto generation = ++m_visibleStateRebuildGeneration;
-    g_pEventLoopManager->doLater([this, generation] {
+    m_idleTasks.post([this, generation] {
         if (g_controller != this || sessionLocked() || generation != m_visibleStateRebuildGeneration)
             return;
 
@@ -11235,7 +11237,7 @@ void OverviewController::scheduleWorkspaceChangeHandling(const PHLWORKSPACE& wor
 
     m_workspaceChangeHandlingScheduled = true;
     const auto generation = ++m_workspaceChangeHandlingGeneration;
-    g_pEventLoopManager->doLater([this, generation] {
+    m_idleTasks.post([this, generation] {
         if (g_controller != this || sessionLocked() || generation != m_workspaceChangeHandlingGeneration)
             return;
 
@@ -11286,7 +11288,7 @@ void OverviewController::schedulePendingWindowGeometryRetry(const PHLWINDOW& win
 
     m_pendingWindowGeometryRetryScheduled = true;
     const auto generation = ++m_pendingWindowGeometryRetryGeneration;
-    g_pEventLoopManager->doLater([this, generation] {
+    m_idleTasks.post([this, generation] {
         if (g_controller != this || sessionLocked() || generation != m_pendingWindowGeometryRetryGeneration)
             return;
 
@@ -12243,7 +12245,7 @@ void OverviewController::scheduleDeactivate() {
 
     m_deactivateScheduled = true;
     const auto generation = inputGeneration;
-    g_pEventLoopManager->doLater([this, generation] {
+    m_idleTasks.post([this, generation] {
         if (g_controller != this || sessionLocked() || generation != inputGeneration)
             return;
 
@@ -14591,7 +14593,7 @@ void OverviewController::scheduleWorkspaceStripSnapshotRefresh() {
 
     m_stripSnapshotRefreshScheduled = true;
     const auto generation = inputGeneration;
-    g_pEventLoopManager->doLater([this, generation] {
+    m_idleTasks.post([this, generation] {
         if (g_controller != this || sessionLocked() || generation != inputGeneration)
             return;
 
