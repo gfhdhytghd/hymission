@@ -102,15 +102,32 @@ bool scrollingWorkspace(const PHLWORKSPACE& workspace) {
         Layout::Supplementary::algoMatcher()->getNameForTiledAlgo(&typeid(*algorithm->tiledAlgo())) == "scrolling";
 }
 
+Layout::Tiled::CScrollingAlgorithm* scrollingAlgorithm(const PHLWORKSPACE& workspace) {
+    return scrollingWorkspace(workspace) ? dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(workspace->space()->algorithm()->tiledAlgo().get()) : nullptr;
+}
+
 // Several scrolling columns: Stage moves the tape instead of narrowing it.
+// A covering fullscreen window makes the workspace non-scrolling for Stage.
 bool pushesScrollingTape(const PHLWORKSPACE& workspace) {
-    const bool scrolling = scrollingWorkspace(workspace);
-    auto* algorithm = scrolling ? dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(workspace->space()->algorithm()->tiledAlgo().get()) : nullptr;
+    auto* algorithm = scrollingAlgorithm(workspace);
     const std::size_t columns = algorithm && algorithm->m_scrollingData ? algorithm->m_scrollingData->columns.size() : 0;
-    // Any fullscreen or maximized window, covering or not: scrolling maximize
-    // does not count as covering, but that window still fills the desktop.
-    const bool fullscreen = workspace && Fullscreen::controller()->getFullscreenModes(workspace, std::nullopt).internal != Fullscreen::FSMODE_NONE;
-    return stage::pushScrollingTape(scrolling, columns, fullscreen);
+    return stage::pushScrollingTape(algorithm != nullptr, columns, false);
+}
+
+// Columns holding a maximized window (scrolling maximize gives them width 1).
+std::vector<SP<Layout::Tiled::SColumnData>> maximizedColumns(const PHLWORKSPACE& workspace) {
+    std::vector<SP<Layout::Tiled::SColumnData>> result;
+    auto* algorithm = scrollingAlgorithm(workspace);
+    if (!algorithm || !algorithm->m_scrollingData)
+        return result;
+    for (const auto& column : algorithm->m_scrollingData->columns)
+        for (const auto& data : column->targetDatas)
+            if (const auto target = data->target.lock(); target && target->window() &&
+                Fullscreen::controller()->getFullscreenModes(target->window()).internal == Fullscreen::FSMODE_MAXIMIZED) {
+                result.push_back(column);
+                break;
+            }
+    return result;
 }
 
 bool scrollingTiled(const PHLWINDOW& window) {
@@ -301,6 +318,7 @@ struct StageController::Impl {
         std::optional<std::size_t> reorderTo;
         bool covered = false;
         bool pushScrollingTape = false; // active workspace's tape moves instead of narrowing
+        bool fitMaximized = false;      // ...and holds a maximized column fitted to the desktop
         bool suspended = false;
         bool revealFromBottom = false;
         double shown = 1;
@@ -610,6 +628,10 @@ struct StageController::Impl {
     void drawSidebarGhost(const PHLMONITOR& monitor);
     void returnSidebarCard(const PHLWORKSPACE& workspace, const PHLMONITOR& monitor, tiles::Id tile, const std::vector<WindowSlot>& ghosts, const std::vector<PHLWINDOW>& members);
     bool dragReorder() const { return setting("stage_drag_reorder", 1) != 0; }
+    // Maximized columns narrowed to fit a pushed tape; their native width is 1.
+    std::vector<WP<Layout::Tiled::SColumnData>> fittedColumns;
+    void fitMaximizedColumns(const PHLWORKSPACE& workspace, double fraction);
+    void restoreFittedColumns();
     double previewDuration() const;
     double previewOffset(const Card& card) const;
     void updateReorderPreview();
@@ -1665,11 +1687,15 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
     // keeps its width and is pushed aside instead, so no window is resized;
     // floating placement still uses the visible part.
     const bool push = !clustered(*screen) && pushesScrollingTape(workspace);
+    const double nativeWidth = space->m_workArea.w;
     for (auto* box : {&space->m_workArea, &space->m_floatingWorkArea}) {
         const auto area = clustered(*screen) ? stage::scaleDesktopRect(rect(*box),rect(baseArea(monitor)),desktopReservation(*screen),visibility) :
             stage::reservedWorkArea(rect(*box), desktopReservation(*screen), visibility, screen->right, push && box == &space->m_workArea);
         *box = hymission::box(area);
     }
+    // A maximized window in a pushed tape still fits the visible desktop; only
+    // its column narrows. The other columns keep their native widths.
+    fitMaximizedColumns(workspace, push ? stage::pushedColumnFraction(1, nativeWidth, desktopReservation(*screen), visibility) : 1);
     if (!syncing && !sameBox(screen->base, screenBase(monitor,screen->tile)))
         request();
 }
@@ -1751,6 +1777,7 @@ void StageController::Impl::sync() {
     const bool wasEnabled = enabled;
     enabled = wanted && installHooks();
     if (!enabled) {
+        restoreFittedColumns();
         canvasRelease.reset();
         canvasScrolls.clear();
         if (!TilesController::get() || std::ranges::none_of(State::monitorState()->monitors(), [](const auto& mon) { return TilesController::get()->enabled(mon); }))
@@ -1967,10 +1994,13 @@ void StageController::Impl::sync() {
             screen->paneTransition = false;
             screen->departingCards.clear();
         }
-        // Opening/closing windows can move the active tape across one column.
+        // Opening/closing windows can move the active tape across one column,
+        // and (un)maximizing changes which column must fit the desktop.
         const bool push = !clustered(*screen) && pushesScrollingTape(activeWorkspace);
-        const bool changedPush = screen->pushScrollingTape != push;
+        const bool fit = push && !maximizedColumns(activeWorkspace).empty();
+        const bool changedPush = screen->pushScrollingTape != push || screen->fitMaximized != fit;
         screen->pushScrollingTape = push;
+        screen->fitMaximized = fit;
         if (changedGeometry || changedPolicy || changedCover || changedPush || reconfigure)
             relayout.push_back(monitor);
         for (auto& card : screen->cards) {
@@ -3284,6 +3314,32 @@ void StageController::Impl::drawSidebarGhost(const PHLMONITOR& monitor) {
         drawPreview(members[slot.index],monitor,box(slot.target),clip,8,stage::edgeViewport(rect(monitor->logicalBox()),0,0));
 }
 
+void StageController::Impl::fitMaximizedColumns(const PHLWORKSPACE& workspace, double fraction) {
+    for (const auto& column : maximizedColumns(workspace)) {
+        if (std::abs(column->getColumnWidth() - fraction) > 1e-6)
+            column->setColumnWidth(static_cast<float>(fraction));
+        const auto known = std::ranges::find_if(fittedColumns, [&](const auto& ref) { return ref.lock() == column; });
+        if (fraction != 1 && known == fittedColumns.end())
+            fittedColumns.emplace_back(column);
+        else if (fraction == 1 && known != fittedColumns.end())
+            fittedColumns.erase(known);
+    }
+    std::erase_if(fittedColumns, [](const auto& ref) { return !ref.lock(); });
+}
+
+// Stage off or unloading: give maximized columns back their native width.
+// Columns that left maximize already had their width restored natively.
+void StageController::Impl::restoreFittedColumns() {
+    for (const auto& ref : std::exchange(fittedColumns, {}))
+        if (const auto column = ref.lock())
+            for (const auto& data : column->targetDatas)
+                if (const auto target = data->target.lock(); target && target->window() &&
+                    Fullscreen::controller()->getFullscreenModes(target->window()).internal == Fullscreen::FSMODE_MAXIMIZED) {
+                    column->setColumnWidth(1.F);
+                    break;
+                }
+}
+
 double StageController::Impl::previewDuration() const {
     if (!numberSetting("animations:enabled", 1))
         return 0;
@@ -4220,6 +4276,7 @@ bool StageController::Impl::updatePreviews(Screen& screen, Card& card, const Vec
 StageController::Impl::~Impl() {
     shuttingDown = true;
     enabled = false;
+    restoreFittedColumns();
     clearSwipe();
     updatePreviewLiveness();
     deferred.reset();

@@ -814,10 +814,11 @@ hl.plugin.hymission.gesture({
 Swipe right to reveal Stage and continuously reserve space on the desktop; swipe
 left to hide it. In scrolling layouts with several columns, Stage pushes the
 whole tape away from the sidebar and resizes no window; the part that moves past
-the output edge is clipped. A workspace with a single column (stacked windows in
-one column count as one), or with a fullscreen or maximized window, instead
-reduces its sizing viewport to the remaining desktop width, so that window is
-resized to make room. Closing restores the original viewport and positions. With
+the output edge is clipped. A maximized window in such a tape is the one window
+that narrows, so it still fits the remaining desktop; the other columns keep
+their widths. A workspace with a single column (stacked windows in one column
+count as one), or covered by a fullscreen window, instead reduces its sizing
+viewport to the remaining desktop width, so that window is resized to make room. Closing restores the original viewport and positions. With
 multiple tiles, each receives its share of the remaining desktop width, retaining
 full height.
 Reversing the swipe reverses progress. Release past halfway to

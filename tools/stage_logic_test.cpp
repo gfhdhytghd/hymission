@@ -142,7 +142,14 @@ int main() {
     // Which scrolling workspaces are resized by Stage, and which only move.
     ok &= expect(!pushScrollingTape(true, 0, false) && !pushScrollingTape(true, 1, false), "an empty or single-column scrolling workspace is resized to the visible desktop");
     ok &= expect(pushScrollingTape(true, 2, false) && pushScrollingTape(true, 7, false), "a scrolling workspace spread over several columns is only pushed aside");
-    ok &= expect(!pushScrollingTape(true, 3, true), "a fullscreen or maximized scrolling workspace is resized, whatever its column count");
+    ok &= expect(!pushScrollingTape(true, 3, true), "a workspace covered by a fullscreen window is resized, whatever its column count");
+    // Inside a pushed tape only a maximized column narrows to fit the desktop.
+    ok &= expect(near(pushedColumnFraction(1, 1228, 276, 1) * 1228, 952), "a maximized column in a pushed tape fits the visible desktop");
+    ok &= expect(near(pushedColumnFraction(1, 1228, 276, 0), 1) && near(pushedColumnFraction(1, 1228, 276, 0.5) * 1228, 1228 - 138),
+                 "the maximized column follows the revealed reservation and is native when Stage is closed");
+    ok &= expect(near(pushedColumnFraction(0.5, 1228, 0, 1), 0.5) && near(pushedColumnFraction(1, 0, 276, 1), 1),
+                 "no reservation or a degenerate area keeps the native fraction");
+    ok &= expect(pushedColumnFraction(1, 300, 400, 1) * 300 >= 1 - 1e-9, "a reservation wider than the area never collapses the column");
     ok &= expect(!pushScrollingTape(false, 3, false), "non-scrolling layouts keep the narrowed work area");
     for (const double progress : {0.0, 0.25, 0.5, 1.0, 0.5, 0.0}) {
         const hymission::Rect native{-1440, 30, 1440, 842};
