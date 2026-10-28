@@ -110,8 +110,10 @@ Layout::Tiled::CScrollingAlgorithm* scrollingAlgorithm(const PHLWORKSPACE& works
 // A covering fullscreen window makes the workspace non-scrolling for Stage.
 bool pushesScrollingTape(const PHLWORKSPACE& workspace) {
     auto* algorithm = scrollingAlgorithm(workspace);
-    const std::size_t columns = algorithm && algorithm->m_scrollingData ? algorithm->m_scrollingData->columns.size() : 0;
-    return stage::pushScrollingTape(algorithm != nullptr, columns, false);
+    const auto* data = algorithm ? algorithm->m_scrollingData.get() : nullptr;
+    const std::size_t columns = data ? data->columns.size() : 0;
+    const bool horizontal = data && data->controller && data->controller->isPrimaryHorizontal();
+    return stage::pushScrollingTape(algorithm != nullptr, horizontal, columns, false);
 }
 
 // Columns holding a maximized window (scrolling maximize gives them width 1).
@@ -1675,10 +1677,14 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
         return;
     const auto monitor = workspace->m_monitor.lock();
     auto* screen = screenForWorkspace(workspace);
-    if (!screen || (!screen->geometry.enabled() && !clustered(*screen)))
+    if (!screen || (!screen->geometry.enabled() && !clustered(*screen)) ||
+        (maximizeCover && Fullscreen::controller()->getFullscreenModes(workspace).internal == Fullscreen::FSMODE_MAXIMIZED)) {
+        // Nothing is reserved now, e.g. the last sidebar card went away. The
+        // native recheck does not touch column widths, so a maximized column
+        // fitted earlier must get its native width back here.
+        fitMaximizedColumns(workspace, stage::maximizedColumnFraction(false, false, 0, 0, 0));
         return;
-    if (maximizeCover && Fullscreen::controller()->getFullscreenModes(workspace).internal == Fullscreen::FSMODE_MAXIMIZED)
-        return;
+    }
     // Each invocation starts from the original recheckWorkArea output. Retain
     // workspace gaps, including float gaps, and never compound our reservation.
     // Native layouts receive the remaining desktop width; scrolling column
@@ -1695,7 +1701,7 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
     }
     // A maximized window in a pushed tape still fits the visible desktop; only
     // its column narrows. The other columns keep their native widths.
-    fitMaximizedColumns(workspace, push ? stage::pushedColumnFraction(1, nativeWidth, desktopReservation(*screen), visibility) : 1);
+    fitMaximizedColumns(workspace, stage::maximizedColumnFraction(true, push, nativeWidth, desktopReservation(*screen), visibility));
     if (!syncing && !sameBox(screen->base, screenBase(monitor,screen->tile)))
         request();
 }

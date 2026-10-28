@@ -14,12 +14,15 @@ inline double visibilityGestureProgress(double start, double displacement, doubl
     return std::clamp(start + displacement / std::max(1.0, distance), 0.0, 1.0);
 }
 
-// A scrolling workspace spread over several columns keeps its sizing width:
-// Stage pushes the whole tape away from the sidebar and nothing is resized.
-// One column, or a workspace covered by a fullscreen window, follows the
-// visible desktop width instead, so that window is resized to make room.
-constexpr bool pushScrollingTape(bool scrolling, std::size_t columns, bool fullscreen) {
-    return scrolling && !fullscreen && columns > 1;
+// A horizontal scrolling workspace spread over several columns keeps its
+// sizing width: Stage pushes the whole tape away from the sidebar and nothing
+// is resized. One column, or a workspace covered by a fullscreen window,
+// follows the visible desktop width instead, so that window is resized to make
+// room. A vertical tape (up/down) lays its columns along the height, so every
+// column spans the width and the narrowed viewport fits all of them; column
+// fractions there size heights and are never fitted to the sidebar.
+constexpr bool pushScrollingTape(bool scrolling, bool horizontal, std::size_t columns, bool fullscreen) {
+    return scrolling && horizontal && !fullscreen && columns > 1;
 }
 
 // In a pushed tape, a maximized column (native width fraction 1) is the one
@@ -31,6 +34,13 @@ inline double pushedColumnFraction(double native, double areaWidth, double reser
         return native;
     const double amount = std::min(std::max(0.0, reservation * std::clamp(progress, 0.0, 1.0)), areaWidth - 1);
     return native * (areaWidth - amount) / areaWidth;
+}
+
+// The width fraction of a maximized column under Stage: fitted only while a
+// pushed tape reserves sidebar space; native (1) as soon as nothing is
+// reserved, e.g. after the last sidebar card went away, or the tape is not pushed.
+inline double maximizedColumnFraction(bool reserving, bool push, double areaWidth, double reservation, double progress) {
+    return reserving && push ? pushedColumnFraction(1, areaWidth, reservation, progress) : 1;
 }
 
 // Reserve the sidebar in layout coordinates. Without `push` the area narrows

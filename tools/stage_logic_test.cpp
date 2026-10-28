@@ -140,9 +140,12 @@ int main() {
         ok &= expect(near(right.x, native.x) && near(right.width, native.width - 240 * progress), "right sidebar also narrows the scrolling sizing viewport");
     }
     // Which scrolling workspaces are resized by Stage, and which only move.
-    ok &= expect(!pushScrollingTape(true, 0, false) && !pushScrollingTape(true, 1, false), "an empty or single-column scrolling workspace is resized to the visible desktop");
-    ok &= expect(pushScrollingTape(true, 2, false) && pushScrollingTape(true, 7, false), "a scrolling workspace spread over several columns is only pushed aside");
-    ok &= expect(!pushScrollingTape(true, 3, true), "a workspace covered by a fullscreen window is resized, whatever its column count");
+    ok &= expect(!pushScrollingTape(true, true, 0, false) && !pushScrollingTape(true, true, 1, false), "an empty or single-column scrolling workspace is resized to the visible desktop");
+    ok &= expect(pushScrollingTape(true, true, 2, false) && pushScrollingTape(true, true, 7, false), "a horizontal scrolling workspace spread over several columns is only pushed aside");
+    ok &= expect(!pushScrollingTape(true, true, 3, true), "a workspace covered by a fullscreen window is resized, whatever its column count");
+    ok &= expect(!pushScrollingTape(false, true, 3, false), "non-scrolling layouts keep the narrowed work area");
+    ok &= expect(!pushScrollingTape(true, false, 3, false) && !pushScrollingTape(true, false, 1, false),
+                 "a vertical tape is narrowed, never pushed, so no horizontal fraction reaches its column heights");
     // Inside a pushed tape only a maximized column narrows to fit the desktop.
     ok &= expect(near(pushedColumnFraction(1, 1228, 276, 1) * 1228, 952), "a maximized column in a pushed tape fits the visible desktop");
     ok &= expect(near(pushedColumnFraction(1, 1228, 276, 0), 1) && near(pushedColumnFraction(1, 1228, 276, 0.5) * 1228, 1228 - 138),
@@ -150,7 +153,10 @@ int main() {
     ok &= expect(near(pushedColumnFraction(0.5, 1228, 0, 1), 0.5) && near(pushedColumnFraction(1, 0, 276, 1), 1),
                  "no reservation or a degenerate area keeps the native fraction");
     ok &= expect(pushedColumnFraction(1, 300, 400, 1) * 300 >= 1 - 1e-9, "a reservation wider than the area never collapses the column");
-    ok &= expect(!pushScrollingTape(false, 3, false), "non-scrolling layouts keep the narrowed work area");
+    ok &= expect(near(maximizedColumnFraction(true, true, 1240, 276, 1) * 1240, 964), "a reserving pushed tape fits its maximized column");
+    ok &= expect(near(maximizedColumnFraction(false, true, 1240, 276, 1), 1) && near(maximizedColumnFraction(false, true, 1240, 276, 0.5), 1),
+                 "once nothing is reserved (no sidebar cards left) the maximized column is native, whatever the Stage progress");
+    ok &= expect(near(maximizedColumnFraction(true, false, 1240, 276, 1), 1), "a tape that is not pushed never fits a maximized column");
     for (const double progress : {0.0, 0.25, 0.5, 1.0, 0.5, 0.0}) {
         const hymission::Rect native{-1440, 30, 1440, 842};
         for (const bool sidebarRight : {false, true}) {

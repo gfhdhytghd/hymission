@@ -435,7 +435,7 @@ stage_card_max_width 的宽度限制，超过限制时沿用滚动。在同一�
 使用同一块 tile viewport。桌面部分的
 所有 tile 的布局区域共用水平缩放和平移，输入命中、拖放预览、分割线命中和焦点 warp 使用同一变换
 的逆映射。tile 的持久 allocation/topology 不变，Stage 状态另暴露 desktop_geometry。
-单 tile 与 capability 关闭沿用 Stage 侧栏几何和动画曲线；多列 scrolling 工作区保持 sizing viewport 宽度，Stage 把整条 tape 向侧栏外侧平移，不改任何窗口尺寸；其中最大化窗口所在列单独按侧栏预留缩小列宽比例以适配剩余桌面，其余列宽不变，关闭 Stage 或卸载时恢复为 1；只有一列（同列堆叠算一列）或存在覆盖式全屏窗口时，才随侧栏预留缩窄 sizing viewport，原生列宽比例保持不变，相机 offset 按 viewport 尺寸比同步换算。关闭时恢复原 work area、位置和列几何。dwindle 等布局延续既有 work area 预留策略。FB14 的"所有列数都缩窄"已被此策略取代，详见 `workspace-tiles-feedback-round14.md`。
+单 tile 与 capability 关闭沿用 Stage 侧栏几何和动画曲线；横向多列 scrolling 工作区保持 sizing viewport 宽度，Stage 把整条 tape 向侧栏外侧平移，不改任何窗口尺寸；其中最大化窗口所在列单独按侧栏预留缩小列宽比例以适配剩余桌面，其余列宽不变，关闭 Stage 或卸载时恢复为 1；只有一列（同列堆叠算一列）、存在覆盖式全屏窗口或纵向 scrolling 时，才随侧栏预留缩窄 sizing viewport；纵向 tape 的列宽比例表示高度，不参与最大化拟合，原生列宽比例保持不变，相机 offset 按 viewport 尺寸比同步换算。关闭时恢复原 work area、位置和列几何。dwindle 等布局延续既有 work area 预留策略。FB14 的"所有列数都缩窄"已被此策略取代，详见 `workspace-tiles-feedback-round14.md`。
 
 
 ## 第三轮真机反馈后的输入与退出规则
