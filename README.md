@@ -38,18 +38,23 @@ https://github.com/user-attachments/assets/7d711730-72f6-4165-94fa-af38bae37385
 
 
 
-## Development branch compatibility
+## Hyprland compatibility
 
-`hyprland-master` follows Hyprland's current development branch, now named
-`main` upstream. Stable releases remain on `master`; compatibility fixes for
-unreleased Hyprland APIs belong on `hyprland-master`.
+`master` follows the latest release of the project's Hyprland fork: Hyprland
+**v0.57.0** = `gfhdhytghd/Hyprland` [`f6725e43`](https://github.com/gfhdhytghd/Hyprland/releases/tag/v0.57.0),
+with the fork's aquamarine `4abfcab`. `hyprland-master` is on the same commit and
+tracks the fork's `main`.
 
-The development build is checked against upstream `8010b4e5c66f`
-(2026-10-17). See the [compatibility record](docs/compatibility/hyprland-master.md)
-and [workspace tiles validation](docs/workspace-tiles-validation.md) for the
-tested revisions and runtime evidence limits.
+Upstream `hyprwm/Hyprland` v0.57.0 is a different commit (`0aa6745f`) with a
+different ABI: build against the fork's headers. When the Hyprland headers a
+build used do not match the running compositor, the plugin refuses to load and
+shows a notification; rebuild it for that compositor (`hyprpm` builds from the
+running compositor's own headers).
 
-The branch includes a reproducible Nix build. To check the latest upstream HEAD:
+See the [compatibility record](docs/compatibility/hyprland-master.md) for the
+tested revisions, the hook ABI checks and runtime evidence limits.
+
+The flake builds against the fork reproducibly. To check its latest `main`:
 
 ```sh
 nix flake update hyprland
@@ -57,11 +62,12 @@ nix build -L .#hymission
 ```
 
 Commit the updated `flake.lock` with any required API fixes after the build and
-offline tests pass. The compatibility workflow checks fresh upstream HEAD daily
-and on branch pushes/PRs, and records resolved input revisions. GitHub schedules
-only activate when the workflow also exists on the repository's default branch.
-A successful build does not establish live compositor behavior; runtime
-acceptance is separate and plugin reloads must be performed from a safe context.
+offline tests pass. The compatibility workflow checks the fork's fresh `main`
+daily and on branch pushes/PRs, and records resolved input revisions. GitHub
+schedules only activate when the workflow also exists on the repository's
+default branch. A successful build does not establish live compositor behavior;
+runtime acceptance is separate and plugin reloads must be performed from a safe
+context.
 
 ## Installation
 
@@ -116,7 +122,7 @@ For local development, `hymission` uses CMake and outputs `build-cmake/libhymiss
 
 Requirements:
 
-- Hyprland development headers for the exact Hyprland build you are running
+- Hyprland development headers for the exact Hyprland build you are running (the plugin refuses to load otherwise)
 - `cmake`
 - `pkg-config`
 - a C++23-capable compiler
