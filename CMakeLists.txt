@@ -83,10 +83,20 @@ if(BUILD_TESTING)
   target_include_directories(hymission-hook-broker-test PRIVATE src)
   add_test(NAME hymission-hook-broker-test COMMAND hymission-hook-broker-test)
   # Hook thunk types against the native members in the configured Hyprland headers.
+  # The plugin's real compile flags are written at generate time, so the check
+  # works with every CMake generator.
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_Interpreter_FOUND)
+    file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/hook-abi-flags.rsp" CONTENT
+"-D$<JOIN:$<TARGET_PROPERTY:hymission,COMPILE_DEFINITIONS>,\n-D>
+-I$<JOIN:$<TARGET_PROPERTY:hymission,INCLUDE_DIRECTORIES>,\n-I>
+$<JOIN:$<TARGET_PROPERTY:hymission,COMPILE_OPTIONS>,\n>
+${CMAKE_CXX23_EXTENSION_COMPILE_OPTION}
+${CMAKE_CXX_FLAGS}
+")
     add_test(NAME hymission-hook-abi-test
-             COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_dev_hooks.py --build-dir ${CMAKE_BINARY_DIR} --types-only)
+             COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_dev_hooks.py --build-dir ${CMAKE_BINARY_DIR}
+                     --compiler ${CMAKE_CXX_COMPILER} --flags-file ${CMAKE_BINARY_DIR}/hook-abi-flags.rsp --types-only)
   endif()
   add_executable(hymission-tiles-logic-test tools/tiles_logic_test.cpp src/tiles_logic.cpp)
   target_include_directories(hymission-tiles-logic-test PRIVATE src)
@@ -112,6 +122,28 @@ if(BUILD_TESTING)
   add_test(NAME hymission-private-debug-log-test COMMAND hymission-private-debug-log-test)
   set_tests_properties(hymission-private-debug-log-test PROPERTIES TIMEOUT 10)
   find_program(HYPRLAND_TEST_EXECUTABLE Hyprland)
+  # The native probes preload against the compositor binary; one built from a
+  # different commit than the headers (e.g. a system Hyprland found on PATH)
+  # fails with unrelated missing symbols. Match its embedded commit hash to the
+  # headers' version.h without executing it.
+  set(HYPRLAND_TEST_EXECUTABLE_MISMATCH "")
+  if(HYPRLAND_TEST_EXECUTABLE AND EXISTS "${HYPRLAND_INCLUDE_ROOT}/hyprland/src/version.h")
+    file(STRINGS "${HYPRLAND_INCLUDE_ROOT}/hyprland/src/version.h" HYPRLAND_HEADER_HASH_LINE REGEX "^#define GIT_COMMIT_HASH")
+    string(REGEX MATCH "[0-9a-f]+\"" HYPRLAND_HEADER_HASH "${HYPRLAND_HEADER_HASH_LINE}")
+    string(REPLACE "\"" "" HYPRLAND_HEADER_HASH "${HYPRLAND_HEADER_HASH}")
+    if(HYPRLAND_HEADER_HASH)
+      file(STRINGS "${HYPRLAND_TEST_EXECUTABLE}" HYPRLAND_TEST_EXECUTABLE_HASH REGEX "${HYPRLAND_HEADER_HASH}" LIMIT_COUNT 1)
+      if(NOT HYPRLAND_TEST_EXECUTABLE_HASH)
+        set(HYPRLAND_TEST_EXECUTABLE_MISMATCH "${HYPRLAND_TEST_EXECUTABLE} is not Hyprland ${HYPRLAND_HEADER_HASH} (the header commit); set HYPRLAND_TEST_EXECUTABLE to a matching binary")
+        message(WARNING "native preload probes skipped: ${HYPRLAND_TEST_EXECUTABLE_MISMATCH}")
+        add_test(NAME hymission-native-probes
+                 COMMAND sh -c "echo 'SKIP: ${HYPRLAND_TEST_EXECUTABLE_MISMATCH}'; exit 77")
+        set_tests_properties(hymission-native-probes PROPERTIES SKIP_RETURN_CODE 77)
+        unset(HYPRLAND_TEST_EXECUTABLE)
+        unset(HYPRLAND_TEST_EXECUTABLE CACHE)
+      endif()
+    endif()
+  endif()
   if(HYPRLAND_TEST_EXECUTABLE)
     # Separate env assignments from executable paths (Nix may include "date=").
     add_library(hymission-workspace-key-test MODULE tools/workspace_key_test.cpp)

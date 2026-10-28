@@ -68,6 +68,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-dir', type=Path, required=True)
     parser.add_argument('--hyprland', type=Path)
+    parser.add_argument('--compiler', help='C++ compiler (default: CMAKE_CXX_COMPILER from CMakeCache.txt)')
+    parser.add_argument('--flags-file', type=Path, help='plugin compile flags written by CMake (default: Makefile flags.make)')
     parser.add_argument('--types-only', action='store_true', help='check hook types against the configured headers; skip the binary symbol audit')
     args = parser.parse_args()
     if not args.types_only and not args.hyprland:
@@ -134,10 +136,13 @@ struct Member<R (*)(This, Args...), Class> {
     generated += 'using GradientFn = CAnimatedDecorationGradient::SRenderState (CAnimatedDecorationGradient::*)() const;\nstatic_assert(std::is_same_v<GradientFn, decltype(&CAnimatedDecorationGradient::renderState)>);\n'
     source = build / 'hook-abi-check.cpp'
     source.write_text(generated)
-    flags_file = build / 'CMakeFiles/hymission.dir/flags.make'
-    flags = dict(re.findall(r'^(CXX_\w+) = (.*)$', flags_file.read_text(), re.M))
-    compiler = re.search(r'^CMAKE_CXX_COMPILER:[A-Z]+=(.*)$', (build / 'CMakeCache.txt').read_text(), re.M)[1]
-    cmd = [compiler] + shlex.split(' '.join(flags[key] for key in ['CXX_DEFINES', 'CXX_INCLUDES', 'CXX_FLAGS']))
+    compiler = args.compiler or re.search(r'^CMAKE_CXX_COMPILER:[A-Z]+=(.*)$', (build / 'CMakeCache.txt').read_text(), re.M)[1]
+    if args.flags_file:
+        cmd = [compiler] + shlex.split(args.flags_file.read_text())
+    else:
+        flags_file = build / 'CMakeFiles/hymission.dir/flags.make'
+        flags = dict(re.findall(r'^(CXX_\w+) = (.*)$', flags_file.read_text(), re.M))
+        cmd = [compiler] + shlex.split(' '.join(flags[key] for key in ['CXX_DEFINES', 'CXX_INCLUDES', 'CXX_FLAGS']))
     cmd += ['-I', str(ROOT / 'src'), '-fsyntax-only', str(source)]
     subprocess.run(cmd, check=True)
     print(f'PASS: {count + 10} upstream hook/call signature checks (production also asserts thunk types)')
