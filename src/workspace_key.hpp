@@ -5,6 +5,7 @@
 #include <hyprland/src/state/workspace/Resolver.hpp>
 #include <hyprland/src/desktop/history/WorkspaceHistoryTracker.hpp>
 #include <hyprland/src/workspace/RegularWorkspace.hpp>
+#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -84,13 +85,64 @@ inline PHLWORKSPACE workspaceForKey(WorkspaceKey key) {
     return target.valid() ? State::workspaceState()->find(target) : nullptr;
 }
 
+// Hyprland 0.57 emits workspace.createdLate (Lua's workspace.created) for a new
+// workspace only when its creator calls ready() after moving or focusing it.
+// Plugin transactions create, move and focus synchronously, so a workspace the
+// plugin creates becomes ready on the next event-loop turn. ready() ignores
+// repeated calls, including Hyprland's own.
+// The queued callbacks are plugin code: the plugin owns them through these
+// locks and settles them in PLUGIN_EXIT (finishWorkspaceReadiness) before
+// it can be unloaded.
+struct PendingWorkspaceReady {
+    uint64_t                  id = 0;
+    PHLWORKSPACEREF           workspace;
+    UP<SEventLoopDoLaterLock> queued;
+};
+inline std::vector<PendingWorkspaceReady> pendingWorkspaceReady;
+
+inline void readyWorkspaceLater(const PHLWORKSPACE& workspace) {
+    if (!workspace)
+        return;
+    if (!g_pEventLoopManager) {
+        workspace->ready();
+        return;
+    }
+    static uint64_t nextId = 0;
+    const uint64_t id = ++nextId;
+    const PHLWORKSPACEREF ref = workspace;
+    auto queued = g_pEventLoopManager->doLaterLock([id, ref] {
+        // The idle queue has already released this callback; dropping its
+        // lock only forgets the entry.
+        std::erase_if(pendingWorkspaceReady, [id](const PendingWorkspaceReady& pending) { return pending.id == id; });
+        if (const auto created = ref.lock())
+            created->ready();
+    });
+    pendingWorkspaceReady.push_back({id, ref, std::move(queued)});
+}
+
+// Unload: make every workspace this plugin created ready now, then cancel the
+// queued callbacks so none outlives the plugin's code.
+inline void finishWorkspaceReadiness() {
+    auto pending = std::move(pendingWorkspaceReady);
+    pendingWorkspaceReady.clear();
+    for (const auto& entry : pending)
+        if (const auto created = entry.workspace.lock())
+            created->ready();
+}
+
+inline PHLWORKSPACE createWorkspace(const State::Workspace::STarget& target, const PHLMONITOR& monitor, bool isEmpty = true) {
+    auto workspace = State::workspaceState()->create(target, monitor, isEmpty);
+    readyWorkspaceLater(workspace);
+    return workspace;
+}
+
 inline PHLWORKSPACE createWorkspaceForKey(WorkspaceKey key, MONITORID monitorID, const std::string& displayName = {}, bool isEmpty = true) {
     auto target = workspaceTarget(key);
     if (!target.valid())
         return nullptr;
     if (!displayName.empty())
         target.displayName = displayName;
-    return State::workspaceState()->create(target, State::monitorState()->query().id(monitorID).run(), isEmpty);
+    return createWorkspace(target, State::monitorState()->query().id(monitorID).run(), isEmpty);
 }
 
 inline WorkspaceKeyName resolveWorkspaceKey(const std::string& selector) {

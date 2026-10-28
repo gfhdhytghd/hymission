@@ -1461,7 +1461,7 @@ void StageController::Impl::initialize() {
     listeners.emplace_back(events.monitor.preRemoved.listen([this](PHLMONITOR) { StageController::cancelTileTransfer(); }));
     listeners.emplace_back(events.monitor.removed.listen([this](PHLMONITOR) { request(); }));
     listeners.emplace_back(events.workspace.active.listen([this](PHLWORKSPACE) { request(); }));
-    listeners.emplace_back(events.workspace.created.listen([this](PHLWORKSPACEREF) { request(); }));
+    listeners.emplace_back(events.workspace.createdEarly.listen([this](PHLWORKSPACEREF) { request(); }));
     listeners.emplace_back(events.workspace.removed.listen([this](PHLWORKSPACEREF) { request(); }));
     listeners.emplace_back(events.workspace.moveToMonitor.listen([this](PHLWORKSPACE, PHLMONITOR) { request(); }));
     listeners.emplace_back(events.workspace.specialActive.listen([this](PHLWORKSPACE, PHLMONITOR) { request(); }));

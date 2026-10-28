@@ -134,7 +134,7 @@ class OverviewController {
     void                calculateUVForSurfaceHook(const PHLWINDOW& window, SP<CWLSurfaceResource> surface, const PHLMONITOR& monitor, bool main, const Vector2D& projSize,
                                                   const Vector2D& projSizeUnscaled, bool fixMisalignedFSV1);
     void                rendererDrawElementHook(void* rendererThisptr, WP<IPassElement> element, const CRegion& damage);
-    void                renderLayerHook(void* rendererThisptr, PHLLS layer, PHLMONITOR monitor, const Time::steady_tp& now, bool popups, bool lockscreen);
+    void                renderLayerHook(void* rendererThisptr, PHLLS layer, PHLMONITOR monitor, const Time::steady_tp& now, bool popups, bool lockscreen, bool workspaceScene);
     std::optional<Config::Actions::ActionResult> queueNativeFullscreenAction(std::function<Config::Actions::ActionResult()> action);
     [[nodiscard]] SDispatchResult fullscreenDispatcherHook(std::string args);
     [[nodiscard]] SDispatchResult fullscreenStateDispatcherHook(std::string args);
@@ -531,7 +531,7 @@ class OverviewController {
     using ShouldRenderWindowFn = bool (*)(void*, PHLWINDOW, PHLMONITOR);
     using EffectiveAlphaFn = Render::SWindowRenderPresentation (*)(const Desktop::View::CWindowPresentation*, Render::eSceneMode);
     using RendererDrawElementFn = void (*)(void*, Render::CRenderContext&, WP<IPassElement>, const CRegion&);
-    using RenderLayerFn = void (*)(void*, Render::CRenderContext&, PHLLS, PHLMONITOR, const Time::steady_tp&, bool, bool);
+    using RenderLayerFn = void (*)(void*, Render::CRenderContext&, PHLLS, PHLMONITOR, const Time::steady_tp&, bool, bool, bool);
     using CustomShadowFn = void (*)(void*, Render::CRenderContext&, const CBox&, int, float, int, const Config::CGradientValueData&, float, const Render::SWindowRenderPresentation&);
     using BorderDrawFn = void (*)(void*, Render::CRenderContext&, PHLMONITOR, const float&, const Render::SWindowRenderPresentation&);
     using CalculateUVForSurfaceFn = void (*)(void*, Render::CRenderContext&, PHLWINDOW, SP<CWLSurfaceResource>, PHLMONITOR, bool, const Vector2D&, const Vector2D&, bool);

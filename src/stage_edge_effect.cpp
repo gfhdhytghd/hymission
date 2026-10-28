@@ -99,6 +99,11 @@ bool StageEdgeEffect::ensureShader() {
         return true;
     if (!m_error.empty())
         return false;
+    if (legacyGLES2Renderer()) {
+        // Soft edges need GLES3; draw() then keeps the hard viewport clip.
+        m_error = "GLES2 renderer: soft Stage edges need GLES3";
+        return false;
+    }
     GLState restore;
     const auto vertex = compile(GL_VERTEX_SHADER, stage::edgeVertexShader, m_error);
     const auto fragment = compile(GL_FRAGMENT_SHADER, stage::edgeFragmentShader, m_error);

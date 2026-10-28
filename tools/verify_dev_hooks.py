@@ -2,6 +2,7 @@
 """Check hook ABIs against headers and unique exported targets, without a compositor.
 
 Usage: python tools/verify_dev_hooks.py --build-dir build-port --hyprland /path/to/Hyprland
+       python tools/verify_dev_hooks.py --build-dir build-port --types-only   (CTest: headers only)
 The Hyprland binary is inspected with nm; it is never executed.
 """
 import argparse
@@ -66,8 +67,11 @@ def aliases(text):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-dir', type=Path, required=True)
-    parser.add_argument('--hyprland', type=Path, required=True)
+    parser.add_argument('--hyprland', type=Path)
+    parser.add_argument('--types-only', action='store_true', help='check hook types against the configured headers; skip the binary symbol audit')
     args = parser.parse_args()
+    if not args.types_only and not args.hyprland:
+        parser.error('--hyprland is required unless --types-only is given')
     build = args.build_dir.resolve()
     overview = (ROOT / 'src/overview_controller.cpp').read_text()
     stage = (ROOT / 'src/stage_controller.cpp').read_text()
@@ -132,11 +136,13 @@ struct Member<R (*)(This, Args...), Class> {
     source.write_text(generated)
     flags_file = build / 'CMakeFiles/hymission.dir/flags.make'
     flags = dict(re.findall(r'^(CXX_\w+) = (.*)$', flags_file.read_text(), re.M))
-    compiler = re.search(r'^CMAKE_CXX_COMPILER:FILEPATH=(.*)$', (build / 'CMakeCache.txt').read_text(), re.M)[1]
+    compiler = re.search(r'^CMAKE_CXX_COMPILER:[A-Z]+=(.*)$', (build / 'CMakeCache.txt').read_text(), re.M)[1]
     cmd = [compiler] + shlex.split(' '.join(flags[key] for key in ['CXX_DEFINES', 'CXX_INCLUDES', 'CXX_FLAGS']))
     cmd += ['-I', str(ROOT / 'src'), '-fsyntax-only', str(source)]
     subprocess.run(cmd, check=True)
     print(f'PASS: {count + 10} upstream hook/call signature checks (production also asserts thunk types)')
+    if args.types_only:
+        return
 
     raw = subprocess.check_output(['nm', '-D', '-j', '--defined-only', str(args.hyprland)], text=True).splitlines()
     demangled = subprocess.check_output(['c++filt'], input='\n'.join(raw), text=True).splitlines()
@@ -156,6 +162,17 @@ struct Member<R (*)(This, Args...), Class> {
             audit.append({'file': filename, 'search': match[1], 'filter': needle, 'mangled': selected[0][0], 'signature': selected[0][1], 'count': 1})
     (build / 'hook-audit.json').write_text(json.dumps(audit, indent=2) + '\n')
     print(f'PASS: {len(audit)} lookups, {len(set(row["mangled"] for row in audit))} unique exported targets; each resolves exactly once')
+    # Tiles attaches only to an exact demangled signature and disables itself
+    # otherwise; check every one against the binary so a native signature
+    # change is found before it silently turns tiles off.
+    exact = {}
+    for _, name in symbols:
+        exact[name] = exact.get(name, 0) + 1
+    tiles = re.findall(r'return "([^"]+)";', (ROOT / 'src/tiles_symbols.hpp').read_text())
+    missing = [sig for sig in tiles if exact.get(sig, 0) != 1]
+    if missing:
+        raise RuntimeError('tiles_symbols.hpp: expected exactly one exported target for:\n  ' + '\n  '.join(missing))
+    print(f'PASS: {len(tiles)} exact tiles symbols resolve exactly once')
 
 
 if __name__ == '__main__':

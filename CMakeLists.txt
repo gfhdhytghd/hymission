@@ -49,11 +49,13 @@ add_library(hymission SHARED
 
 target_include_directories(hymission PRIVATE ${HYPR_DEPS_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS} ${GLIB_INCLUDE_DIRS})
 
-foreach(inc ${HYPR_DEPS_INCLUDE_DIRS})
-  if(EXISTS "${inc}/hyprland/src")
-    target_include_directories(hymission PRIVATE "${inc}/hyprland/src")
-  endif()
-endforeach()
+# Only Hyprland's own include root: other dependencies also bring /usr/include,
+# whose hyprland/src may be a different Hyprland build than the one selected by
+# pkg-config. A header missing from the selected root must fail the build.
+pkg_get_variable(HYPRLAND_INCLUDE_ROOT hyprland prefix)
+if(EXISTS "${HYPRLAND_INCLUDE_ROOT}/hyprland/src")
+  target_include_directories(hymission PRIVATE "${HYPRLAND_INCLUDE_ROOT}/hyprland/src")
+endif()
 
 target_link_directories(hymission PRIVATE ${HYPR_DEPS_LIBRARY_DIRS} ${LUA_LIBRARY_DIRS} ${GLIB_LIBRARY_DIRS})
 target_link_libraries(hymission PRIVATE ${HYPR_DEPS_LIBRARIES} ${LUA_LIBRARIES} ${GLIB_LIBRARIES})
@@ -80,6 +82,12 @@ if(BUILD_TESTING)
   add_executable(hymission-hook-broker-test tools/hook_broker_test.cpp)
   target_include_directories(hymission-hook-broker-test PRIVATE src)
   add_test(NAME hymission-hook-broker-test COMMAND hymission-hook-broker-test)
+  # Hook thunk types against the native members in the configured Hyprland headers.
+  find_package(Python3 COMPONENTS Interpreter)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME hymission-hook-abi-test
+             COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_dev_hooks.py --build-dir ${CMAKE_BINARY_DIR} --types-only)
+  endif()
   add_executable(hymission-tiles-logic-test tools/tiles_logic_test.cpp src/tiles_logic.cpp)
   target_include_directories(hymission-tiles-logic-test PRIVATE src)
   add_test(NAME hymission-tiles-logic-test COMMAND hymission-tiles-logic-test)

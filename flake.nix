@@ -1,6 +1,6 @@
 {
   description = "Hymission compatibility with Hyprland development HEAD";
-  inputs.hyprland.url = "github:hyprwm/Hyprland/main";
+  inputs.hyprland.url = "github:gfhdhytghd/Hyprland/main";
   inputs.nixpkgs.follows = "hyprland/nixpkgs";
   outputs = { self, hyprland, nixpkgs, ... }:
     let
@@ -17,7 +17,8 @@
             pluginName = "hymission";
             version = "0.10.2";
             src = self;
-            nativeBuildInputs = with pkgs; [ cmake pkg-config ];
+            # python3 registers the hook ABI type check (tools/verify_dev_hooks.py --types-only).
+            nativeBuildInputs = with pkgs; [ cmake pkg-config python3 ];
             buildInputs = with pkgs; [ lua glib gtk4 libadwaita gtk4-layer-shell wayland ];
             # LD_PRELOAD probes need compositor symbols, absent in Nix's ELF wrapper.
             cmakeFlags = [

@@ -1,5 +1,6 @@
 #include "hook_broker.hpp"
 #include "overview_controller.hpp"
+#include "hook_abi.hpp"
 #include "numeric_config.hpp"
 #include "overview_expansion.hpp"
 #include "search_geometry.hpp"
@@ -1123,7 +1124,8 @@ std::optional<FramebufferBlitRect> rectToFramebufferBlitRect(const Rect& rect, c
 }
 
 bool blitFramebufferRegion(Render::IFramebuffer& sourceFramebuffer, Render::IFramebuffer& targetFramebuffer, const Rect& sourceRect, const Rect& targetRect) {
-    if (!sourceFramebuffer.isAllocated() || !targetFramebuffer.isAllocated())
+    // GLES2 has no glBlitFramebuffer nor separate read/draw framebuffer targets.
+    if (legacyGLES2Renderer() || !sourceFramebuffer.isAllocated() || !targetFramebuffer.isAllocated())
         return false;
 
     const auto sourceBlitRect = rectToFramebufferBlitRect(sourceRect, sourceFramebuffer.m_size);
@@ -1273,6 +1275,8 @@ bool ensureGaussianBlurPipeline() {
     auto& pipeline = gaussianBlurPipeline();
     if (pipeline.ready)
         return true;
+    if (legacyGLES2Renderer())
+        return false; // the blur shaders are GLES 3.2
     if (pipeline.failed)
         return false;
     if (!g_pHyprRenderer)
@@ -2263,12 +2267,18 @@ Render::SWindowRenderPresentation hkEffectiveAlpha(const Desktop::View::CWindowP
     return g_controller ? g_controller->effectiveAlphaHook(presentation, mode) : Render::SWindowRenderPresentation{};
 }
 
-void hkRenderLayer(void* rendererThisptr, Render::CRenderContext& ctx, PHLLS layer, PHLMONITOR monitor, const Time::steady_tp& now, bool popups, bool lockscreen) {
+// renderLayer is protected; a subclass re-exposes it for the thunk type check.
+struct OverviewRendererMembers : Render::IHyprRenderer {
+    using Render::IHyprRenderer::renderLayer;
+};
+
+void hkRenderLayer(void* rendererThisptr, Render::CRenderContext& ctx, PHLLS layer, PHLMONITOR monitor, const Time::steady_tp& now, bool popups, bool lockscreen,
+                   bool workspaceScene) {
     RenderContextScope contextScope{ctx};
     if (!g_controller)
         return;
 
-    g_controller->renderLayerHook(rendererThisptr, layer, monitor, now, popups, lockscreen);
+    g_controller->renderLayerHook(rendererThisptr, layer, monitor, now, popups, lockscreen, workspaceScene);
 }
 
 void hkWorkspaceSwipeBegin(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureBegin& e) {
@@ -4246,12 +4256,13 @@ bool OverviewController::shouldHideLayerSurface(const PHLLS& layer, const PHLMON
     return layerResource->m_current.exclusive > 0;
 }
 
-void OverviewController::renderLayerHook(void* rendererThisptr, PHLLS layer, PHLMONITOR monitor, const Time::steady_tp& now, bool popups, bool lockscreen) {
+void OverviewController::renderLayerHook(void* rendererThisptr, PHLLS layer, PHLMONITOR monitor, const Time::steady_tp& now, bool popups, bool lockscreen,
+                                         bool workspaceScene) {
     if (!m_renderLayerOriginal)
         return;
 
     if (nativeWindowRenderActive()) {
-        m_renderLayerOriginal(rendererThisptr, renderContext(), layer, monitor, now, popups, lockscreen);
+        m_renderLayerOriginal(rendererThisptr, renderContext(), layer, monitor, now, popups, lockscreen, workspaceScene);
         return;
     }
 
@@ -4262,7 +4273,7 @@ void OverviewController::renderLayerHook(void* rendererThisptr, PHLLS layer, PHL
             return;
     }
 
-    m_renderLayerOriginal(rendererThisptr, renderContext(), layer, monitor, now, popups, lockscreen);
+    m_renderLayerOriginal(rendererThisptr, renderContext(), layer, monitor, now, popups, lockscreen, workspaceScene);
 }
 
 double OverviewController::previewDecorationRoundingScale(const PHLMONITOR& monitor) const {
@@ -7739,6 +7750,7 @@ bool OverviewController::installHooks() {
     static_assert(std::is_same_v<EffectiveAlphaFn, decltype(&hkEffectiveAlpha)>);
     static_assert(std::is_same_v<RendererDrawElementFn, decltype(&hkRendererDrawElement)>);
     static_assert(std::is_same_v<RenderLayerFn, decltype(&hkRenderLayer)>);
+    HYMISSION_NATIVE_HOOK_ABI(RenderLayerFn, Render::IHyprRenderer, OverviewRendererMembers, renderLayer);
     static_assert(std::is_same_v<CustomShadowFn, decltype(&hkCustomShadow)>);
     static_assert(std::is_same_v<BorderDrawFn, decltype(&hkBorderDraw)>);
     static_assert(std::is_same_v<CalculateUVForSurfaceFn, decltype(&hkCalculateUVForSurface)>);
@@ -14319,7 +14331,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
                 if (!layerMonitor || layerMonitor != monitor || layer->m_layer != static_cast<int>(layerKind))
                     continue;
 
-                m_renderLayerOriginal(g_pHyprRenderer.get(), renderContext(), layer, monitor, now, false, false);
+                m_renderLayerOriginal(g_pHyprRenderer.get(), renderContext(), layer, monitor, now, false, false, false);
             }
         }
     };
@@ -14523,7 +14535,7 @@ std::string OverviewController::renderBackgroundIntoFramebuffer(const PHLMONITOR
             const auto layerMonitor = layer->m_monitor.lock();
             if (!layerMonitor || layerMonitor != monitor || layer->m_layer != static_cast<int>(layerKind))
                 continue;
-            renderLayer(g_pHyprRenderer.get(), renderContext(), layer, monitor, now, false, false);
+            renderLayer(g_pHyprRenderer.get(), renderContext(), layer, monitor, now, false, false, false);
         }
     }
     g_pHyprRenderer->endRender();

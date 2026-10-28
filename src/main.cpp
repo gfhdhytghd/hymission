@@ -1,4 +1,5 @@
 #include <memory>
+#include <stdexcept>
 #include <sstream>
 #include <string>
 
@@ -19,6 +20,7 @@ extern "C" {
 #include "overview_controller.hpp"
 #include "stage_controller.hpp"
 #include "tiles_controller.hpp"
+#include "workspace_key.hpp"
 #include "dispatcher_names.hpp"
 
 inline HANDLE g_pluginHandle = nullptr;
@@ -390,6 +392,19 @@ APICALL EXPORT std::string PLUGIN_API_VERSION() {
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pluginHandle = handle;
 
+    // PLUGIN_API_VERSION only names the generic plugin API. Hooks and inline
+    // headers depend on the exact compositor commit and its library versions;
+    // same-named tags of different trees (e.g. the fork and upstream v0.57.0)
+    // differ in layout. Refuse to load, before any hook, unless the headers
+    // this build used match the running compositor.
+    const std::string serverHash = __hyprland_api_get_hash();
+    const std::string clientHash = __hyprland_api_get_client_hash();
+    if (serverHash != clientHash) {
+        HyprlandAPI::addNotification(handle, "[hymission] built against different Hyprland headers; not loading. Rebuild the plugin for this compositor.",
+                                     CHyprColor(1.0, 0.2, 0.2, 1.0), 10000);
+        throw std::runtime_error("hymission: Hyprland header hash " + clientHash + " does not match running " + serverHash);
+    }
+
 #define INT_CONF(name, value) addIntConfig("plugin:hymission:" name, Config::INTEGER{value})
 #define FLOAT_CONF(name, value) addFloatConfig("plugin:hymission:" name, Config::FLOAT{value})
 #define COLOR_CONF(name, value) addColorConfig("plugin:hymission:" name, Config::INTEGER{value})
@@ -690,4 +705,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_overviewController.reset();
     if (g_pHyprRenderer)
         g_pHyprRenderer->context().m_pass.clear();
+    // Last, after every controller: no queued readiness callback (plugin code)
+    // may stay in Hyprland's idle queue past dlclose.
+    hymission::finishWorkspaceReadiness();
 }

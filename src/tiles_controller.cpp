@@ -1,4 +1,5 @@
 #include "tiles_controller.hpp"
+#include "hook_abi.hpp"
 #include "hook_broker.hpp"
 #include "workspace_key.hpp"
 #include "render_context.hpp"
@@ -71,6 +72,11 @@ CBox box(tiles::Box b) { return {b.x, b.y, b.width, b.height}; }
 tiles::Box geometry(PHLMONITOR m) { return {m->m_position.x, m->m_position.y, m->m_size.x, m->m_size.y}; }
 bool pinned(PHLWINDOW w) { return w && static_cast<bool>(w->m_state & Desktop::View::WINDOW_STATE_PINNED); }
 }
+// renderLayer is protected; a subclass re-exposes it for the thunk type check.
+struct RendererMembers : Render::IHyprRenderer {
+    using Render::IHyprRenderer::renderLayer;
+};
+
 struct TilesController::Impl {
     struct Output {
         PHLMONITORREF monitor;
@@ -796,19 +802,20 @@ struct TilesController::Impl {
         LayoutScope scope{ws && self->active(ws->m_monitor.lock())?ws:nullptr};
         return ws && reinterpret_cast<decltype(&fsModes)>(fsModesHook->m_original)(Fullscreen::controller().get(),ws,true).internal==Fullscreen::FSMODE_FULLSCREEN;
     }
-    static void layer(Render::IHyprRenderer* r,Render::CRenderContext& ctx,PHLLS ls,PHLMONITOR mon,const Time::steady_tp& now,bool popups,bool lockscreen) {
+    static void layer(Render::IHyprRenderer* r,Render::CRenderContext& ctx,PHLLS ls,PHLMONITOR mon,const Time::steady_tp& now,bool popups,bool lockscreen,bool workspaceScene) {
         const auto original=reinterpret_cast<decltype(&layer)>(layerHook->m_original);
         if (!self->active(mon) || locked() || lockscreen || !ls || ls->m_layer!=ZWLR_LAYER_SHELL_V1_LAYER_TOP ||
             (ls->m_flags & Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN) || mon->m_activeSpecialWorkspace || ctx.m_renderingSnapshot || (self->overview && self->overview())) {
-            original(r,ctx,ls,mon,now,popups,lockscreen); return;
+            original(r,ctx,ls,mon,now,popups,lockscreen,workspaceScene); return;
         }
         if (self->whole(mon)) return;
         RenderContextScope scope{ctx};
         for (const auto& view:instance->views(mon)) if (!covered(view.workspace)) {
             const Rect clip{view.allocation.x,view.allocation.y,view.allocation.w,view.allocation.h};
-            StageController::renderInViewport(mon,stage::edgeViewport(clip,0,0),clip,[&] { original(r,ctx,ls,mon,now,popups,lockscreen); });
+            StageController::renderInViewport(mon,stage::edgeViewport(clip,0,0),clip,[&] { original(r,ctx,ls,mon,now,popups,lockscreen,workspaceScene); });
         }
     }
+    HYMISSION_NATIVE_HOOK_ABI(decltype(&layer), Render::IHyprRenderer, RendererMembers, renderLayer);
     static SP<CWLSurfaceResource> layerHit(const Desktop::CViewHitTester* tester,const Vector2D& pos,std::vector<PHLLSREF>* layers,Vector2D* coords,PHLLS* found,bool aboveLock) {
         const auto original=reinterpret_cast<decltype(&layerHit)>(layerHitHook->m_original);
         const auto mon=State::monitorState()->query().vec(pos).run();
@@ -880,7 +887,7 @@ struct TilesController::Impl {
             if (const auto previous = self->previousOwned(*self->output(mon),self->output(mon)->model.state().focused)) target = workspaceTarget(*previous);
             ws = State::workspaceState()->find(target);
         }
-        if (!ws) ws = State::workspaceState()->create(target, mon);
+        if (!ws) ws = createWorkspace(target, mon);
         return self->route(std::move(ws), current);
     }
     static Action stringAction(const std::string& s) { return actionString(s, false); }
@@ -986,11 +993,12 @@ struct TilesController::Impl {
         }
         return reinterpret_cast<decltype(&moveDirection)>(moveHook->m_original)(dir, window);
     }
-    static void placement(const State::Workspace::CPlacementController* p, PHLWORKSPACE ws, PHLMONITOR mon, bool noWarp, bool carryFocus) {
+    static void placement(const State::Workspace::CPlacementController* p, PHLWORKSPACE ws, PHLMONITOR mon, bool noWarp, bool carryFocus, bool replace) {
         if (!ws || !mon || self->applying || locked() || ws->type() == Workspace::eWorkspaceType::SPECIAL) {
-            reinterpret_cast<decltype(&placement)>(placementHook->m_original)(p, ws, mon, noWarp, carryFocus); return;
+            reinterpret_cast<decltype(&placement)>(placementHook->m_original)(p, ws, mon, noWarp, carryFocus, replace); return;
         }
-        if (const auto v = self->view(ws); v && v->monitor != mon) {
+        // replace=false: the caller (monitor lifecycle) fills the old output itself.
+        if (const auto v = self->view(ws); replace && v && v->monitor != mon) {
             auto* o = self->output(v->monitor);
             const auto originalFocus=o->model.state().focused;
             if (auto replacement = self->fresh(v->monitor)) {
@@ -1003,10 +1011,11 @@ struct TilesController::Impl {
                 self->apply(*o);
             }
         }
-        reinterpret_cast<decltype(&placement)>(placementHook->m_original)(p, ws, mon, noWarp, carryFocus);
+        reinterpret_cast<decltype(&placement)>(placementHook->m_original)(p, ws, mon, noWarp, carryFocus, replace);
         if (carryFocus && self->active(mon)) { auto* o=self->output(mon); (void)o->model.activate(workspaceKey(ws)); self->apply(*o, true, !noWarp); }
         self->request();
     }
+    HYMISSION_NATIVE_HOOK_ABI(decltype(&placement), State::Workspace::CPlacementController, State::Workspace::CPlacementController, moveWorkspaceToMonitor);
     static void swapPhysical(const State::Workspace::CPlacementController* p, PHLMONITOR a, PHLMONITOR b) {
         reinterpret_cast<decltype(&swapPhysical)>(swapHook->m_original)(p,a,b);
         for (const auto& mon : {a,b}) if (self->ready && self->output(mon) && mon->m_activeWorkspace) { auto* o=self->output(mon); (void)o->model.activate(workspaceKey(mon->m_activeWorkspace)); self->apply(*o); }
@@ -1381,7 +1390,7 @@ void TilesController::initialize() {
         m->endResize(true); m->cancelSwipe(); finishTransfer(false); m->request();
     }));
     m->listeners.emplace_back(e.monitor.removed.listen([this](PHLMONITOR) { finishTransfer(false); m->request(); }));
-    m->listeners.emplace_back(e.workspace.created.listen([this](PHLWORKSPACEREF ref) {
+    m->listeners.emplace_back(e.workspace.createdEarly.listen([this](PHLWORKSPACEREF ref) {
         if (const auto ws=ref.lock(); ws && m->active(ws->m_monitor.lock()) && ws->type()!=Workspace::eWorkspaceType::SPECIAL)
             if (auto* o=m->output(ws->m_monitor.lock())) o->ownership.claim(workspaceKey(ws),o->model.state().focused);
         m->request();
@@ -1658,7 +1667,7 @@ SDispatchResult TilesController::dispatch(const std::string& action, const std::
             const auto target = State::Workspace::resolver()->getWorkspaceTargetFromString(fields["workspace"], mon);
             if (!target.valid() || target.type == Workspace::eWorkspaceType::SPECIAL) return {.success=false,.error="expected normal workspace"};
             ws = State::workspaceState()->find(target);
-            if (!ws) ws = State::workspaceState()->create(target, mon, true);
+            if (!ws) ws = createWorkspace(target, mon, true);
         } else ws = m->fresh(mon);
         if (!ws || ws->m_monitor != mon || ws->visible()) return {.success=false,.error="tile_add requires an unpresented workspace on this monitor"};
         result = draft.add(workspaceKey(ws), width);
