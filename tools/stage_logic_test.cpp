@@ -139,6 +139,24 @@ int main() {
         const auto right = reservedWorkArea(native, 240, progress, true);
         ok &= expect(near(right.x, native.x) && near(right.width, native.width - 240 * progress), "right sidebar also narrows the scrolling sizing viewport");
     }
+    // Which scrolling workspaces are resized by Stage, and which only move.
+    ok &= expect(!pushScrollingTape(true, 0, false) && !pushScrollingTape(true, 1, false), "an empty or single-column scrolling workspace is resized to the visible desktop");
+    ok &= expect(pushScrollingTape(true, 2, false) && pushScrollingTape(true, 7, false), "a scrolling workspace spread over several columns is only pushed aside");
+    ok &= expect(!pushScrollingTape(true, 3, true), "a fullscreen or maximized scrolling workspace is resized, whatever its column count");
+    ok &= expect(!pushScrollingTape(false, 3, false), "non-scrolling layouts keep the narrowed work area");
+    for (const double progress : {0.0, 0.25, 0.5, 1.0, 0.5, 0.0}) {
+        const hymission::Rect native{-1440, 30, 1440, 842};
+        for (const bool sidebarRight : {false, true}) {
+            const auto pushed = reservedWorkArea(native, 240, progress, sidebarRight, true);
+            ok &= expect(near(pushed.width, native.width) && near(pushed.height, native.height) && near(pushed.y, native.y),
+                         "a pushed tape keeps its sizing width and height throughout opening, closing and reversal");
+            ok &= expect(near(pushed.x, native.x + (sidebarRight ? -240 : 240) * progress), "the tape moves away from the sidebar by the revealed reservation");
+        }
+        // Closing restores exactly the native area.
+        if (progress == 0.0)
+            ok &= expect(near(reservedWorkArea(native, 240, 0, false, true).x, native.x) && near(reservedWorkArea(native, 240, 0, false, false).width, native.width),
+                         "a closed Stage leaves the native work area untouched in both modes");
+    }
     for (const bool right : {false,true}) {
         const hymission::Rect desktop{240,0,520,720};
         const auto tiled=desktopEdgeViewport(desktop,32,right,true);

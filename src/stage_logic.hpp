@@ -14,10 +14,23 @@ inline double visibilityGestureProgress(double start, double displacement, doubl
     return std::clamp(start + displacement / std::max(1.0, distance), 0.0, 1.0);
 }
 
-// Reserve the sidebar in layout coordinates for every column count. Native
-// scrolling resolves its normalized widths against this actual visible area.
-inline Rect reservedWorkArea(Rect area, double reservation, double progress, bool right) {
+// A scrolling workspace spread over several columns keeps its sizing width:
+// Stage pushes the whole tape away from the sidebar and nothing is resized.
+// One column, or a fullscreen/maximized workspace, follows the visible desktop
+// width instead, so that window is resized to make room.
+constexpr bool pushScrollingTape(bool scrolling, std::size_t columns, bool fullscreen) {
+    return scrolling && !fullscreen && columns > 1;
+}
+
+// Reserve the sidebar in layout coordinates. Without `push` the area narrows
+// and native scrolling resolves its normalized widths against the visible
+// part; with `push` it keeps its width and moves aside by the same amount.
+inline Rect reservedWorkArea(Rect area, double reservation, double progress, bool right, bool push = false) {
     const double amount = std::min(std::max(0.0, reservation * std::clamp(progress, 0.0, 1.0)), std::max(0.0, area.width - 1));
+    if (push) {
+        area.x += right ? -amount : amount;
+        return area;
+    }
     if (!right)
         area.x += amount;
     area.width -= amount;

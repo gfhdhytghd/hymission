@@ -119,8 +119,14 @@ def run(case,observe,layout,request,root,env,runtime,processes,handles,warmup=Fa
         screen=next(s for s in after['stage']['screens'] if s['active_workspace']==ws)
         usable=b.get('usable_area',b['work_area']);initial=a.get('usable_area',a['work_area'])
         reservation=screen['reservation'];base=screen['base'];desk=screen['desktop_geometry']
-        expected=initial['width']*(desk['width']/base['width']) if count>1 else initial['width']-reservation
-        check(abs(usable['width']-expected)<2,f'tile {tile}: viewport shrinks to allocated desktop width')
+        # One Stage desktop with several scrolling columns: the tape keeps its
+        # sizing width and moves by the reservation; nothing is resized.
+        pushed=layout=='scrolling' and count==1 and len(a.get('columns',[]))>1
+        expected=initial['width']*(desk['width']/base['width']) if count>1 else initial['width'] if pushed else initial['width']-reservation
+        check(abs(usable['width']-expected)<2,f'tile {tile}: viewport keeps its width (pushed) or shrinks to allocated desktop width')
+        if pushed:
+            check(abs(abs(b['work_area']['x']-a['work_area']['x'])-reservation)<2,f'tile {tile}: tape moves by the Stage reservation')
+            check(abs(c['work_area']['x']-a['work_area']['x'])<1,f'tile {tile}: closing restores position')
         check(abs(c['work_area']['width']-a['work_area']['width'])<1,f'tile {tile}: closing restores width')
         check(abs(b['work_area']['height']-a['work_area']['height'])<1,f'tile {tile}: vertical work area unchanged')
         if layout=='scrolling':
@@ -130,11 +136,15 @@ def run(case,observe,layout,request,root,env,runtime,processes,handles,warmup=Fa
             check(abs(b['offset']-a['offset']*ratio)<3,f'tile {tile}: camera remains anchored in column coordinates')
         for name,frames in [('open',opened),('close',closed)]:
             samples=[next((v for v in f.get('layout',[]) if v['workspace']==ws),None) for f in frames]
-            widths=[v['work_area']['width'] for v in samples if v]
-            distinct={round(w,1) for w in widths if min(a['work_area']['width'],b['work_area']['width'])+.5<w<max(a['work_area']['width'],b['work_area']['width'])-.5}
-            check(len(distinct)>=3,f'tile {tile}: {name} has native intermediate viewport widths')
+            # A pushed tape animates its position; a resized one its width.
+            axis='x' if pushed else 'width'
+            widths=[v['work_area'][axis] for v in samples if v]
+            distinct={round(w,1) for w in widths if min(a['work_area'][axis],b['work_area'][axis])+.5<w<max(a['work_area'][axis],b['work_area'][axis])-.5}
+            check(len(distinct)>=3,f'tile {tile}: {name} has native intermediate viewport {axis} values')
             check(all(abs(v['work_area']['height']-a['work_area']['height'])<1 for v in samples if v),f'tile {tile}: {name} preserves height throughout')
-            check(max((abs(y-x) for x,y in zip(widths,widths[1:])),default=0)<abs(a['work_area']['width']-b['work_area']['width'])*.55+2,f'tile {tile}: {name} has no one-frame width jump')
+            if pushed:
+                check(all(abs(v['work_area']['width']-a['work_area']['width'])<1 for v in samples if v),f'tile {tile}: {name} never resizes the pushed tape')
+            check(max((abs(y-x) for x,y in zip(widths,widths[1:])),default=0)<abs(a['work_area'][axis]-b['work_area'][axis])*.55+2,f'tile {tile}: {name} has no one-frame {axis} jump')
         values.append(dict(workspace=ws,before=a,opened=b,closed=c,desktop=desk,expected_width=expected))
     (root/'measurements.json').write_text(json.dumps(values,indent=2))
     if not observe and layout=='scrolling':validate_camera(root)

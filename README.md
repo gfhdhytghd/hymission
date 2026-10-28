@@ -812,11 +812,14 @@ hl.plugin.hymission.gesture({
 ```
 
 Swipe right to reveal Stage and continuously reserve space on the desktop; swipe
-left to hide it. In scrolling layouts, Stage reduces the native sizing viewport
-to the remaining desktop width for every column count. Native column fractions
-are retained and resolve to narrower window sizes; the camera follows the same
-column coordinates. Closing restores the original viewport. With multiple tiles,
-each receives its share of the remaining desktop width, retaining full height.
+left to hide it. In scrolling layouts with several columns, Stage pushes the
+whole tape away from the sidebar and resizes no window; the part that moves past
+the output edge is clipped. A workspace with a single column (stacked windows in
+one column count as one), or with a fullscreen or maximized window, instead
+reduces its sizing viewport to the remaining desktop width, so that window is
+resized to make room. Closing restores the original viewport and positions. With
+multiple tiles, each receives its share of the remaining desktop width, retaining
+full height.
 Reversing the swipe reverses progress. Release past halfway to
 commit; cancellation restores the previous state. Keyboard toggles and release
 settling use `stage_transition_ms`. The runtime choice lasts until plugin reload.

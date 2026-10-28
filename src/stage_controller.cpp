@@ -102,6 +102,17 @@ bool scrollingWorkspace(const PHLWORKSPACE& workspace) {
         Layout::Supplementary::algoMatcher()->getNameForTiledAlgo(&typeid(*algorithm->tiledAlgo())) == "scrolling";
 }
 
+// Several scrolling columns: Stage moves the tape instead of narrowing it.
+bool pushesScrollingTape(const PHLWORKSPACE& workspace) {
+    const bool scrolling = scrollingWorkspace(workspace);
+    auto* algorithm = scrolling ? dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(workspace->space()->algorithm()->tiledAlgo().get()) : nullptr;
+    const std::size_t columns = algorithm && algorithm->m_scrollingData ? algorithm->m_scrollingData->columns.size() : 0;
+    // Any fullscreen or maximized window, covering or not: scrolling maximize
+    // does not count as covering, but that window still fills the desktop.
+    const bool fullscreen = workspace && Fullscreen::controller()->getFullscreenModes(workspace, std::nullopt).internal != Fullscreen::FSMODE_NONE;
+    return stage::pushScrollingTape(scrolling, columns, fullscreen);
+}
+
 bool scrollingTiled(const PHLWINDOW& window) {
     return window && !window->isFloating() && !static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED) && scrollingWorkspace(window->m_workspace);
 }
@@ -289,6 +300,7 @@ struct StageController::Impl {
         // Slot the lifted card previews (drag reorder); reorderHover is its source.
         std::optional<std::size_t> reorderTo;
         bool covered = false;
+        bool pushScrollingTape = false; // active workspace's tape moves instead of narrowing
         bool suspended = false;
         bool revealFromBottom = false;
         double shown = 1;
@@ -1647,12 +1659,15 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
         return;
     // Each invocation starts from the original recheckWorkArea output. Retain
     // workspace gaps, including float gaps, and never compound our reservation.
-    // Every native layout receives the remaining desktop width. Scrolling
-    // column fractions then resolve against that narrower viewport, just as
-    // other tiling algorithms do; no second raster-scale is applied.
+    // Native layouts receive the remaining desktop width; scrolling column
+    // fractions then resolve against that narrower viewport and no second
+    // raster-scale is applied. A scrolling tape spread over several columns
+    // keeps its width and is pushed aside instead, so no window is resized;
+    // floating placement still uses the visible part.
+    const bool push = !clustered(*screen) && pushesScrollingTape(workspace);
     for (auto* box : {&space->m_workArea, &space->m_floatingWorkArea}) {
         const auto area = clustered(*screen) ? stage::scaleDesktopRect(rect(*box),rect(baseArea(monitor)),desktopReservation(*screen),visibility) :
-            stage::reservedWorkArea(rect(*box), desktopReservation(*screen), visibility, screen->right);
+            stage::reservedWorkArea(rect(*box), desktopReservation(*screen), visibility, screen->right, push && box == &space->m_workArea);
         *box = hymission::box(area);
     }
     if (!syncing && !sameBox(screen->base, screenBase(monitor,screen->tile)))
@@ -1952,7 +1967,11 @@ void StageController::Impl::sync() {
             screen->paneTransition = false;
             screen->departingCards.clear();
         }
-        if (changedGeometry || changedPolicy || changedCover || reconfigure)
+        // Opening/closing windows can move the active tape across one column.
+        const bool push = !clustered(*screen) && pushesScrollingTape(activeWorkspace);
+        const bool changedPush = screen->pushScrollingTape != push;
+        screen->pushScrollingTape = push;
+        if (changedGeometry || changedPolicy || changedCover || changedPush || reconfigure)
             relayout.push_back(monitor);
         for (auto& card : screen->cards) {
             if (changedGeometry) {
