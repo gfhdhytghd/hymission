@@ -24,6 +24,7 @@ class StageController {
     StageController(const StageController&) = delete;
     StageController& operator=(const StageController&) = delete;
     void initialize();
+    void handleTilesChange();
     bool toggleVisibility();
     bool setVisibility(bool visible);
     std::optional<Rect> holdRegion(const std::string& monitor) const;
@@ -33,7 +34,7 @@ class StageController {
     std::string stateJson() const;
     // Overview owns the native swipe entry points; Stage consumes only its own
     // gestures. Surface hook ownership is handed over before overview attaches.
-    static bool beginWorkspaceSwipe(void* gesture, void (*original)(void*));
+    static std::optional<bool> beginWorkspaceSwipe(void* gesture, PHLMONITOR monitor, bool (*original)(void*, PHLMONITOR));
     static bool updateWorkspaceSwipe(void* gesture, double delta);
     static bool endWorkspaceSwipe(void* gesture);
     // The registered trackpad gesture routes directly, without native hooks.
@@ -41,6 +42,7 @@ class StageController {
     static void updateTrackpadWorkspaceSwipe(double delta);
     static void endTrackpadWorkspaceSwipe(bool cancelled);
     static void setOverviewRendering(bool active);
+    static void cancelTileTransfer();
     // Overview owns the shared hooks while Stage draws its sliding previews.
     static bool renderingPreview();
     // An engaged null workspace means sidebar chrome or an empty card: consume
@@ -55,6 +57,12 @@ class StageController {
     static std::optional<stage::OverviewEndpoint> overviewDestination(const PHLWINDOW& window, const PHLWORKSPACE& activeWorkspace, const Rect& desktopWindow);
     static void prepareOverviewExit(const std::vector<PHLMONITOR>& monitors, const PHLWORKSPACE& activeWorkspace);
     static void finishOverview();
+    // Shared native-pass capture/edge service. It also works with Stage hidden.
+    static void renderInViewport(const PHLMONITOR&, const stage::EdgeViewport&, const Rect&, const std::function<void()>&);
+    static bool ensureEdgeService();
+    static std::optional<Rect> nativeDesktop(const PHLWORKSPACE&);
+    static std::optional<CBox> tilePresentation(const PHLMONITOR&,const CBox&);
+    static std::optional<stage::EdgeFrame> overviewPresentation(const PHLWINDOW&, const PHLMONITOR&);
 
   private:
     struct Impl;

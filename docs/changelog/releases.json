@@ -4,6 +4,65 @@
   "site_url": "https://gfhdhytghd.github.io/hymission/",
   "releases": [
     {
+      "tag": "v0.12.0-v0.57.0",
+      "version": "0.12.0",
+      "hyprland": "0.57.0",
+      "published_at": "2026-10-29T00:01:38Z",
+      "headline": "Hyprland 0.57, workspace tiles, natural layout by default and Stage that pushes scrolling layouts aside",
+      "sections": [
+        {
+          "title": "Hyprland 0.57",
+          "items": [
+            "Targets official Hyprland v0.57.0 (hyprwm/Hyprland `0aa6745f`). The gfhdhytghd/Hyprland fork's v0.57.0 (`f6725e43`) is a different commit with a different plugin ABI; build against the headers of the compositor you run.",
+            "The plugin refuses to load, with a notification, when the Hyprland headers it was built with do not match the running compositor; rebuild it for that compositor (`hyprpm update`).",
+            "Hooked compositor functions are checked against their exact 0.57 signatures at build time."
+          ]
+        },
+        {
+          "title": "Workspace tiles (opt-in)",
+          "items": [
+            "Split a monitor into up to three independent workspace tiles with `tiles_enabled = 1`. Each tile keeps its own active workspace and history; focus, fullscreen and maximize stay inside the owning tile.",
+            "Add, remove, focus and resize tiles with `hl.plugin.hymission.tile_*`, or drag a tile boundary; Esc restores the starting widths.",
+            "Overview and the workspace strip group windows by tile, and Stage gets a sidebar per tile. Drag previews between tiles to move windows or split a desktop.",
+            "`tiles_state()`, `hyprctl -j hymission-tiles-state` and the `hymission-tiles` socket2 event expose tiles to bars."
+          ]
+        },
+        {
+          "title": "Natural layout by default",
+          "items": [
+            "The default `layout_engine` is now `natural`, using the former natural2 algorithm with stable allocations and workspace/column-aware packing. Set `layout_engine = \"grid\"` to keep the previous layout.",
+            "`natural2` remains an alias. The old natural solver has been removed; `natural_scale_flex` is accepted as a deprecated no-op.",
+            "Overview slots stay put when native focus resizes or rearranges the real windows; the selected and hovered enlargement pushes neighbours aside without swapping their order."
+          ]
+        },
+        {
+          "title": "Stage",
+          "items": [
+            "Dragging a workspace card to another slot in its sidebar column renumbers the real workspaces (`stage_drag_reorder`, on by default).",
+            "On scrolling layouts with several columns, opening Stage pushes the whole layout aside instead of resizing every window. A single window, or a maximized column, still narrows to fit the remaining desktop and returns to its width when Stage closes."
+          ]
+        },
+        {
+          "title": "Overview",
+          "items": [
+            "The window search box is a single opaque surface, and the search header space is always reserved.",
+            "New defaults: `niri_scrolling_preview_gap = 24`, `focus_selected_thickness = 3`, `backdrop_color = 0x26000000`."
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            "Unloading the plugin right after a config reload while the overview is open no longer crashes Hyprland: deferred work is owned and cancelled on unload.",
+            "`hyprctl reload full-reset` keeps Hymission's Lua functions and options.",
+            "Window shadows no longer fade out while the overview closes, and workspace strip thumbnails follow the live desktop.",
+            "Overview opacity follows native focus changes.",
+            "A continuous swipe from the overview through the desktop into the workspace overview no longer leaves a dimmed ghost window.",
+            "Overview initialization failures are reported instead of opening silently; invalid UTF-8 in window titles no longer breaks the state JSON; numeric options are validated."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.11.0-v0.56.2",
       "version": "0.11.0",
       "hyprland": "0.56.2",

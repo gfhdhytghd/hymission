@@ -4,6 +4,8 @@
 
 namespace hymission {
 inline std::string normalizeHymissionDispatcher(std::string dispatcher) {
+    for (const auto* name : {"tile_add", "tile_resize", "tile_remove", "tile_focus", "tile_move_window"})
+        if (dispatcher == name || dispatcher == std::string("hymission.") + name) return std::string("hymission:") + name;
     if (dispatcher == "stage_open" || dispatcher == "hymission.stage_open")
         return "hymission:stage_open";
     if (dispatcher == "stage_close" || dispatcher == "hymission.stage_close")

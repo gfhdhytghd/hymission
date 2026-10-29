@@ -98,28 +98,19 @@ v1 overview 排除：
 
 ### 4.3 当前默认算法
 
-v1 默认布局算法为 row-based strategy；`layout_engine = natural` 时可切换到 Apple-like 自然求解器：
+默认 `layout_engine = natural`，使用原 natural2 算法；`natural2`、`apple`、`apple-like`、`expose`、`mission-control` 是同义名。需要旧网格布局时设置 `layout_engine = "grid"`。所有 scope override 使用同一解析器；空 override 继承基础引擎。
 
-- 小窗口先做最小边长钳制
-- 根据窗口相对 monitor 高度决定 small-window boost
-- 按窗口中心点 `y` 值排序，构造候选 row layout
-- 每行内部按窗口中心点 `x` 值排序
-- 评估不同 row count
-- 用“可读性优先、空间利用率次之”的评分选择最佳候选
+- 无重叠且可行时使用统一缩放，保留源窗口相对位置与宽高比
+- 否则按 workspace band、scrolling column 元数据和几何顺序排列居中的行；不调用旧 grid 作为 natural fallback
+- 每个 monitor/tile/workspace 区域持有独立会话历史，稳定身份支持过滤保留与局部插入
+- overview 内窗口集合不变时冻结基础槽位、源几何和列元数据，focus 造成的真实尺寸变化不得触发 resize 重排；窗口开/关、过滤、区域或布局约束改变才更新基础布局
+- 选中/悬停放大独立于 core emphasis，只做保序的环形让位；放大不足时减小倍率。保持原中心方向及原分隔轴，动画共享插值时钟，中途 hover 切换和被动重建均不得产生交叉或瞬间复位
+- padding 只扣一次；row/column spacing 是最小间距；不可行时逐步降低间距和可读性下限，不拉伸宽高比
+- `min_window_length`、`small_window_boost` 决定小窗口空间权重，preview scale cap 仍然生效
+- `one_workspace_per_row` 强制 workspace band；最近使用顺序不强制 natural 窗口尺寸梯度
+- `natural_scale_flex` 已废弃，无效果但继续接受配置；旧排斥、角落填充、自由缩放算法已删除
 
-评分权重：
-
-- `layout_scale_weight` 优先
-- `layout_space_weight` 次之
-
-这意味着 v1 默认偏向更大的 preview，而不是机械追求铺满屏幕。
-
-Natural engine 额外目标：
-
-- 以窗口进入 overview 前的中心点作为弱锚点
-- 通过缩放二分和局部排斥消除重叠
-- 尽量保持原始 left/right/top/bottom 相对方位
-- 在无法满足自然排布或强制 workspace 行分组时回退到 row-based strategy
+`grid` 保留 row-search 行为。`layout_scale_weight` 和 `layout_space_weight` 仅用于 grid（含 thumbnail 的 grid fallback），不影响 natural。
 
 Thumbnail 引擎 (`layout_engine = thumbnail`)：
 
@@ -393,7 +384,7 @@ workspace 切换补充语义：
 
 - 旧配置 `outer_padding` 允许继续作为统一回退值存在，但新的方向配置优先级更高
 - `outer_padding*`、`row_spacing`、`column_spacing`、`min_window_length`、`min_preview_short_edge`、`small_window_boost`、`max_preview_scale`、`workspace_overview_max_preview_scale`、`min_slot_scale`、`layout_engine`、`layout_engine_forceall`、`layout_engine_all`、`layout_engine_onlycurrentworkspace`、`layout_scale_weight`、`layout_space_weight` 当前只控制布局算法
-- `layout_engine = grid` 保持既有 row-search 几何；`layout_engine = natural` / `apple` / `expose` / `mission-control` 使用 Apple-like 自然求解器，优先保留窗口进入 overview 前的相对方位并消除重叠，且不按窗口数量主动回退 row-search；`layout_engine = thumbnail` / `thumbnails` 使用 workspace 缩略图布局，窗口按 workspace 分组并在其各自缩略图卡片中保持精确位置；`one_workspace_per_row = 1` 时仍保留 workspace 行语义，并在每个 workspace band 内运行自然求解
+- `layout_engine = natural` 是默认，`natural2` 和 Apple/Exposé 同义名使用相同的带会话历史算法；`grid` 保持 row-search 几何；`thumbnail` / `thumbnails` 在 workspace 卡片内保持精确源几何。详见 4.3。
 - `layout_engine_all` 和 `layout_engine_onlycurrentworkspace` 允许默认 all-workspace / active-workspace scope 使用不同布局；空字符串表示回退到 `layout_engine`。显式 `forceall` dispatcher scope 优先读取 `layout_engine_forceall`，为空时回退到 `layout_engine_all`
 - `selected_expand_scale` 控制当前选中 preview 的放大；`hover_expand_scale` 仅在 `overview_focus_follows_mouse = 0` 时控制独立悬停放大，两者限制在 `1.0` 到 `2.0`，`1.0` 关闭对应放大。同一 preview 同时选中和悬停时取较大值，不叠乘。仅悬停放大使用 `selected_expand_scale = 1.0`、`hover_expand_scale = 1.25`、`overview_focus_follows_mouse = 0`
 - `expand_selected_window` 仅保留为兼容配置名，值被忽略；显式设置时显示迁移提示。thumbnail 布局和单窗口 overview 不放大 preview；其他布局的实际倍率受可用空间、间距及碰撞约束限制
@@ -404,7 +395,7 @@ workspace 切换补充语义：
 - `niri_mode` 默认关闭；打开后只改变边缘 workspace strip 的排布：active-centered、monitor aspect ratio、允许缩略图列表溢出屏幕
 - `niri_scroll_pixels_per_delta` 影响 `hymission:scroll,layout` 在 overview 外连续发送 `layoutMsg move` 的幅度；默认 `1.0` 表示约把一次 `gestures:workspace_swipe_distance` 的手指位移映射为一个 viewport 的 scrolling-layout 位移；官方 `scrollMove` 不读取该配置
 - `niri_workspace_scale` 控制 niri mode 下 strip 内 workspace preview 相对 strip cross-axis 的缩放，默认 `1.0`，范围 `0.05..1.0`
-- `niri_scrolling_preview_gap` 控制 niri direct scrolling overview 中相邻 preview cell 在 scrolling 主轴上的额外间隔；默认 `0` 保持既有布局，负值按 `0` 处理
+- `niri_scrolling_preview_gap` 控制 niri direct scrolling overview 中相邻 preview cell 在 scrolling 主轴上的额外间隔；默认 `24` 留出预览间距，显式设为 `0` 可恢复紧凑布局，负值按 `0` 处理
 - `gesture_invert_vertical` 只影响被插件接管的 vertical overview gesture；它不改变普通 dispatcher、键盘输入或 Hyprland 其他 gesture 的方向
 - 如果退出 overview 时提交的真实目标窗口仍不在屏内，允许临时保持该窗口为真实 focus，直到下一次真实鼠标事件；只有当目标窗口在当前 monitor 上存在可见区域时，才允许顺带移动光标去对齐真实 focus
 - `only_active_workspace`、`only_active_monitor`、`show_special` 只影响默认 scope；`onlycurrentworkspace` 和 `forceall` dispatcher 参数优先级更高
@@ -420,6 +411,14 @@ workspace 切换补充语义：
 - `pick_labels_direct_activate` 只在 `pick_labels_enabled = 1` 时生效，控制命中 pick label 后是立即激活并退出 overview（`1`），还是只切换选中项、仍需 `Return` 确认（`0`，默认）
 - 除 `overview_focus_follows_mouse` 和 selected-preview hover relayout 的上述细项外，overview 状态机、动画、输入等配置不在 v1 第一阶段暴露
 - 在没有充分稳定前，不新增大量面向最终用户的细粒度行为开关
+
+### 搜索框安全区与默认视觉参数
+
+- layer-shell exclusive reserved 区域、workspace strip、64 logical pixel 搜索区依次扣除；顶部 strip 的绘制也采用同一 reserved 坐标。
+- 搜索框在所属输出的搜索区居中，未显示时仍保留搜索区，避免开始输入时重排。`outer_padding_top = 32` 是搜索区之后的额外间距。
+- 原先为避开搜索框设置 `outer_padding_top = 92` 的用户可迁移到 `32`；保留 `92` 仍有效，会多留 60 像素。隐藏 exclusive 顶栏仅影响绘制，不移除 reservation。
+- `focus_selected_thickness` 默认 `3`；`backdrop_color` 默认 ARGB `0x26000000`（配置字符串为 `rgba(00000026)`），`backdrop_blur` 仍为 `0`。
+- 无 blur 且透明时不提交背景 pass；非透明时只增加覆盖输出的 alpha 混合矩形，透明度随 overview progress 淡入淡出。Stage 单独显示不触发此 pass；strip/Stage 的快照及原生窗口捕获路径受 guard 保护。
 
 ## 9. 验收标准
 

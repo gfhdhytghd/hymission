@@ -17,6 +17,49 @@ bool near(double a, double b) { return std::abs(a - b) < 1e-7; }
 int main() {
     using namespace hymission::stage;
     bool ok = true;
+    for (const auto& widths:std::vector<std::vector<double>>{{1536,1536},{900,1200,972},{600,2472}}) {
+        double total=0,commonHeight=0,bands=0,desktopWidth=0;
+        for (size_t i=0;i<widths.size();++i) {
+            const auto g=tileLayout(3072,1670,widths[i],widths.size(),i?0:4,4,{});
+            total+=g.cardWidth; bands+=g.bandWidth;desktopWidth=g.desktopWidth;
+            if (!i) commonHeight=g.cardHeight;
+            ok &= expect(near(g.cardHeight,commonHeight),"all tile columns share one thumbnail height, including empty columns");
+            ok &= expect(near(g.cardWidth/g.cardHeight,widths[i]/3072*g.desktopWidth/1670),"tile card has its viewport aspect without artificial letterboxing");
+        }
+        ok &= expect(near(total/commonHeight,desktopWidth/1670),"combined tile thumbnails retain the native horizontally reserved desktop aspect");
+        ok &= expect(total<=3072.0/5 && bands<3072*.25,"thumbnail width is budgeted once for the whole scene");
+    }
+    {
+        const Settings adaptive{.padding=10,.cardGap=12,.paddingTop=10,.paddingBottom=10,.evenSpacing=true};
+        const auto most=tileLayout(3072,1670,1536,2,9,9,adaptive);
+        const auto fewer=tileLayout(3072,1670,1536,2,3,9,adaptive);
+        const auto changed=tileLayout(3072,1670,1536,2,3,5,adaptive);
+        auto sceneSettings=normalize(adaptive);sceneSettings.padding*=2;sceneSettings.paddingRight*=2;
+        const auto nativeScene=layout(3072,1670,9,sceneSettings,std::nullopt,3072);
+        ok &= expect(near(most.cardWidth*2,nativeScene.cardWidth) && near(most.cardHeight,nativeScene.cardHeight) && near(most.desktopWidth,nativeScene.desktopWidth),"multi-tile stack uses the original Stage reserved-width/full-height sizing rule");
+        ok &= expect(near(most.cardHeight,fewer.cardHeight) && near(most.cardGap,fewer.cardGap),"maximum workspace count supplies the shared adaptive size and spacing");
+        ok &= expect(near(most.cardTop(8,0)+most.cardHeight,1660),"longest workspace column fits available height using adaptive width");
+        ok &= expect(near(most.maxScroll,0) && changed.cardHeight>most.cardHeight,"removing workspaces from the longest column resizes all columns together");
+        ok &= expect(near(tileLayout(3072,1670,1536,2,0,0,adaptive).desktopWidth,3072),"no workspace cards leave the desktop unreserved");
+        const auto narrowTile=tileLayout(3072,1670,120,2,30,30,adaptive);
+        const auto wideTile=tileLayout(3072,1670,2952,2,2,30,adaptive);
+        ok &= expect(near(narrowTile.cardHeight,wideTile.cardHeight) && near(narrowTile.cardWidth/narrowTile.cardHeight,120.0/3072*narrowTile.desktopWidth/1670),"narrow tile keeps the shared scale when scene minimum width requires scrolling");
+    }
+    for (const auto base:std::vector<hymission::Rect>{{0,0,1920,1080},{-1920,80,1920,976}}) {
+        for (double progress:{0.,.25,.6,1.}) {
+            const auto a=scaleDesktopRect({base.x,base.y,960,base.height},base,600,progress);
+            const auto b=scaleDesktopRect({base.x+960,base.y,640,base.height},base,600,progress);
+            const auto c=scaleDesktopRect({base.x+1600,base.y,320,base.height},base,600,progress);
+            ok &= expect(near(a.x+a.width,b.x) && near(b.x+b.width,c.x),"global Stage transform keeps unequal tile borders contiguous");
+            ok &= expect(near(a.width/960,b.width/640) && near(a.width/960,c.width/320) && near(a.height,base.height) && near(b.height,base.height) && near(c.height,base.height),"tiles share one horizontal scale and retain native vertical extent");
+            ok &= expect(near(c.x+c.width,base.x+base.width) && near(a.y,base.y) && near(b.y,base.y) && near(c.y,base.y),"Stage stays right anchored without a vertical translation");
+            const auto whole=scaleDesktopRect(base,base,600,progress);
+            const auto point=desktopInputPosition(base,whole,whole.x+whole.width*.37,whole.y+whole.height*.93);
+            ok &= expect(near(point.first,base.x+base.width*.37) && near(point.second,base.y+base.height*.93),"presentation input maps horizontal compression without scaling native y");
+            const auto gap=scaleDesktopRect({base.x+12,base.y+23,base.width-36,base.height-51},base,600,progress);
+            ok &= expect(near(gap.y,base.y+23) && near(gap.height,base.height-51),"native vertical work-area gaps survive Stage reservation");
+        }
+    }
     const std::vector<hymission::Rect> clickCards{{20, 20, 160, 100}, {20, 140, 160, 100}};
     const hymission::Rect clickStrip{0, 0, 200, 260};
     ok &= expect(activationCardAt(clickCards, clickStrip, 0, 60) == 0 && activationCardAt(clickCards, clickStrip, 199, 180) == 1,
@@ -80,23 +123,59 @@ int main() {
                  hymission::normalizeHymissionDispatcher("hymission.stage_toggle") == "hymission:stage_toggle" &&
                  hymission::normalizeHymissionDispatcher("hymission:stage_toggle") == "hymission:stage_toggle",
                  "Lua Stage action names route to the continuous Stage gesture dispatcher");
-    ok &= expect(!preserveScrollingWidth(true, 1) && preserveScrollingWidth(true, 2) && preserveScrollingWidth(true, 0) &&
-                 !preserveScrollingWidth(false, 1), "only a native single scrolling column uses the resized desktop viewport");
     for (const double progress : {0.0, 0.25, 0.5, 1.0, 0.5, 0.0}) {
         const hymission::Rect native{-1440, 30, 1440, 842};
-        const auto scrolling = reservedWorkArea(native, 240, progress, false, true);
-        ok &= expect(near(scrolling.width, native.width) && near(scrolling.height, native.height) &&
-                     near(scrolling.x, native.x + 240 * progress), "scrolling tape translates on advance and reversal without changing its sizing viewport");
+        const auto scrolling = reservedWorkArea(native, 240, progress, false);
+        ok &= expect(near(scrolling.width, native.width - 240 * progress) && near(scrolling.height, native.height) &&
+                     near(scrolling.x, native.x + 240 * progress), "scrolling viewport narrows on advance and restores on reversal");
         for (const bool sidebarRight : {false, true}) {
-            const auto single = reservedWorkArea(native, 240, progress, sidebarRight, preserveScrollingWidth(true, 1));
+            const auto single = reservedWorkArea(native, 240, progress, sidebarRight);
             ok &= expect(near(single.width, native.width - 240 * progress) && near(single.height, native.height) &&
                          near(single.x, native.x + (sidebarRight ? 0 : 240 * progress)),
                          "single-column sizing follows Stage on either side throughout opening, closing and reversal");
         }
-        const auto tiled = reservedWorkArea(native, 240, progress, false, false);
+        const auto tiled = reservedWorkArea(native, 240, progress, false);
         ok &= expect(near(tiled.x + tiled.width, native.x + native.width), "ordinary tiled layout retains its right desktop edge");
-        const auto right = reservedWorkArea(native, 240, progress, true, true);
-        ok &= expect(near(right.x, native.x) && near(right.width, native.width), "right sidebar clips scrolling columns without resizing them");
+        const auto right = reservedWorkArea(native, 240, progress, true);
+        ok &= expect(near(right.x, native.x) && near(right.width, native.width - 240 * progress), "right sidebar also narrows the scrolling sizing viewport");
+    }
+    // Which scrolling workspaces are resized by Stage, and which only move.
+    ok &= expect(!pushScrollingTape(true, true, 0, false) && !pushScrollingTape(true, true, 1, false), "an empty or single-column scrolling workspace is resized to the visible desktop");
+    ok &= expect(pushScrollingTape(true, true, 2, false) && pushScrollingTape(true, true, 7, false), "a horizontal scrolling workspace spread over several columns is only pushed aside");
+    ok &= expect(!pushScrollingTape(true, true, 3, true), "a workspace covered by a fullscreen window is resized, whatever its column count");
+    ok &= expect(!pushScrollingTape(false, true, 3, false), "non-scrolling layouts keep the narrowed work area");
+    ok &= expect(!pushScrollingTape(true, false, 3, false) && !pushScrollingTape(true, false, 1, false),
+                 "a vertical tape is narrowed, never pushed, so no horizontal fraction reaches its column heights");
+    // Inside a pushed tape only a maximized column narrows to fit the desktop.
+    ok &= expect(near(pushedColumnFraction(1, 1228, 276, 1) * 1228, 952), "a maximized column in a pushed tape fits the visible desktop");
+    ok &= expect(near(pushedColumnFraction(1, 1228, 276, 0), 1) && near(pushedColumnFraction(1, 1228, 276, 0.5) * 1228, 1228 - 138),
+                 "the maximized column follows the revealed reservation and is native when Stage is closed");
+    ok &= expect(near(pushedColumnFraction(0.5, 1228, 0, 1), 0.5) && near(pushedColumnFraction(1, 0, 276, 1), 1),
+                 "no reservation or a degenerate area keeps the native fraction");
+    ok &= expect(pushedColumnFraction(1, 300, 400, 1) * 300 >= 1 - 1e-9, "a reservation wider than the area never collapses the column");
+    ok &= expect(near(maximizedColumnFraction(true, true, 1240, 276, 1) * 1240, 964), "a reserving pushed tape fits its maximized column");
+    ok &= expect(near(maximizedColumnFraction(false, true, 1240, 276, 1), 1) && near(maximizedColumnFraction(false, true, 1240, 276, 0.5), 1),
+                 "once nothing is reserved (no sidebar cards left) the maximized column is native, whatever the Stage progress");
+    ok &= expect(near(maximizedColumnFraction(true, false, 1240, 276, 1), 1), "a tape that is not pushed never fits a maximized column");
+    for (const double progress : {0.0, 0.25, 0.5, 1.0, 0.5, 0.0}) {
+        const hymission::Rect native{-1440, 30, 1440, 842};
+        for (const bool sidebarRight : {false, true}) {
+            const auto pushed = reservedWorkArea(native, 240, progress, sidebarRight, true);
+            ok &= expect(near(pushed.width, native.width) && near(pushed.height, native.height) && near(pushed.y, native.y),
+                         "a pushed tape keeps its sizing width and height throughout opening, closing and reversal");
+            ok &= expect(near(pushed.x, native.x + (sidebarRight ? -240 : 240) * progress), "the tape moves away from the sidebar by the revealed reservation");
+        }
+        // Closing restores exactly the native area.
+        if (progress == 0.0)
+            ok &= expect(near(reservedWorkArea(native, 240, 0, false, true).x, native.x) && near(reservedWorkArea(native, 240, 0, false, false).width, native.width),
+                         "a closed Stage leaves the native work area untouched in both modes");
+    }
+    for (const bool right : {false,true}) {
+        const hymission::Rect desktop{240,0,520,720};
+        const auto tiled=desktopEdgeViewport(desktop,32,right,true);
+        const auto single=desktopEdgeViewport(desktop,32,right,false);
+        ok &= expect(near(tiled.left,32) && near(tiled.right,32), "Stage tile flights retain both native desktop edge bands");
+        ok &= expect(near(single.left,right?0:32) && near(single.right,right?32:0), "single Stage retains its sidebar-facing band");
     }
     // Lifecycle regression: A's old sidebar must never cover B's predicted
     // sidebar during the zero-progress frame or deferred overview teardown.
@@ -290,6 +369,25 @@ int main() {
             "gesture reversal follows the same reveal instead of resetting the crop");
         ok &= expect(std::isfinite(frame.clip.x) && frame.clip.width > 0 && frame.clip.height > 0,
             "reveal remains valid throughout scaling on a negatively positioned monitor");
+    }
+    // Desktop tape edges instead translate at constant window-relative width,
+    // carrying decorations and returning along the identical closing path.
+    for (const bool right : {false,true}) {
+        OverviewEndpoint tape{{-100,30,300,240},edgeViewport({0,0,600,480},32,32),{0,0,600,480}};
+        if (right) tape.window.x=500;
+        tape.viewport.revealDecorations=true;
+        double previous=right?-1e9:1e9;
+        for (int step=0;step<=100;++step) {
+            const double p=step/100.;
+            const auto frame=overviewRevealFrame(tape,tape.window,{0,0,600,480},p);
+            const double edge=right?frame.viewport.box.x+frame.viewport.box.width:frame.viewport.box.x;
+            ok &= expect(frame.viewport.revealDecorations && near(frame.viewport.left,32) && near(frame.viewport.right,32),
+                "desktop reveal retains one band for contents and decorations");
+            ok &= expect(right?edge>=previous:edge<=previous,"desktop band moves outwards without shrinking in place");
+            previous=edge;
+            if (step==100) ok &= expect(near(edgeOpacity(frame.viewport,tape.window.x+1,tape.window.y+120),1) &&
+                near(edgeOpacity(frame.viewport,tape.window.x+tape.window.width-1,tape.window.y+120),1),"finished reveal is clear across the whole window");
+        }
     }
     // The card's outside fade stays at its original x as the window unfolds.
     // Vertical motion and the opposite (desktop seam) edge keep their path.
@@ -558,6 +656,14 @@ int main() {
     ok &= expect(near(drop.first, -1250) && near(drop.second, 640), "drop focal point maps both axes across monitor offsets and reserved areas");
     const auto shiftedDrop = mapDropPoint({-1900, 150, 200, 100}, dropDesktop, -1850, 225);
     ok &= expect(near(drop.first, shiftedDrop.first) && near(drop.second, shiftedDrop.second), "animated or scrolled card position does not change the relative drop location");
+    // 21fdcdd regression: the layout's top bar/gaps are not a render crop.
+    for (const double top : {0.0,80.0,160.0}) {
+        const hymission::Rect tile{-1280,40,640,1080};
+        const hymission::Rect work{-1100,40+top,460,1080-top-24};
+        const auto clip=nativeTileClip(tile,work);
+        ok &= expect(near(clip.x,work.x) && near(clip.width,work.width) && near(clip.y,tile.y) && near(clip.height,tile.height),
+            "tile crop preserves native vertical decorations across reserved top/bottom and monitor offsets");
+    }
     const hymission::Rect outputBase{-1920, 40, 1920, 1040};
     const auto leftBand = sidebarArea(outputBase, small, false);
     const auto rightBand = sidebarArea(outputBase, small, true);
@@ -585,5 +691,44 @@ int main() {
     const auto leaving = transitionBox(desktopWindow, hiddenCard, 1);
     ok &= expect(near(entering.x, -180) && near(entering.width, 160) && near(entered.width, 1280) &&
         near(leaving.x, -180) && near(leaving.width, 160), "hidden sidebar endpoints retain thumbnail size and remain outside the output");
+    {
+        // Sidebar drag reorder: numbers stay with the slots, contents rotate.
+        const std::vector<double> centres{100, 220, 340, 460};
+        ok &= expect(reorderTarget(centres, 330, std::nullopt, 30) == 2, "a lifted card previews at the nearest slot");
+        ok &= expect(reorderTarget(centres, 285, 1, 30) == 1, "hysteresis keeps the current slot just past the midline");
+        ok &= expect(reorderTarget(centres, 310, 1, 30) == 2, "a clearly closer slot takes over");
+        ok &= expect(reorderTarget(centres, -50, 3, 30) == 0 && reorderTarget(centres, 900, 0, 30) == 3, "targets clamp to the first and last slot");
+        const std::vector<std::size_t> up{1, 2, 3, 0};
+        for (std::size_t i = 0; i < 4; ++i)
+            ok &= expect(reorderSlot(i, 3, 0) == up[i], "moving the last card to the top shifts the others down one slot");
+        ok &= expect(reorderSlot(0, 0, 2) == 2 && reorderSlot(1, 0, 2) == 0 && reorderSlot(2, 0, 2) == 1 && reorderSlot(3, 0, 2) == 3,
+            "moving down shifts the cards in between up and leaves the rest");
+        ok &= expect(reorderSlot(1, 2, 2) == 1, "a preview at the source slot moves nothing");
+
+        // [1 term, 2 web, 3 code, 4 empty, 5 chat]
+        const std::vector<int64_t> ids{1, 2, 3, 4, 5};
+        const std::vector<bool> occupied{true, true, true, false, true};
+        const auto top = reorderSteps(ids, occupied, 2, 0, 6);
+        ok &= expect(top == std::vector<WorkspaceIdChange>{{3, 6}, {2, 3}, {1, 2}, {6, 1}}, "moving 3 to the top borrows a free id and shifts 2 and 1");
+        ok &= expect(reorderMapping(top) == std::vector<WorkspaceIdChange>{{3, 1}, {2, 3}, {1, 2}}, "the mapping lists each workspace's final id once");
+        const auto intoEmpty = reorderSteps(ids, occupied, 4, 3, 6);
+        ok &= expect(intoEmpty == std::vector<WorkspaceIdChange>{{5, 6}, {6, 4}} && reorderMapping(intoEmpty) == std::vector<WorkspaceIdChange>{{5, 4}},
+            "dropping onto an empty slot renumbers only the moved workspace");
+        const auto down = reorderSteps(ids, occupied, 0, 4, 6);
+        ok &= expect(down == std::vector<WorkspaceIdChange>{{1, 6}, {2, 1}, {3, 2}, {5, 4}, {6, 5}}, "moving down skips empty slots and keeps every destination free");
+        // Hidden active workspace 3 is not a card: the sidebar slots are 1, 2, 4, 5.
+        const auto gap = reorderSteps({1, 2, 4, 5}, {true, true, true, true}, 3, 0, 6);
+        ok &= expect(reorderMapping(gap) == std::vector<WorkspaceIdChange>{{5, 1}, {4, 5}, {2, 4}, {1, 2}}, "numbers outside the sidebar sequence are never touched");
+        ok &= expect(reorderSteps(ids, occupied, 2, 2, 6).empty() && reorderSteps(ids, occupied, 3, 0, 6).empty() && reorderSteps(ids, occupied, 0, 2, 5).empty() &&
+            reorderSteps(ids, occupied, 0, 9, 6).empty(), "no-op, empty source, used temporary id and out-of-range moves produce no steps");
+        // Every step's destination is free when it runs.
+        std::vector<int64_t> used{1, 2, 3, 5};
+        bool free = true;
+        for (const auto& step : down) {
+            free &= std::ranges::find(used, step.to) == used.end();
+            std::ranges::replace(used, step.from, step.to);
+        }
+        ok &= expect(free && std::ranges::is_permutation(used, std::vector<int64_t>{1, 2, 4, 5}), "steps never collide and end on the original id set");
+    }
     return ok ? 0 : 1;
 }

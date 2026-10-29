@@ -2,6 +2,9 @@
 #include <adwaita.h>
 #include <gtk4-layer-shell.h>
 
+#include <algorithm>
+#include <cmath>
+#include <sstream>
 #include <array>
 #include <cstring>
 #include <string>
@@ -19,7 +22,47 @@ struct AppState {
     std::string    query;
     std::string    preedit;
     std::size_t    cursor = 0;
+    bool           placed = false;
+    double         x = 0, y = 0, width = 0, height = 0;
+    std::string    monitor;
 };
+
+void positionWindow(AppState* state, int width, int height) {
+    if (!state->placed || !state->window)
+        return;
+    const int left = std::lround(state->x + std::max(0.0, (state->width - width) / 2.0));
+    const int top = std::lround(state->y + std::max(0.0, (state->height - height) / 2.0));
+    if (gtk_layer_get_margin(state->window, GTK_LAYER_SHELL_EDGE_LEFT) != left)
+        gtk_layer_set_margin(state->window, GTK_LAYER_SHELL_EDGE_LEFT, left);
+    if (gtk_layer_get_margin(state->window, GTK_LAYER_SHELL_EDGE_TOP) != top)
+        gtk_layer_set_margin(state->window, GTK_LAYER_SHELL_EDGE_TOP, top);
+}
+
+void readPlacement(AppState* state, const std::string& packet) {
+    std::istringstream input(packet);
+    double x, y, width, height;
+    if (!(input >> x >> y >> width >> height) || !std::isfinite(x) || !std::isfinite(y) ||
+        !std::isfinite(width) || !std::isfinite(height) || width <= 0 || height < 0)
+        return;
+    state->placed = true;
+    state->x = x; state->y = y; state->width = width; state->height = height;
+    std::getline(input >> std::ws, state->monitor);
+    if (!state->window)
+        return;
+    // Placement already includes compositor reserved areas. Use output-relative
+    // margins so layer-shell does not add the same exclusive zones a second time.
+    gtk_layer_set_exclusive_zone(state->window, -1);
+    GListModel* monitors = gdk_display_get_monitors(gtk_widget_get_display(GTK_WIDGET(state->window)));
+    for (guint i = 0; i < g_list_model_get_n_items(monitors); ++i) {
+        auto* monitor = GDK_MONITOR(g_list_model_get_item(monitors, i));
+        const char* connector = gdk_monitor_get_connector(monitor);
+        if (connector && state->monitor == connector)
+            gtk_layer_set_monitor(state->window, monitor);
+        g_object_unref(monitor);
+    }
+    gtk_layer_set_anchor(state->window, GTK_LAYER_SHELL_EDGE_LEFT, TRUE);
+    positionWindow(state, gtk_widget_get_width(GTK_WIDGET(state->window)), gtk_widget_get_height(GTK_WIDGET(state->window)));
+}
 
 bool sendPacket(char type, const std::string& payload = {}) {
     std::string packet(1, type);
@@ -134,12 +177,14 @@ gboolean ipcReady(GIOChannel* channel, GIOCondition condition, gpointer data) {
         g_application_quit(g_application_get_default());
         return G_SOURCE_REMOVE;
     }
-    std::array<char, 256> packet{};
+    std::array<char, 4096> packet{};
     const ssize_t size = recv(g_io_channel_unix_get_fd(channel), packet.data(), packet.size() - 1, 0);
     if (size <= 0) {
         g_application_quit(g_application_get_default());
         return G_SOURCE_REMOVE;
     }
+    if (packet[0] == 'G')
+        readPlacement(state, std::string(packet.data() + 1, static_cast<std::size_t>(size - 1)));
     if (packet[0] == 'C')
         gtk_label_set_text(state->countLabel, (std::string(packet.data() + 1, static_cast<std::size_t>(size - 1)) + " results").c_str());
     return G_SOURCE_CONTINUE;
@@ -169,9 +214,12 @@ void activate(GtkApplication* app, gpointer data) {
 
     auto* provider = gtk_css_provider_new();
     gtk_css_provider_load_from_string(provider,
-        "window.hymission-search { background: transparent; box-shadow: none; }"
-        ".searchbar { background: @window_bg_color; color: @window_fg_color; border-radius: 8px; padding: 12px 16px; margin: 12px; box-shadow: 0 3px 10px alpha(black,0.18); }"
-        ".searchbar label:last-child { opacity: 0.62; }");
+        // The surface is the search box itself: edge-to-edge and opaque even when a
+        // theme makes window_bg_color translucent, so blur rules have nothing to frost.
+        // GTK before 4.16 ignores the relative color and keeps the theme color.
+        "window.hymission-search { background: @window_bg_color; background: rgb(from @window_bg_color r g b); border-radius: 0; box-shadow: none; }"
+        ".searchbar { background: transparent; color: @window_fg_color; padding: 12px 16px; margin: 0; }"
+        ".searchbar label:last-child { color: mix(@window_fg_color, @window_bg_color, 0.38); color: rgb(from mix(@window_fg_color, @window_bg_color, 0.38) r g b); }");
     gtk_style_context_add_provider_for_display(gtk_widget_get_display(GTK_WIDGET(state->window)), GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(provider);
 
@@ -187,6 +235,21 @@ void activate(GtkApplication* app, gpointer data) {
     gtk_widget_set_focusable(GTK_WIDGET(state->window), TRUE);
     // GTK can skip the initial buffer for a fully transparent window, leaving
     // layer-shell unmapped and unable to receive the key that would reveal it.
+    if (state->placed) {
+        std::ostringstream placement;
+        placement << state->x << ' ' << state->y << ' ' << state->width << ' ' << state->height << ' ' << state->monitor;
+        readPlacement(state, placement.str());
+        int width = 0, height = 0;
+        gtk_widget_measure(GTK_WIDGET(state->window), GTK_ORIENTATION_HORIZONTAL, -1, nullptr, &width, nullptr, nullptr);
+        gtk_widget_measure(GTK_WIDGET(state->window), GTK_ORIENTATION_VERTICAL, width, nullptr, &height, nullptr, nullptr);
+        positionWindow(state, width, height);
+    }
+    g_signal_connect(state->window, "realize", G_CALLBACK(+[](GtkWidget* widget, gpointer data) {
+        auto* surface = gtk_native_get_surface(GTK_NATIVE(widget));
+        g_signal_connect(surface, "layout", G_CALLBACK(+[](GdkSurface*, int width, int height, gpointer data) {
+            positionWindow(static_cast<AppState*>(data), width, height);
+        }), data);
+    }), state);
     gtk_window_present(state->window);
     gtk_widget_grab_focus(GTK_WIDGET(state->window));
 
@@ -200,9 +263,11 @@ void activate(GtkApplication* app, gpointer data) {
 
 int main(int argc, char** argv) {
     AppState state;
+    if (argc == 2)
+        readPlacement(&state, argv[1]);
     GtkApplication* app = GTK_APPLICATION(adw_application_new("io.github.wilf.hymission.search", G_APPLICATION_NON_UNIQUE));
     g_signal_connect(app, "activate", G_CALLBACK(activate), &state);
-    const int status = g_application_run(G_APPLICATION(app), argc, argv);
+    const int status = g_application_run(G_APPLICATION(app), 1, argv);
     if (state.im) {
         gtk_im_context_focus_out(state.im);
         g_object_unref(state.im);

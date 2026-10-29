@@ -1,12 +1,15 @@
 #include <memory>
+#include <stdexcept>
 #include <sstream>
 #include <string>
 
+#include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/config/values/types/ColorValue.hpp>
 #include <hyprland/src/config/values/types/FloatValue.hpp>
 #include <hyprland/src/config/values/types/IntValue.hpp>
 #include <hyprland/src/config/values/types/StringValue.hpp>
+#include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 
@@ -18,16 +21,26 @@ extern "C" {
 #include "state_json.hpp"
 #include "overview_controller.hpp"
 #include "stage_controller.hpp"
+#include "tiles_controller.hpp"
+#include "workspace_key.hpp"
 #include "dispatcher_names.hpp"
 
 inline HANDLE g_pluginHandle = nullptr;
 inline std::unique_ptr<hymission::OverviewController> g_overviewController;
 inline std::unique_ptr<hymission::StageController> g_stageController;
-inline SP<SHyprCtlCommand> g_stageStateCommand;
-inline SP<SHyprCtlCommand> g_stageRegionCommand;
-inline SP<SHyprCtlCommand> g_overviewStateCommand;
-inline SP<SHyprCtlCommand> g_rawWindowRenderCommand;
-inline SP<SHyprCtlCommand> g_captureInputCommand;
+inline std::unique_ptr<hymission::TilesController> g_tilesController;
+inline SP<IPC::Socket1::SCommand> g_tilesStateCommand;
+inline SP<IPC::Socket1::SCommand> g_stageStateCommand;
+inline SP<IPC::Socket1::SCommand> g_stageRegionCommand;
+inline SP<IPC::Socket1::SCommand> g_overviewStateCommand;
+inline SP<IPC::Socket1::SCommand> g_rawWindowRenderCommand;
+inline SP<IPC::Socket1::SCommand> g_captureInputCommand;
+inline hymission::OwnerBinding<WP<Config::IConfigManager>> g_configManager;
+inline CHyprSignalListener g_configPreReload;
+
+wl_event_loop* hymission::hyprlandEventLoop() {
+    return g_pCompositor ? g_pCompositor->m_wlEventLoop : nullptr;
+}
 
 namespace {
 bool addConfigValue(SP<Config::Values::IValue> value) {
@@ -60,6 +73,14 @@ bool addStringConfig(const char* name, Config::STRING fallback) {
     return addConfigValue(makeShared<Config::Values::CStringValue>(name, "", fallback));
 }
 
+SDispatchResult dispatchTile(const std::string& action, const std::string& args) {
+    return g_tilesController ? g_tilesController->dispatch(action, args) : SDispatchResult{.success=false,.error="tiles controller unavailable"};
+}
+SDispatchResult dispatch_tile_add(const std::string& args) { return dispatchTile("tile_add", args); }
+SDispatchResult dispatch_tile_resize(const std::string& args) { return dispatchTile("tile_resize", args); }
+SDispatchResult dispatch_tile_remove(const std::string& args) { return dispatchTile("tile_remove", args); }
+SDispatchResult dispatch_tile_focus(const std::string& args) { return dispatchTile("tile_focus", args); }
+SDispatchResult dispatch_tile_move_window(const std::string& args) { return dispatchTile("tile_move_window", args); }
 SDispatchResult dispatchToggle(const std::string& args) {
     return g_overviewController ? g_overviewController->toggle(args) : SDispatchResult{.success = false, .error = "overview controller unavailable"};
 }
@@ -92,21 +113,23 @@ SDispatchResult dispatchDebugCurrentLayout(const std::string&) {
     return g_overviewController ? g_overviewController->debugCurrentLayout() : SDispatchResult{.success = false, .error = "overview controller unavailable"};
 }
 
-std::string hyprctlOverviewState(eHyprCtlOutputFormat, std::string) {
+IPC::Socket1::SResponse hyprctlOverviewState(const IPC::Socket1::SRequest&) {
     if (g_overviewController)
         return g_overviewController->overviewStateJson();
 
     return "{\"version\":1,\"active\":false,\"windows\":[]}\n";
 }
 
-std::string hyprctlRawWindowRender(eHyprCtlOutputFormat, std::string args) {
+IPC::Socket1::SResponse hyprctlRawWindowRender(const IPC::Socket1::SRequest& request) {
+    const auto& args = request.command;
     if (g_overviewController)
         return g_overviewController->handleRawWindowRenderCommand(args);
 
     return "error: overview controller unavailable\n";
 }
 
-std::string hyprctlCaptureInput(eHyprCtlOutputFormat, std::string args) {
+IPC::Socket1::SResponse hyprctlCaptureInput(const IPC::Socket1::SRequest& request) {
+    const auto& args = request.command;
     if (g_overviewController)
         return g_overviewController->handleCaptureInputCommand(args);
 
@@ -234,10 +257,50 @@ int luaStageToggle(lua_State* L) {
     return luaDispatchResult(L, dispatchStageToggle(""));
 }
 
+void pushJson(lua_State* L, const nlohmann::json& j) {
+    if (j.is_null()) lua_pushnil(L);
+    else if (j.is_boolean()) lua_pushboolean(L, j.get<bool>());
+    else if (j.is_number()) lua_pushnumber(L, j.get<double>());
+    else if (j.is_string()) { const auto& v=j.get_ref<const std::string&>(); lua_pushlstring(L,v.data(),v.size()); }
+    else {
+        lua_createtable(L,j.is_array()?j.size():0,j.is_object()?j.size():0);
+        if (j.is_array()) { int i=1; for (const auto& v:j) { pushJson(L,v); lua_rawseti(L,-2,i++); } }
+        else for (const auto& [k,v]:j.items()) { pushJson(L,v); lua_setfield(L,-2,k.c_str()); }
+    }
+}
+int luaTilesState(lua_State* L) {
+    pushJson(L, nlohmann::json::parse(g_tilesController ? g_tilesController->stateJson() : "{}"));
+    return 1;
+}
+int luaTile(lua_State* L, const char* action) {
+    std::string args;
+    if (lua_gettop(L) && !lua_isnil(L,1)) {
+        if (lua_isstring(L,1)) args=luaL_checkstring(L,1);
+        else {
+            luaL_checktype(L,1,LUA_TTABLE);
+            lua_pushnil(L);
+            while (lua_next(L,1)) {
+                if (lua_type(L,-2)!=LUA_TSTRING || (!lua_isstring(L,-1) && !lua_isnumber(L,-1))) return luaL_error(L,"tile fields must be strings or numbers");
+                const char* key=lua_tostring(L,-2);
+                const char* val=lua_tostring(L,-1);
+                if (std::string(val).find_first_of(" \t\r\n")!=std::string::npos) return luaL_error(L,"tile field contains whitespace");
+                args+=std::string(key)+"="+val+" "; lua_pop(L,1);
+            }
+        }
+    }
+    return luaDispatchResult(L,dispatchTile(action,args));
+}
+int lua_tile_add(lua_State* L) { return luaTile(L,"tile_add"); }
+int lua_tile_resize(lua_State* L) { return luaTile(L,"tile_resize"); }
+int lua_tile_remove(lua_State* L) { return luaTile(L,"tile_remove"); }
+int lua_tile_focus(lua_State* L) { return luaTile(L,"tile_focus"); }
+int lua_tile_move_window(lua_State* L) { return luaTile(L,"tile_move_window"); }
 int luaDispatch(lua_State* L) {
     const std::string dispatcher = normalizeHymissionDispatcher(luaL_checkstring(L, 1));
     const std::string args       = luaOptionalString(L, 2);
 
+    if (dispatcher.starts_with("hymission:tile_"))
+        return luaDispatchResult(L, dispatchTile(dispatcher.substr(10), args));
     if (dispatcher == "hymission:stage_open")
         return luaDispatchResult(L, dispatchStageOpen(args));
     if (dispatcher == "hymission:stage_close")
@@ -330,13 +393,7 @@ int luaGesture(lua_State* L) {
 }
 } // namespace
 
-APICALL EXPORT std::string PLUGIN_API_VERSION() {
-    return HYPRLAND_API_VERSION;
-}
-
-APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
-    g_pluginHandle = handle;
-
+static void registerConfigValues() {
 #define INT_CONF(name, value) addIntConfig("plugin:hymission:" name, Config::INTEGER{value})
 #define FLOAT_CONF(name, value) addFloatConfig("plugin:hymission:" name, Config::FLOAT{value})
 #define COLOR_CONF(name, value) addColorConfig("plugin:hymission:" name, Config::INTEGER{value})
@@ -354,7 +411,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     FLOAT_CONF("max_preview_scale", 0.95F);
     FLOAT_CONF("workspace_overview_max_preview_scale", 0.95F);
     FLOAT_CONF("min_slot_scale", 0.10F);
-    FLOAT_CONF("natural_scale_flex", 0.22F);
+    FLOAT_CONF("natural_scale_flex", 0.22F); // Deprecated no-op; accept existing configurations.
     FLOAT_CONF("layout_scale_weight", 1.0F);
     FLOAT_CONF("layout_space_weight", 0.10F);
     // Deprecated compatibility sink. It remains registered to avoid a config
@@ -370,7 +427,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("niri_mode", 0);
     FLOAT_CONF("niri_scroll_pixels_per_delta", 1.0F);
     FLOAT_CONF("niri_workspace_scale", 1.0F);
-    INT_CONF("niri_scrolling_preview_gap", 0);
+    INT_CONF("niri_scrolling_preview_gap", 24);
     INT_CONF("gesture_invert_vertical", 0);
     INT_CONF("one_workspace_per_row", 0);
     INT_CONF("only_active_workspace", 0);
@@ -385,6 +442,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("stage_card_max_width", 0);
     FLOAT_CONF("stage_window_rounding", -1.0);
     INT_CONF("stage_window_decorations", 0);
+    INT_CONF("tiles_enabled", 0);
+    INT_CONF("tile_min_width", 240);
+    INT_CONF("tile_divider_hit_width", 8);
     INT_CONF("stage_scrolling_desktop_edge_width", 32);
     INT_CONF("stage_scrolling_preview_edge_width", 16);
     INT_CONF("stage_padding", -1);
@@ -399,6 +459,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("stage_active_glow", 0);
     INT_CONF("stage_even_spacing", 0);
     INT_CONF("stage_drop_follow", 0);
+    INT_CONF("stage_drag_reorder", 1);
     INT_CONF("stage_click_hover_recenter_guard", 1);
     INT_CONF("stage_maximize_cover_strip", 0);
     INT_CONF("stage_refresh_ms", 16);
@@ -428,9 +489,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("close_button_size", 18);
     INT_CONF("close_button_inset", 0);
     FLOAT_CONF("focus_hover_thickness", 2.0F);
-    FLOAT_CONF("focus_selected_thickness", 4.0F);
+    FLOAT_CONF("focus_selected_thickness", 3.0F);
     INT_CONF("backdrop_blur", 0);
-    COLOR_CONF("backdrop_color", 0x00000000LL);
+    COLOR_CONF("backdrop_color", 0x26000000LL);
     COLOR_CONF("workspace_strip_background_color", 0x3d081224LL);
     COLOR_CONF("workspace_strip_inactive_color", 0x2e0d1726LL);
     COLOR_CONF("workspace_strip_active_color", 0x3d1a2e52LL);
@@ -449,7 +510,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("debug_logs", 0);
     INT_CONF("gesture_close_restores_focus", 1);
     INT_CONF("debug_surface_logs", 0);
-    STRING_CONF("layout_engine", "grid");
+    STRING_CONF("layout_engine", "natural");
     STRING_CONF("layout_engine_forceall", "");
     STRING_CONF("layout_engine_all", "");
     STRING_CONF("layout_engine_onlycurrentworkspace", "");
@@ -460,9 +521,65 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 #undef COLOR_CONF
 #undef FLOAT_CONF
 #undef INT_CONF
+}
+
+static void registerLuaFunctions() {
+    if (Config::mgr() && Config::mgr()->type() == Config::CONFIG_LUA) {
+        const auto registerLuaFunction = [&](const char* name, PLUGIN_LUA_FN fn) {
+            if (!HyprlandAPI::addLuaFunction(g_pluginHandle, "hymission", name, fn)) {
+                HyprlandAPI::addNotification(
+                    g_pluginHandle,
+                    std::string("[hymission] failed to register lua function hl.plugin.hymission.") + name,
+                    CHyprColor(1.0, 0.2, 0.2, 1.0),
+                    5000);
+            }
+        };
+
+        registerLuaFunction("tile_add", lua_tile_add);
+        registerLuaFunction("tile_resize", lua_tile_resize);
+        registerLuaFunction("tile_remove", lua_tile_remove);
+        registerLuaFunction("tile_focus", lua_tile_focus);
+        registerLuaFunction("tile_move_window", lua_tile_move_window);
+        registerLuaFunction("tiles_state", luaTilesState);
+        registerLuaFunction("stage_toggle", luaStageToggle);
+        registerLuaFunction("stage_open", luaStageOpen);
+        registerLuaFunction("stage_close", luaStageClose);
+        registerLuaFunction("stage_region", luaStageRegion);
+        registerLuaFunction("toggle", luaToggle);
+        registerLuaFunction("open", luaOpen);
+        registerLuaFunction("close", luaClose);
+        registerLuaFunction("fullscreen", luaFullscreen);
+        registerLuaFunction("debug_current_layout", luaDebugCurrentLayout);
+        registerLuaFunction("dispatch", luaDispatch);
+        registerLuaFunction("gesture", luaGesture);
+    }
+}
+
+APICALL EXPORT std::string PLUGIN_API_VERSION() {
+    return HYPRLAND_API_VERSION;
+}
+
+APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+    g_pluginHandle = handle;
+
+    // PLUGIN_API_VERSION only names the generic plugin API. Hooks and inline
+    // headers depend on the exact compositor commit and its library versions;
+    // same-named tags of different trees (e.g. the fork and upstream v0.57.0)
+    // differ in layout. Refuse to load, before any hook, unless the headers
+    // this build used match the running compositor.
+    const std::string serverHash = __hyprland_api_get_hash();
+    const std::string clientHash = __hyprland_api_get_client_hash();
+    if (serverHash != clientHash) {
+        HyprlandAPI::addNotification(handle, "[hymission] built against different Hyprland headers; not loading. Rebuild the plugin for this compositor.",
+                                     CHyprColor(1.0, 0.2, 0.2, 1.0), 10000);
+        throw std::runtime_error("hymission: Hyprland header hash " + clientHash + " does not match running " + serverHash);
+    }
+
+    registerConfigValues();
 
     g_overviewController = std::make_unique<hymission::OverviewController>(g_pluginHandle);
-    if (!g_overviewController->initialize()) {
+    const bool overviewReady=g_overviewController->initialize();
+    if (!overviewReady) {
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to initialize overview controller", CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
     }
 
@@ -478,15 +595,26 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         return g_overviewController && g_overviewController->captureInputSuppressed();
     });
     g_stageController->initialize();
-    g_stageStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
+    g_tilesController = std::make_unique<hymission::TilesController>(g_pluginHandle, [] { return g_overviewController && g_overviewController->suspendsStage(); }, [] {
+        if (g_overviewController) g_overviewController->handleTilesChange();
+        if (g_stageController) g_stageController->handleTilesChange();
+    }, [] { return g_overviewController && g_overviewController->workspaceScoped(); });
+    if (!overviewReady) g_tilesController->fail("overview required hooks are unavailable");
+    g_tilesController->initialize();
+    g_tilesStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, IPC::Socket1::SCommand{
+        .name="hymission-tiles-state", .match=IPC::Socket1::COMMAND_MATCH_EXACT,
+        .handler=[](const IPC::Socket1::SRequest&) -> IPC::Socket1::SResponse { return g_tilesController ? g_tilesController->stateJson() : "{}"; },
+    });
+    g_stageStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, IPC::Socket1::SCommand{
         .name = "hymission-stage-state",
-        .exact = true,
-        .fn = [](eHyprCtlOutputFormat, std::string) { return g_stageController ? g_stageController->stateJson() : "{\"enabled\":false}\n"; },
+        .match = IPC::Socket1::COMMAND_MATCH_EXACT,
+        .handler = [](const IPC::Socket1::SRequest&) -> IPC::Socket1::SResponse { return g_stageController ? g_stageController->stateJson() : "{\"enabled\":false}\n"; },
     });
 
-    g_stageRegionCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
-        .name = "hymission-stage-region", .exact = false,
-        .fn = [](eHyprCtlOutputFormat, std::string args) {
+    g_stageRegionCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, IPC::Socket1::SCommand{
+        .name = "hymission-stage-region", .match = IPC::Socket1::COMMAND_MATCH_PREFIX,
+        .handler = [](const IPC::Socket1::SRequest& request) -> IPC::Socket1::SResponse {
+            const auto& args = request.command;
             const auto split = args.find(' ');
             const auto r = split != std::string::npos && g_stageController ?
                 g_stageController->holdRegion(args.substr(split + 1)) : std::nullopt;
@@ -506,6 +634,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             }
         };
 
+        registerDispatcher("hymission:tile_add", dispatch_tile_add);
+        registerDispatcher("hymission:tile_resize", dispatch_tile_resize);
+        registerDispatcher("hymission:tile_remove", dispatch_tile_remove);
+        registerDispatcher("hymission:tile_focus", dispatch_tile_focus);
+        registerDispatcher("hymission:tile_move_window", dispatch_tile_move_window);
         registerDispatcher("hymission:stage_toggle", dispatchStageToggle);
         registerDispatcher("hymission:stage_open", dispatchStageOpen);
         registerDispatcher("hymission:stage_close", dispatchStageClose);
@@ -515,56 +648,45 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         registerDispatcher("hymission:debug_current_layout", dispatchDebugCurrentLayout);
     }
 
-    g_overviewStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
+    g_overviewStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, IPC::Socket1::SCommand{
         .name = "hymission-overview-state",
-        .exact = true,
-        .fn = hyprctlOverviewState,
+        .match = IPC::Socket1::COMMAND_MATCH_EXACT,
+        .handler = hyprctlOverviewState,
     });
     if (!g_overviewStateCommand)
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to register hyprctl command hymission-overview-state",
                                      CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
 
-    g_rawWindowRenderCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
+    g_rawWindowRenderCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, IPC::Socket1::SCommand{
         .name = "hymission-raw-window-render",
-        .exact = false,
-        .fn = hyprctlRawWindowRender,
+        .match = IPC::Socket1::COMMAND_MATCH_PREFIX,
+        .handler = hyprctlRawWindowRender,
     });
     if (!g_rawWindowRenderCommand)
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to register hyprctl command hymission-raw-window-render",
                                      CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
 
-    g_captureInputCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
+    g_captureInputCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, IPC::Socket1::SCommand{
         .name = "hymission-capture-input",
-        .exact = false,
-        .fn = hyprctlCaptureInput,
+        .match = IPC::Socket1::COMMAND_MATCH_PREFIX,
+        .handler = hyprctlCaptureInput,
     });
     if (!g_captureInputCommand)
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to register hyprctl command hymission-capture-input",
                                      CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
 
-    if (Config::mgr() && Config::mgr()->type() == Config::CONFIG_LUA) {
-        const auto registerLuaFunction = [&](const char* name, PLUGIN_LUA_FN fn) {
-            if (!HyprlandAPI::addLuaFunction(g_pluginHandle, "hymission", name, fn)) {
-                HyprlandAPI::addNotification(
-                    g_pluginHandle,
-                    std::string("[hymission] failed to register lua function hl.plugin.hymission.") + name,
-                    CHyprColor(1.0, 0.2, 0.2, 1.0),
-                    5000);
-            }
-        };
-
-        registerLuaFunction("stage_toggle", luaStageToggle);
-        registerLuaFunction("stage_open", luaStageOpen);
-        registerLuaFunction("stage_close", luaStageClose);
-        registerLuaFunction("stage_region", luaStageRegion);
-        registerLuaFunction("toggle", luaToggle);
-        registerLuaFunction("open", luaOpen);
-        registerLuaFunction("close", luaClose);
-        registerLuaFunction("fullscreen", luaFullscreen);
-        registerLuaFunction("debug_current_layout", luaDebugCurrentLayout);
-        registerLuaFunction("dispatch", luaDispatch);
-        registerLuaFunction("gesture", luaGesture);
-    }
+    registerLuaFunctions();
+    // A full-reset reload replaces the config manager together with its Lua
+    // state, so the values and hl.plugin.hymission.* registered with the old
+    // manager are gone. Register them again before the new manager parses the
+    // config; an ordinary reload keeps the manager and needs nothing.
+    g_configManager.rebind(Config::mgr());
+    g_configPreReload = Event::bus()->m_events.config.preReload.listen([] {
+        if (g_configManager.rebind(Config::mgr())) {
+            registerConfigValues();
+            registerLuaFunctions();
+        }
+    });
 
     if (!HyprlandAPI::reloadConfig()) {
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] reloadConfig failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
@@ -574,16 +696,17 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         .name = "hymission",
         .description = "Mission Control style overview prototype",
         .author = "wilf",
-        .version = "0.11.0",
+        .version = "0.12.0",
     };
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    g_configPreReload.reset();
     // The pass survives endRender until the next beginRender. Its smart-pointer
     // deleters can live in this DSO even for native pass element types. Destroy
     // them before dlclose, while both the code and controller callbacks exist.
     if (g_pHyprRenderer)
-        g_pHyprRenderer->m_renderPass.clear();
+        g_pHyprRenderer->context().m_pass.clear();
     if (g_stageRegionCommand) {
         HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_stageRegionCommand);
         g_stageRegionCommand.reset();
@@ -592,6 +715,8 @@ APICALL EXPORT void PLUGIN_EXIT() {
         HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_stageStateCommand);
         g_stageStateCommand.reset();
     }
+    if (g_tilesStateCommand) { HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle,g_tilesStateCommand); g_tilesStateCommand.reset(); }
+    g_tilesController.reset();
     g_stageController.reset();
     if (g_overviewStateCommand) {
         HyprlandAPI::unregisterHyprCtlCommand(g_pluginHandle, g_overviewStateCommand);
@@ -607,5 +732,8 @@ APICALL EXPORT void PLUGIN_EXIT() {
     }
     g_overviewController.reset();
     if (g_pHyprRenderer)
-        g_pHyprRenderer->m_renderPass.clear();
+        g_pHyprRenderer->context().m_pass.clear();
+    // Last, after every controller: no queued readiness callback (plugin code)
+    // may stay queued past dlclose.
+    hymission::finishWorkspaceReadiness();
 }
