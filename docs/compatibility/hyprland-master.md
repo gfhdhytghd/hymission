@@ -1,15 +1,20 @@
-# Hyprland development compatibility baseline
+# Hyprland compatibility baseline
 
-- Development line: `hyprland-master`, adapted on `port/hyprland-0.57`.
-- Baseline: the project's fork `gfhdhytghd/Hyprland`, branch `main` = tag
-  `v0.57.0` = `f6725e43eed50eaa061aa25fe7c9f8cdc9d355e2` (merges upstream
-  `hyprwm/Hyprland` `main` through `7a5e469c7` plus fork changes). Upstream's
-  own `v0.57.0` is a different commit (`0aa6745f…`); its headers and binaries
-  are not ABI evidence for the fork (for example `SCMSettings` differs in size).
-- Aquamarine: fork `gfhdhytghd/aquamarine` `master` = `4abfcabbf3908cabccead39e5b5b8361dbf2546a`.
-- Date: 2026-10-28.
-- Status: **PASS (offline) — exact-header build, hook audit against the exact
-  binary, Nix build; no runtime acceptance.**
+- `master`: official `hyprwm/Hyprland` release `v0.57.0` =
+  `0aa6745f705f2c4b0a5004eb019ef76e5bbdb426`, aquamarine `hyprwm`
+  `52ea11f06dd492f34b3cc0b39a9c805beecafcff`, hyprutils `0d13d5a` (0.14.3),
+  hyprland-protocols `044a434`. The flake pins this tag.
+- `hyprland-master`: official `hyprwm/Hyprland` `main`; see that branch's copy of
+  this record for its tested revision.
+- Fork: the project's `gfhdhytghd/Hyprland` v0.57.0 (`f6725e43`, aquamarine
+  `4abfcab`) is a different commit with a different ABI (for example
+  `SCMSettings` differs in size). The same plugin source builds and passes the
+  checks below against it too, so there is no `my-hyprland-master` branch; open
+  one only when the fork needs plugin source changes the official tree does not.
+- Date: 2026-10-29.
+- Status: **PASS (offline) on official v0.57.0 — exact-header build, CTest with
+  the matching binary, hook audit, Nix lock evaluation; nested compositor checks
+  only, no live-session acceptance.**
 
 ## API and ABI changes handled
 
@@ -19,7 +24,7 @@
 | New workspaces must be marked `ready()` by their creator after setup; `CState::create()` does not | Every plugin creation goes through `createWorkspace()` / `createWorkspaceForKey()` (`src/workspace_key.hpp`), which marks it ready on the next event-loop turn through an owned `doLaterLock`; `PLUGIN_EXIT` makes pending ones ready and cancels the queued callbacks. |
 | `IHyprRenderer::renderLayer(..., popups, lockscreen, workspaceScene)` | Overview and tiles thunks take and forward `workspaceScene`; the two background/bottom-layer snapshot calls pass `false`. Pre-existing mismatch: upstream `a1c2428` already had this signature. |
 | `CPlacementController::moveWorkspaceToMonitor(..., noWarpCursor, carryFocus, replace)` | The tiles thunk forwards `replace`; its own old-tile replacement only runs when `replace` is true. The exact tiles symbol string was updated (it would otherwise disable tiles). |
-| Fork legacy GLES2 renderer (`m_eglContextVersion == EGL_CONTEXT_GLES_2_0`) | Stage soft edges fall back to the hard viewport clip, the overview Gaussian blur and framebuffer blits are skipped, before any GLES3 state is touched. Not run on a GLES2 compositor. |
+| Legacy GLES2 renderer (`m_eglContextVersion == EGL_CONTEXT_GLES_2_0`) | Stage soft edges fall back to the hard viewport clip, the overview Gaussian blur and framebuffer blits are skipped, before any GLES3 state is touched. Not run on a GLES2 compositor. |
 
 Guards added so the next native signature change fails at build or load time:
 
@@ -37,37 +42,34 @@ Guards added so the next native signature change fails at build or load time:
 
 ## Validation
 
-Exact headers: fork `f6725e43` (`version.h` `v0.57.0`), aquamarine `4abfcab`,
-hyprutils `0d13d5a` (0.14.3), hyprland-protocols `044a434` (0.8.0), from an
-isolated prefix (`pkg-config hyprland` = 0.57.0). Compiler dependency files of
-every object contain no `/usr/include/hyprland`, `/usr/include/aquamarine` or
-`/usr/include/hyprutils` header. The Nix lock follows the fork's own lock
-(hyprutils `7e1f692`, hyprland-protocols `cd1aba6`): those only add API
-(`getDataDir()`, `state/KVStateFile.hpp`; a `.gitignore`), the existing types and
-`SP`/`WP` layouts are unchanged and both report `hu_0.14`.
+Exact headers: official `0aa6745f` (`version.h` `v0.57.0`), aquamarine `52ea11f`
+(0.15.1), hyprutils `0d13d5a` (0.14.3), from an isolated prefix
+(`pkg-config hyprland` = 0.57.0); never `/usr/include/hyprland`.
 
 - `-Werror` Debug build of the plugin and every target: no warning.
-- CTest against the prefix: 14/14 without a compositor binary; 17/17 with
-  `HYPRLAND_TEST_EXECUTABLE` set to the source-built `f6725e43` binary (native
-  preload probes) and Mesa software GLES for the two GL tests. An independent
-  review reproduced 17/17.
-- `verify_dev_hooks.py` against a Release `f6725e43` Hyprland built from source:
-  49 types, 46 lookups (42 unique targets), 41 exact tiles symbols.
-- Negative checks: the old two-`bool` `renderLayer` fails the CTest ABI check;
-  the old tiles `renderLayer` / `moveWorkspaceToMonitor` thunks fail to compile.
-- Nix: `nix flake lock` to fork `main` `f6725e43`, then `nix build -L
-  .#hymission` with a local store (`--store /home/wilf/.cache/hymission-nix`):
-  17 registered tests, 15 passed (including `hymission-hook-abi-test` and the
-  native preload probes against the Nix `hyprland-0.57.0+date=2026-10-28_f6725e4`),
-  `hymission-snapshot-color-test` and `hymission-stage-edge-render-test`
-  skipped (no EGL/GLES in the sandbox; not counted as passing). The flake now
-  includes `python3`, which registers the hook ABI test there.
+- CTest with `HYPRLAND_TEST_EXECUTABLE` set to the source-built `0aa6745f`
+  binary (native preload probes) and Mesa software GLES for the two GL tests:
+  18/18 passed, none skipped.
+- `verify_dev_hooks.py` against that binary: 49 types, 46 lookups (42 unique
+  targets), 41 exact tiles symbols.
+- Negative checks (earlier, on the fork): the old two-`bool` `renderLayer` fails
+  the CTest ABI check; the old tiles `renderLayer` / `moveWorkspaceToMonitor`
+  thunks fail to compile.
+- Nix: `flake.lock` pins `github:hyprwm/Hyprland/v0.57.0` with Hyprland's own
+  lock for its dependencies; `nix eval .#packages.x86_64-linux.hymission.drvPath`
+  with a local store resolves `hymission-0.12.0`. `nix build` was not run for
+  this baseline.
+- Nested official v0.57.0 compositor (private runtime directory): load, two
+  `reload full-reset`s and unload with the compositor alive; after a full reset
+  `hl.plugin.hymission.*` and the plugin's config values work; with overview
+  open, `reload; plugin unload` in one batch leaves the compositor alive; Stage
+  push, maximize fit, no-card restore and vertical scrolling give the same
+  geometry as on the fork.
 
-Not verified: any running compositor. Workspace ready/created events from the
-plugin's creation paths, `replace = false` monitor lifecycle moves, overview /
-Stage / tiles scenes, layer popups, snapshots and HDR on the fork, and the
-GLES2 fallbacks were not run. Host plugins were never loaded, unloaded or
-reloaded, `hyprpm update` was not run, nothing was installed.
+Not verified: a live session. Workspace ready/created events from the plugin's
+creation paths, `replace = false` monitor lifecycle moves, layer popups,
+snapshots and HDR, and the GLES2 fallbacks were not run. Host plugins were never
+loaded, unloaded or reloaded, `hyprpm update` was not run, nothing was installed.
 
 ## Historical initial failure (2026-10-11)
 

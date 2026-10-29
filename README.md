@@ -40,34 +40,36 @@ https://github.com/user-attachments/assets/7d711730-72f6-4165-94fa-af38bae37385
 
 ## Hyprland compatibility
 
-`master` follows the latest release of the project's Hyprland fork: Hyprland
-**v0.57.0** = `gfhdhytghd/Hyprland` [`f6725e43`](https://github.com/gfhdhytghd/Hyprland/releases/tag/v0.57.0),
-with the fork's aquamarine `4abfcab`. `hyprland-master` is on the same commit and
-tracks the fork's `main`.
+`master` follows the latest official Hyprland release: **v0.57.0** =
+`hyprwm/Hyprland` [`0aa6745f`](https://github.com/hyprwm/Hyprland/releases/tag/v0.57.0),
+with aquamarine `52ea11f`. `hyprland-master` tracks official `hyprwm/Hyprland`
+`main`. A `my-hyprland-master` branch exists only while the project's fork
+`gfhdhytghd/Hyprland` needs plugin source changes that the official tree does
+not; currently the same source builds for both.
 
-Upstream `hyprwm/Hyprland` v0.57.0 is a different commit (`0aa6745f`) with a
-different ABI: build against the fork's headers. When the Hyprland headers a
-build used do not match the running compositor, the plugin refuses to load and
-shows a notification; rebuild it for that compositor (`hyprpm` builds from the
-running compositor's own headers).
+Same-named tags of different trees are different commits with a different ABI
+(the fork's v0.57.0 is `f6725e43`): always build against the headers of the
+compositor that will load the plugin. When they do not match the running
+compositor, the plugin refuses to load and shows a notification; rebuild it for
+that compositor (`hyprpm` builds from the running compositor's own headers).
 
 See the [compatibility record](docs/compatibility/hyprland-master.md) for the
 tested revisions, the hook ABI checks and runtime evidence limits.
 
-The flake builds against the fork reproducibly. To check its latest `main`:
+The flake builds against v0.57.0 reproducibly:
 
 ```sh
-nix flake update hyprland
 nix build -L .#hymission
 ```
 
-Commit the updated `flake.lock` with any required API fixes after the build and
-offline tests pass. The compatibility workflow checks the fork's fresh `main`
-daily and on branch pushes/PRs, and records resolved input revisions. GitHub
-schedules only activate when the workflow also exists on the repository's
-default branch. A successful build does not establish live compositor behavior;
-runtime acceptance is separate and plugin reloads must be performed from a safe
-context.
+On `hyprland-master`, `nix flake update hyprland` moves the lock to the latest
+official `main`; commit the updated `flake.lock` with any required API fixes
+after the build and offline tests pass. The compatibility workflow checks
+official `main` daily and on `hyprland-master` pushes/PRs, and records resolved
+input revisions. GitHub schedules only activate when the workflow also exists on
+the repository's default branch. A successful build does not establish live
+compositor behavior; runtime acceptance is separate and plugin reloads must be
+performed from a safe context.
 
 ## Installation
 

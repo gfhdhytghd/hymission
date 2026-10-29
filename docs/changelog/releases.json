@@ -13,7 +13,7 @@
         {
           "title": "Hyprland 0.57",
           "items": [
-            "Targets Hyprland v0.57.0 from gfhdhytghd/Hyprland (`f6725e43`). Upstream hyprwm v0.57.0 is a different commit with a different plugin ABI.",
+            "Targets official Hyprland v0.57.0 (hyprwm/Hyprland `0aa6745f`). The gfhdhytghd/Hyprland fork's v0.57.0 (`f6725e43`) is a different commit with a different plugin ABI; build against the headers of the compositor you run.",
             "The plugin refuses to load, with a notification, when the Hyprland headers it was built with do not match the running compositor; rebuild it for that compositor (`hyprpm update`).",
             "Hooked compositor functions are checked against their exact 0.57 signatures at build time."
           ]

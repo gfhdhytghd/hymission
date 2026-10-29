@@ -1,6 +1,6 @@
 {
-  description = "Hymission compatibility with Hyprland development HEAD";
-  inputs.hyprland.url = "github:gfhdhytghd/Hyprland/main";
+  description = "Hymission for Hyprland v0.57.0";
+  inputs.hyprland.url = "github:hyprwm/Hyprland/v0.57.0";
   inputs.nixpkgs.follows = "hyprland/nixpkgs";
   outputs = { self, hyprland, nixpkgs, ... }:
     let
@@ -15,7 +15,7 @@
           };
           hymission = pkgs.hyprlandPlugins.mkHyprlandPlugin {
             pluginName = "hymission";
-            version = "0.10.2";
+            version = "0.12.0";
             src = self;
             # python3 registers the hook ABI type check (tools/verify_dev_hooks.py --types-only).
             nativeBuildInputs = with pkgs; [ cmake pkg-config python3 ];
@@ -25,7 +25,7 @@
               "-DBUILD_TESTING=ON"
               "-DHYPRLAND_TEST_EXECUTABLE=${pkgs.hyprland}/bin/.Hyprland-wrapped"
             ];
-            meta = { description = "Mission Control overview for Hyprland development HEAD"; license = pkgs.lib.licenses.gpl3Only; };
+            meta = { description = "Mission Control overview for Hyprland v0.57.0"; license = pkgs.lib.licenses.gpl3Only; };
             doCheck = true;
             checkPhase = ''
               runHook preCheck

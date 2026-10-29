@@ -13,9 +13,11 @@
 
 ## Hyprland Development Branch
 
-- `hyprland-master` targets the project's Hyprland fork, `gfhdhytghd/Hyprland` branch `main` (baseline v0.57.0 = `f6725e43eed50eaa061aa25fe7c9f8cdc9d355e2`), which merges upstream `hyprwm/Hyprland` `main` and adds fork changes. Aquamarine comes from the fork's own lock (`gfhdhytghd/aquamarine` `master`). Same-named upstream tags are different commits (upstream v0.57.0 is `0aa6745f`) and their headers or binaries are not ABI evidence for the fork; neither is the locally installed compositor or `/usr/include/hyprland`.
-- `master` follows the latest fork release and is currently the same commit as `hyprland-master`; adapt both to a new release together. Do not propagate branch-specific API changes to Omarchy branches without validating their target Hyprland versions.
-- Before reporting development compatibility, update the `hyprland` flake input, build `nix build -L .#hymission`, and commit the resulting lock file with required fixes. Report the tested fork revision and any skipped tests.
+- `master` follows the latest official Hyprland release, `hyprwm/Hyprland` v0.57.0 = `0aa6745f705f2c4b0a5004eb019ef76e5bbdb426` (aquamarine `hyprwm` `52ea11f`).
+- `hyprland-master` targets official `hyprwm/Hyprland` Git `main` (development HEAD); keep development API adaptations there. Do not substitute a stable release or the locally installed compositor as compatibility evidence.
+- `my-hyprland-master` is opened only when the project's fork `gfhdhytghd/Hyprland` needs plugin changes the official tree does not; it holds the fork-specific version. Same-named fork and official tags are different commits (fork v0.57.0 is `f6725e43`) and their headers or binaries are not ABI evidence for each other; neither is `/usr/include/hyprland`.
+- Omarchy branches (`omarchy-plugin`, `omarchy-marketplace`) stay Omarchy-specific; merge new `master` into them and validate against their target Hyprland version. Do not propagate branch-specific API changes to them without that validation.
+- Before reporting development compatibility, update the `hyprland` flake input, build `nix build -L .#hymission`, and commit the resulting lock file with required fixes. Report the tested upstream revision and any skipped tests.
 - Hooks resolve native functions by name or signature string, so a native signature change still compiles. Run `tools/verify_dev_hooks.py` against the exact Hyprland binary (CTest `hymission-hook-abi-test` covers the type half) and keep `HYMISSION_NATIVE_HOOK_ABI` assertions on thunks whose signatures changed.
-- The GitHub compatibility workflow resolves fresh fork `main` HEAD rather than only testing the committed lock. Daily scheduling requires the workflow to be present on the default branch as well.
+- The GitHub compatibility workflow resolves fresh official `main` HEAD rather than only testing the committed lock. Daily scheduling requires the workflow to be present on the default branch as well.
 - Offline build/test success is not live session acceptance. The reload rules above still apply.
