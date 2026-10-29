@@ -1,6 +1,6 @@
 {
-  description = "Hymission for Hyprland v0.57.0";
-  inputs.hyprland.url = "github:hyprwm/Hyprland/v0.57.0";
+  description = "Hymission compatibility with Hyprland development HEAD";
+  inputs.hyprland.url = "github:hyprwm/Hyprland";
   inputs.nixpkgs.follows = "hyprland/nixpkgs";
   outputs = { self, hyprland, nixpkgs, ... }:
     let
@@ -25,7 +25,7 @@
               "-DBUILD_TESTING=ON"
               "-DHYPRLAND_TEST_EXECUTABLE=${pkgs.hyprland}/bin/.Hyprland-wrapped"
             ];
-            meta = { description = "Mission Control overview for Hyprland v0.57.0"; license = pkgs.lib.licenses.gpl3Only; };
+            meta = { description = "Mission Control overview for Hyprland development HEAD"; license = pkgs.lib.licenses.gpl3Only; };
             doCheck = true;
             checkPhase = ''
               runHook preCheck

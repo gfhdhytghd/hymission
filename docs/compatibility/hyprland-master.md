@@ -1,20 +1,19 @@
 # Hyprland compatibility baseline
 
-- `master`: official `hyprwm/Hyprland` release `v0.57.0` =
-  `0aa6745f705f2c4b0a5004eb019ef76e5bbdb426`, aquamarine `hyprwm`
-  `52ea11f06dd492f34b3cc0b39a9c805beecafcff`, hyprutils `0d13d5a` (0.14.3),
-  hyprland-protocols `044a434`. The flake pins this tag.
-- `hyprland-master`: official `hyprwm/Hyprland` `main`; see that branch's copy of
-  this record for its tested revision.
+- `hyprland-master`: official `hyprwm/Hyprland` `main` =
+  `7a5e469c780d9c54ffd62c8ef345ec55131c08d7` (`version.h` 0.57.0), aquamarine
+  `hyprwm` `163b138cfb22873de1e1bf253d57bf03154d1acd`, hyprutils `7e1f692`,
+  hyprland-protocols `cd1aba6`. The flake locks this revision.
+- `master`: official release `v0.57.0` = `0aa6745f` (aquamarine `52ea11f`); see
+  that branch's copy of this record.
 - Fork: the project's `gfhdhytghd/Hyprland` v0.57.0 (`f6725e43`, aquamarine
-  `4abfcab`) is a different commit with a different ABI (for example
-  `SCMSettings` differs in size). The same plugin source builds and passes the
-  checks below against it too, so there is no `my-hyprland-master` branch; open
-  one only when the fork needs plugin source changes the official tree does not.
+  `4abfcab`) is a different commit with a different ABI. The same plugin source
+  builds for it, so there is no `my-hyprland-master` branch; open one only when
+  the fork needs plugin source changes the official tree does not.
 - Date: 2026-10-29.
-- Status: **PASS (offline) on official v0.57.0 — exact-header build, CTest with
-  the matching binary, hook audit, Nix lock evaluation; nested compositor checks
-  only, no live-session acceptance.**
+- Status: **PASS (compile and offline tests) on official `main` `7a5e469c` —
+  exact-header build and CTest without a compositor binary; hook audit against a
+  binary, Nix build and runtime checks not run for this revision.**
 
 ## API and ABI changes handled
 
@@ -42,34 +41,24 @@ Guards added so the next native signature change fails at build or load time:
 
 ## Validation
 
-Exact headers: official `0aa6745f` (`version.h` `v0.57.0`), aquamarine `52ea11f`
-(0.15.1), hyprutils `0d13d5a` (0.14.3), from an isolated prefix
-(`pkg-config hyprland` = 0.57.0); never `/usr/include/hyprland`.
+Exact headers: official `main` `7a5e469c`, aquamarine `163b138` (0.15.1),
+hyprutils 0.14.3, from an isolated prefix; never `/usr/include/hyprland` (no
+compiler dependency file names an `/usr/include/hyprland`, `aquamarine` or
+`hyprutils` header).
 
 - `-Werror` Debug build of the plugin and every target: no warning.
-- CTest with `HYPRLAND_TEST_EXECUTABLE` set to the source-built `0aa6745f`
-  binary (native preload probes) and Mesa software GLES for the two GL tests:
-  18/18 passed, none skipped.
-- `verify_dev_hooks.py` against that binary: 49 types, 46 lookups (42 unique
-  targets), 41 exact tiles symbols.
-- Negative checks (earlier, on the fork): the old two-`bool` `renderLayer` fails
-  the CTest ABI check; the old tiles `renderLayer` / `moveWorkspaceToMonitor`
-  thunks fail to compile.
-- Nix: `flake.lock` pins `github:hyprwm/Hyprland/v0.57.0` with Hyprland's own
-  lock for its dependencies; `nix eval .#packages.x86_64-linux.hymission.drvPath`
-  with a local store resolves `hymission-0.12.0`. `nix build` was not run for
-  this baseline.
-- Nested official v0.57.0 compositor (private runtime directory): load, two
-  `reload full-reset`s and unload with the compositor alive; after a full reset
-  `hl.plugin.hymission.*` and the plugin's config values work; with overview
-  open, `reload; plugin unload` in one batch leaves the compositor alive; Stage
-  push, maximize fit, no-card restore and vertical scrolling give the same
-  geometry as on the fork.
+- CTest without a compositor binary: 15/15 passed, including
+  `hymission-hook-abi-test` (49 hook/call types against these headers). The
+  native preload probes need a matching binary and are not registered.
+- Nix: `flake.lock` pins `github:hyprwm/Hyprland` `main` `7a5e469c` with
+  Hyprland's own lock for its dependencies; `nix eval
+  .#packages.x86_64-linux.hymission.drvPath` with a local store resolves
+  `hymission-0.12.0`. `nix build` was not run.
 
-Not verified: a live session. Workspace ready/created events from the plugin's
-creation paths, `replace = false` monitor lifecycle moves, layer popups,
-snapshots and HDR, and the GLES2 fallbacks were not run. Host plugins were never
-loaded, unloaded or reloaded, `hyprpm update` was not run, nothing was installed.
+Not verified for this revision: `verify_dev_hooks.py` name lookups and exact
+tiles symbols against a `7a5e469c` binary (none was built), any running
+compositor, and a live session. The official v0.57.0 release on `master` was
+checked with its binary and a nested compositor.
 
 ## Historical initial failure (2026-10-11)
 

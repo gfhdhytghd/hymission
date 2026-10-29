@@ -56,15 +56,16 @@ that compositor (`hyprpm` builds from the running compositor's own headers).
 See the [compatibility record](docs/compatibility/hyprland-master.md) for the
 tested revisions, the hook ABI checks and runtime evidence limits.
 
-The flake builds against v0.57.0 reproducibly:
+On `hyprland-master` the flake locks official `main` (currently `7a5e469c`,
+aquamarine `163b138`). To check the latest `main`:
 
 ```sh
+nix flake update hyprland
 nix build -L .#hymission
 ```
 
-On `hyprland-master`, `nix flake update hyprland` moves the lock to the latest
-official `main`; commit the updated `flake.lock` with any required API fixes
-after the build and offline tests pass. The compatibility workflow checks
+Commit the updated `flake.lock` with any required API fixes after the build and
+offline tests pass. The compatibility workflow checks
 official `main` daily and on `hyprland-master` pushes/PRs, and records resolved
 input revisions. GitHub schedules only activate when the workflow also exists on
 the repository's default branch. A successful build does not establish live
