@@ -1,0 +1,38 @@
+name: Hyprland development compatibility
+
+on:
+  push:
+    branches: [hyprland-master]
+  pull_request:
+    branches: [hyprland-master]
+  schedule:
+    - cron: "23 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hyprland-master-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      # Scheduled workflows run from the default branch; always test this branch.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.sha || 'hyprland-master' }}
+      - uses: cachix/install-nix-action@v31
+      - name: Resolve current Hyprland development HEAD
+        run: |
+          nix flake update hyprland
+          nix flake metadata --json > hyprland-master-inputs.json
+      - name: Build plugin and run offline tests
+        run: nix build -L .#hymission
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hyprland-master-inputs
+          path: hyprland-master-inputs.json

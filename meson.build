@@ -1,5 +1,5 @@
 project('hymission', 'cpp',
-  version: '0.11.0',
+  version: '0.12.0',
   default_options: ['buildtype=release'],
 )
 
@@ -34,9 +34,20 @@ src = [
   'src/stage_logic.cpp',
   'src/stage_controller.cpp',
   'src/stage_edge_effect.cpp',
+  'src/tiles_controller.cpp',
+  'src/hook_broker.cpp',
+  'src/tiles_logic.cpp',
 ]
 
 glib_dep = dependency('glib-2.0')
+
+broker_test = executable('hymission-hook-broker-test', 'tools/hook_broker_test.cpp', include_directories: include_directories('src'), install: false)
+test('hymission-hook-broker-test', broker_test)
+
+tiles_logic_test = executable('hymission-tiles-logic-test',
+  ['tools/tiles_logic_test.cpp', 'src/tiles_logic.cpp'],
+  include_directories: include_directories('src'), install: false)
+test('hymission-tiles-logic-test', tiles_logic_test)
 
 shared_module(meson.project_name(), src,
   dependencies: [
@@ -61,6 +72,7 @@ executable('hymission-layout-demo',
 
 mission_layout_test = executable('hymission-mission-layout-test',
   ['tools/mission_layout_test.cpp', 'src/mission_layout.cpp'],
+  cpp_args: ['-D_GLIBCXX_ASSERTIONS'],
   include_directories: include_directories('src'),
   install: false,
 )

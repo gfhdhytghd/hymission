@@ -1,5 +1,8 @@
 # Defaults and search placement validation
 
+This records the original stable-branch validation. For the development/tiles
+merge and its separate artifacts, see [merge validation](merge-defaults-validation.md).
+
 Target: stable Hyprland **0.56.2**, revision
 `efb50993780079460b0cbed1363e2166a2de1d9f`. This change is on
 `feat/defaults-search`, based on master plus search styling commit `5436e4f`.

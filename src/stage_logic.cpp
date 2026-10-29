@@ -64,6 +64,45 @@ Geometry layout(double width, double height, std::size_t count, Settings setting
     return result;
 }
 
+Geometry tileLayout(double outputWidth, double outputHeight, double tileWidth, std::size_t tileCount, std::size_t cardCount, std::size_t referenceCount, Settings settings) {
+    if (outputWidth<=0 || outputHeight<=0 || tileWidth<=0 || !tileCount) return {};
+    auto s=normalize(settings);
+    s.padding=std::min(s.padding,outputWidth/(20*tileCount));
+    s.paddingRight=std::min(s.paddingRight,outputWidth/(20*tileCount));
+    const double padding=tileCount*(s.padding+s.paddingRight);
+    const double limit=outputWidth*.5-padding-s.desktopGap;
+    if (limit<8*tileCount) return {};
+    // The setting describes the whole thumbnail scene, not each tile column.
+    // One thumbnail scale maps the actual reserved desktop across all columns.
+    const double maximum=std::min(s.maxWidth>0?s.maxWidth:outputWidth/5,limit);
+    const double minimum=std::min(std::max(s.minWidth,8.0*tileCount),maximum);
+    const auto count=std::max(size_t{1},referenceCount);
+    const double available=outputHeight-s.paddingTop-s.paddingBottom-(count-1)*s.cardGap;
+    // Match native Stage's coupled solve: reserving thumbnail width narrows
+    // the desktop but keeps its height. Fit the longest stack against that
+    // actual desktop aspect, rather than a uniformly shrunken output.
+    const double availableWidth=outputWidth-padding-s.desktopGap;
+    const double fit=std::max(0.0,available)*availableWidth/(count*outputHeight+std::max(0.0,available));
+    const double totalWidth=std::clamp(fit,minimum,maximum);
+    const double scale=totalWidth/outputWidth;
+    s.minWidth=s.maxWidth=tileWidth*scale;
+    auto g=layout(outputWidth,outputHeight,std::max(size_t{1},cardCount),s,std::nullopt,outputWidth);
+    if (!g.enabled()) return g;
+    // The minimum setting constrains the whole scene. A narrow tile's share
+    // can be smaller than layout()'s single-card floor without changing scale.
+    g.cardWidth=tileWidth*scale;
+    g.bandWidth=g.cardWidth+s.padding+s.paddingRight;
+    g.reservation=g.bandWidth+s.desktopGap;
+    g.desktopWidth=referenceCount?outputWidth-totalWidth-padding-s.desktopGap:outputWidth;
+    g.cardHeight=totalWidth*outputHeight/g.desktopWidth;
+    g.count=cardCount;
+    g.cardGap=s.cardGap;
+    if (s.evenSpacing && count>1)
+        g.cardGap=std::max(s.cardGap,(outputHeight-s.paddingTop-s.paddingBottom-count*g.cardHeight)/(count-1));
+    g.maxScroll=cardCount?std::max(0.0,cardCount*g.cardHeight+(cardCount-1)*g.cardGap+s.paddingTop+s.paddingBottom-outputHeight):0;
+    return g;
+}
+
 double Geometry::clampScroll(double scroll) const { return std::clamp(sane(scroll, 0), 0.0, maxScroll); }
 double Geometry::cardTop(std::size_t index, double scroll) const { return paddingTop + static_cast<double>(index) * (cardHeight + cardGap) - clampScroll(scroll); }
 
@@ -206,6 +245,11 @@ Rect sidebarArea(const Rect& base, const Geometry& geometry, bool right) {
 Rect desktopArea(const Rect& base, const Geometry& geometry, bool right) {
     return {right ? base.x : base.x + geometry.reservation, base.y, geometry.desktopWidth, base.height};
 }
+Rect nativeTileClip(const Rect& tile,const Rect& desktop) {
+    const double left=std::max(tile.x,desktop.x);
+    const double right=std::min(tile.x+tile.width,desktop.x+desktop.width);
+    return {left,tile.y,std::max(0.0,right-left),tile.height};
+}
 EdgeViewport edgeViewport(const Rect& box, double left, double right, double top, double bottom) {
     const double width = std::max(0.0, sane(box.width, 0));
     left = std::clamp(sane(left, 0), 0.0, width);
@@ -321,9 +365,10 @@ EdgeFrame interpolateEdgeFrame(const EdgeFrame& from, const EdgeFrame& to, doubl
     const auto mixRect = [&](const Rect& a, const Rect& b) {
         return Rect{mix(a.x, b.x), mix(a.y, b.y), mix(a.width, b.width), mix(a.height, b.height)};
     };
-    const EdgeFrame frame{edgeViewport(mixRect(from.viewport.box, to.viewport.box), mix(from.viewport.left, to.viewport.left),
+    EdgeFrame frame{edgeViewport(mixRect(from.viewport.box, to.viewport.box), mix(from.viewport.left, to.viewport.left),
                                       mix(from.viewport.right, to.viewport.right), mix(from.viewport.top, to.viewport.top),
                                       mix(from.viewport.bottom, to.viewport.bottom)), mixRect(from.clip, to.clip)};
+    frame.viewport.revealDecorations=from.viewport.revealDecorations || to.viewport.revealDecorations;
     // Releasing/reversing a gesture retains the sampled outer edge, even when
     // the other endpoint is the unrestricted overview output.
     return pinOuterEdge(frame, from.viewport.fixedOuterEdge != FixedOuterEdge::None ? from.viewport : to.viewport);
@@ -348,6 +393,26 @@ EdgeFrame overviewRevealFrame(const OverviewEndpoint& endpoint, const Rect& curr
         return Rect{mapped.x + (output.x - mapped.x) * reveal, mapped.y + (output.y - mapped.y) * reveal,
                     mapped.width + (output.width - mapped.width) * reveal, mapped.height + (output.height - mapped.height) * reveal};
     };
+    if (endpoint.viewport.revealDecorations) {
+        // Preserve the band's width in window coordinates. Translating it past
+        // the window (including shadow support) reveals clear pixels behind it;
+        // shrinking the band in place would prematurely release decorations.
+        auto bounds=unfold(endpoint.viewport.box);
+        const double pad=128*std::max(sx,sy);
+        const auto& source=endpoint.viewport.box;
+        const double left=current.x+(source.x-endpoint.window.x)*sx;
+        const double right=current.x+(source.x+source.width-endpoint.window.x)*sx;
+        const double l=endpoint.viewport.left*sx, r=endpoint.viewport.right*sx;
+        const double endLeft=std::min(output.x-l,current.x-pad-l);
+        const double endRight=std::max(output.x+output.width+r,current.x+current.width+pad+r);
+        bounds.x=left+(endLeft-left)*reveal;
+        bounds.width=right+(endRight-right)*reveal-bounds.x;
+        auto viewport=edgeViewport(bounds,l,r,endpoint.viewport.top*sy,endpoint.viewport.bottom*sy);
+        viewport.revealDecorations=true;
+        auto clip=unfold(endpoint.clip);
+        clip.x=bounds.x; clip.width=bounds.width;
+        return {viewport,clip};
+    }
     const auto viewport = edgeViewport(unfold(endpoint.viewport.box), endpoint.viewport.left * sx * (1 - reveal),
                                       endpoint.viewport.right * sx * (1 - reveal), endpoint.viewport.top * sy * (1 - reveal),
                                       endpoint.viewport.bottom * sy * (1 - reveal));
@@ -400,4 +465,58 @@ ScrollingFlightFrame edgeTransferFrame(const Rect& from, const Rect& to, const E
     }
     return {entering ? transitionBox(hidden, endpoint, (p - 0.5) * 2) : transitionBox(endpoint, hidden, p * 2), viewport};
 }
+std::size_t reorderTarget(const std::vector<double>& centres, double y, std::optional<std::size_t> current, double hysteresis) {
+    if (centres.empty())
+        return 0;
+    std::size_t nearest = 0;
+    for (std::size_t i = 1; i < centres.size(); ++i)
+        if (std::abs(centres[i] - y) < std::abs(centres[nearest] - y))
+            nearest = i;
+    if (!current || *current >= centres.size() || *current == nearest)
+        return nearest;
+    return std::abs(centres[nearest] - y) + std::max(0.0, hysteresis) < std::abs(centres[*current] - y) ? nearest : *current;
+}
+
+std::size_t reorderSlot(std::size_t index, std::size_t from, std::size_t to) {
+    if (index == from)
+        return to;
+    if (from < to && index > from && index <= to)
+        return index - 1;
+    if (to < from && index >= to && index < from)
+        return index + 1;
+    return index;
+}
+
+std::vector<WorkspaceIdChange> reorderSteps(const std::vector<int64_t>& slotIds, const std::vector<bool>& occupied, std::size_t from, std::size_t to,
+                                            int64_t temp) {
+    if (from == to || from >= slotIds.size() || to >= slotIds.size() || occupied.size() != slotIds.size() || !occupied[from] || temp <= 0 ||
+        std::ranges::find(slotIds, temp) != slotIds.end())
+        return {};
+    std::vector<WorkspaceIdChange> steps{{slotIds[from], temp}};
+    if (from < to) {
+        for (std::size_t k = from + 1; k <= to; ++k)
+            if (occupied[k])
+                steps.push_back({slotIds[k], slotIds[k - 1]});
+    } else {
+        for (std::size_t k = from; k-- > to;)
+            if (occupied[k])
+                steps.push_back({slotIds[k], slotIds[k + 1]});
+    }
+    steps.push_back({temp, slotIds[to]});
+    return steps;
+}
+
+std::vector<WorkspaceIdChange> reorderMapping(const std::vector<WorkspaceIdChange>& steps) {
+    std::vector<WorkspaceIdChange> mapping;
+    for (const auto& step : steps) {
+        const auto it = std::ranges::find_if(mapping, [&](const WorkspaceIdChange& m) { return m.to == step.from; });
+        if (it != mapping.end())
+            it->to = step.to;
+        else
+            mapping.push_back(step);
+    }
+    std::erase_if(mapping, [](const WorkspaceIdChange& m) { return m.from == m.to; });
+    return mapping;
+}
+
 } // namespace hymission::stage

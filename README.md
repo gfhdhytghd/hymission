@@ -2,6 +2,8 @@
 
 `hymission` is a Hyprland plugin that provides a Mission Control-style overview with live compositor-side previews, scope-aware collection, trackpad gestures, and a workspace strip for active-workspace overview mode.
 
+**Default layout change:** `layout_engine` now defaults to `"natural"`, using the former natural2 algorithm. To keep the previous grid layout, set `layout_engine = "grid"`. `"natural2"` remains a compatible alias.
+
 See the [changelog](https://gfhdhytghd.github.io/hymission/) for release history and unreleased changes.
 
 > [!IMPORTANT]
@@ -25,6 +27,7 @@ See the [changelog](https://gfhdhytghd.github.io/hymission/) for release history
 - Gesture-only `recommand` mode for two-sided `toggle` gestures
 - Workspace strip for the active-workspace scope, optionally shown in all scopes
 - Multi-monitor support
+- Optional workspace tiles: up to three independent workspace viewports per monitor
 - Pinned-window, special-workspace, and scrolling-layout aware behavior
 - Workspace-to-workspace overview transitions without showing the native workspace animation in the middle
 
@@ -34,6 +37,39 @@ https://github.com/user-attachments/assets/7d711730-72f6-4165-94fa-af38bae37385
 
 
 
+
+## Hyprland compatibility
+
+`master` follows the latest official Hyprland release: **v0.57.0** =
+`hyprwm/Hyprland` [`0aa6745f`](https://github.com/hyprwm/Hyprland/releases/tag/v0.57.0),
+with aquamarine `52ea11f`. `hyprland-master` tracks official `hyprwm/Hyprland`
+`main`. A `my-hyprland-master` branch exists only while the project's fork
+`gfhdhytghd/Hyprland` needs plugin source changes that the official tree does
+not; currently the same source builds for both.
+
+Same-named tags of different trees are different commits with a different ABI
+(the fork's v0.57.0 is `f6725e43`): always build against the headers of the
+compositor that will load the plugin. When they do not match the running
+compositor, the plugin refuses to load and shows a notification; rebuild it for
+that compositor (`hyprpm` builds from the running compositor's own headers).
+
+See the [compatibility record](docs/compatibility/hyprland-master.md) for the
+tested revisions, the hook ABI checks and runtime evidence limits.
+
+The flake builds against v0.57.0 reproducibly:
+
+```sh
+nix build -L .#hymission
+```
+
+On `hyprland-master`, `nix flake update hyprland` moves the lock to the latest
+official `main`; commit the updated `flake.lock` with any required API fixes
+after the build and offline tests pass. The compatibility workflow checks
+official `main` daily and on `hyprland-master` pushes/PRs, and records resolved
+input revisions. GitHub schedules only activate when the workflow also exists on
+the repository's default branch. A successful build does not establish live
+compositor behavior; runtime acceptance is separate and plugin reloads must be
+performed from a safe context.
 
 ## Installation
 
@@ -88,7 +124,7 @@ For local development, `hymission` uses CMake and outputs `build-cmake/libhymiss
 
 Requirements:
 
-- Hyprland development headers for the exact Hyprland build you are running
+- Hyprland development headers for the exact Hyprland build you are running (the plugin refuses to load otherwise)
 - `cmake`
 - `pkg-config`
 - a C++23-capable compiler
@@ -307,6 +343,13 @@ keeping `92` is supported and adds another 60 pixels of breathing room.
 `hide_bar_when_strip` hides exclusive bars visually but keeps their reservation,
 so hiding a bar does not move the strip or search box into its reserved area.
 
+With workspace tiles enabled, strip columns keep their existing per-tile layout.
+All overview uses one combined content area; workspace overview keeps previews
+inside each tile and reserves the search header in every tile. Both scopes use
+one search box over the combined content area, because search already filters
+all collected workspaces, including all visible tiles in workspace overview.
+Changing tile focus does not change the search scope.
+
 The default backdrop adds one translucent black quad per overview output, without
 blur or extra snapshot allocation. Transparent color with `backdrop_blur = 0`
 skips that pass; tint opacity follows the overview opening/closing progress.
@@ -334,13 +377,12 @@ hl.config({
             one_workspace_per_row = 0,
 
             -- Layout: engine selection and per-engine settings
-            layout_engine = "grid",
+            layout_engine = "natural",
             layout_engine_forceall = "",
             layout_engine_all = "",
             layout_engine_onlycurrentworkspace = "",
             layout_scale_weight = 1.0,
             layout_space_weight = 0.10,
-            natural_scale_flex = 0.22,
 
             -- Behavior: workspace scope and transitions
             multi_workspace_sort_recent_first = 1,
@@ -446,15 +488,14 @@ An empty scope override inherits `layout_engine`.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `layout_engine` | string | `grid` | Default geometry solver. `grid` uses row search. `natural`, `apple`, `expose`, and `mission-control` are aliases for the Apple-like natural solver. |
+| `layout_engine` | string | `natural` | Geometry solver. `natural` uses the former natural2 algorithm; `natural2`, `apple`, `apple-like`, `expose`, and `mission-control` are aliases. `grid` keeps row search; `thumbnail` / `thumbnails` preserves workspace miniature geometry. |
 | `layout_engine_forceall` | string | empty | Engine override for the explicit `forceall` dispatcher scope. Falls back to `layout_engine_all`, then `layout_engine`. |
 | `layout_engine_all` | string | empty | Engine override for the default all-workspace / multi-workspace scope. |
 | `layout_engine_onlycurrentworkspace` | string | empty | Engine override for `onlycurrentworkspace` and default active-workspace scope. |
 
 #### Grid / row-search engine
 
-The natural engine can also use the row-search path as an emergency fallback, so
-these weights still affect that fallback.
+These scoring weights affect `grid` (and a thumbnail grid fallback) only. The natural engine does not use them.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -463,12 +504,17 @@ these weights still affect that fallback.
 
 #### Natural engine
 
-The natural engine tries to preserve original window positions while removing
-overlap. It attempts every window count before falling back to row search.
+The default natural engine preserves source positions with uniform scaling when they fit without overlap. Otherwise it packs workspace bands and scrolling columns into centered rows, preserving aspect ratios and spatial order. Stable window identities retain allocations during one overview session, including filtering and local insertions; separate monitor/tile/workspace regions own separate history.
+
+Padding is applied once to the supplied region. `row_spacing` and `column_spacing` set minimum gaps; `min_window_length` reserves space for small windows and `small_window_boost` weights their allocation. Preview scale caps remain in effect. `min_slot_scale` and `min_preview_short_edge` are readability goals: infeasible layouts reduce spacing and then size rather than dropping windows or distorting aspect ratios. `one_workspace_per_row` forces separate workspace bands.
+
+While overview is open, an unchanged window set keeps its base slots and source geometry frozen, including native resizes caused by focus. Selected/hovered enlargement is a separate, order-preserving ripple; it reduces growth when necessary to avoid crossing another preview. Opening/closing/filtering windows, changing regions or changing layout constraints can update the layout.
+
+Recent-use sorting does not impose a size gradient or override natural spatial ordering. The legacy natural solver, its iterative repulsion, corner filling and per-window free-scale optimization have been removed.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `natural_scale_flex` | float | `0.22` | Natural-engine-only free scale range. Values are clamped to `0.0` - `0.25`; recent-first multi-workspace ordering keeps earlier windows visibly larger, while natural layouts may use larger per-window scale differences to fill sparse space. |
+| `natural_scale_flex` | float | `0.22` | Deprecated, ignored. Still accepted so existing configurations do not produce errors. |
 
 Non-finite numeric settings use their defaults. Layout padding, spacing and minimum lengths are limited to 0–4096 logical pixels; preview scales to 0–4, small-window boost to 0.1–4, and layout weights to 0–100. The minimum slot scale cannot exceed the maximum preview scale. Workspace strip refresh intervals are limited to 0–60000 ms (0 keeps frame-driven refresh). Gesture finger counts must be decimal integers from 2 to 9; scales must be finite and are limited to 0.1–10.
 
@@ -655,6 +701,63 @@ Search filters the current overview scope by Unicode-normalized, case-insensitiv
 
 ### Workspace strip and bar
 
+#### Workspace tiles
+
+Tiles are disabled by default. Enable the feature in your existing plugin block:
+
+```lua
+hl.config({ plugin = { hymission = {
+    tiles_enabled = 1,
+    tile_min_width = 240,       -- logical pixels
+    tile_divider_hit_width = 8, -- total divider hit width
+} } })
+
+hl.plugin.hymission.tile_add() -- split the focused tile, create a workspace
+hl.plugin.hymission.tile_focus("left")
+hl.plugin.hymission.tile_move_window("right")
+hl.plugin.hymission.tile_resize({ delta = "+80px" })
+hl.plugin.hymission.tile_remove()
+```
+
+Each physical monitor supports at most three tiles. Each tile keeps its own
+active workspace and history. Requesting a workspace already visible in another
+tile focuses that tile; an explicit on-current-monitor request swaps the active
+workspaces. Native directional focus crosses tile boundaries. New windows enter
+the focused tile unless an explicit native placement rule chooses otherwise.
+Fullscreen and maximize stay inside the owning tile. Special workspaces and
+pinned windows retain monitor-wide behavior.
+
+`tile_add({ workspace = "name:dev", width = "40%" })` can use a hidden workspace
+already on that monitor. The new width comes from the focused tile. Resize accepts
+either `width` or `delta`, with an optional `neighbor = "left"` or `"right"`;
+percentages refer to the physical monitor's logical width. Tile boundaries have
+no persistent divider line. Drag a boundary to
+resize its adjacent pair; Esc restores the starting widths. Removing a tile
+hides its workspace without merging or closing its windows. Disabling tiles
+keeps the focused workspace and restores the full output area.
+
+Overview windows and workspace strips are grouped by tile. Vertical strips use
+two columns per group; horizontal strips use two rows. Clicking a workspace
+targets its group. Stage places a sidebar inside each tile, beside its desktop.
+Drag a preview to another column or desktop to move its window; drag an empty
+part of a stage card to move the whole stage. With one tile, dropping on a desktop
+half splits it. With two tiles, a source-tile half or another tile's outer 20%
+can create the third. At three tiles, desktop drops move windows. The translucent
+preview and divider show the result; Esc or returning to the source cancels it.
+
+`hl.plugin.hymission.tiles_state()` and `hyprctl -j hymission-tiles-state` expose
+both per-monitor `tiles` and a flat `tiles` array for bars. Each entry includes
+`id`, `name`, physical `monitor`, logical geometry, `scale`, `transform`,
+`activeWorkspace` and global `focused`. Use `(monitor, id)` as the tile identity;
+use `activeWorkspace.selector` for a native workspace request. The
+`hymission-tiles` socket2 event signals changes. `initError`, `edge_effect` and
+`edge_error` report initialization or hard-clip fallback status.
+
+Legacy config mode provides `hymission:tile_add`, `tile_resize`, `tile_remove`,
+`tile_focus` and `tile_move_window`; arguments use `key=value` fields or
+`left`/`right`. See the [design](docs/workspace-tiles-design.md) and
+[validation record](docs/workspace-tiles-validation.md) for details.
+
 #### Persistent desktop sidebar (stage mode)
 
 Stage mode is separate from overview. It reserves a left band on each monitor;
@@ -662,6 +765,8 @@ the native layout resizes the actual desktop to the remaining area. Applications
 keep their normal rendering scale and input coordinates. The sidebar lists only
 that monitor's **inactive workspaces**. Each card preserves the windows' original
 positions, relative sizes and overlap using one workspace-wide scale.
+When tiles are enabled, each tile gets its own sidebar and the active workspace
+also has a card so it can be dragged into Split View.
 Previews draw live window surfaces and receive native frame callbacks, with a
 16 ms repaint schedule. Window switches use Stage's animation for clicks, keys
 and swipes; incoming and outgoing window edges remain within the owning output.
@@ -691,6 +796,7 @@ hl.config({
             stage_active_glow = 0,
             stage_even_spacing = 0,
             stage_drop_follow = 0,
+            stage_drag_reorder = 1,
             stage_click_hover_recenter_guard = 1,
             stage_maximize_cover_strip = 0,
         },
@@ -708,11 +814,16 @@ hl.plugin.hymission.gesture({
 ```
 
 Swipe right to reveal Stage and continuously reserve space on the desktop; swipe
-left to hide it. In scrolling layouts, Stage translates the tape while retaining
-its native sizing viewport and window sizes; the visible desktop clips overflow.
-Exception: a workspace with exactly one native scrolling column resizes its
-sizing viewport to the visible desktop width so the single column continues to fit.
-Stacked or grouped windows in that column count as one column.
+left to hide it. In horizontal scrolling layouts with several columns, Stage pushes the
+whole tape away from the sidebar and resizes no window; the part that moves past
+the output edge is clipped. A maximized window in such a tape is the one window
+that narrows, so it still fits the remaining desktop; the other columns keep
+their widths. A workspace with a single column (stacked windows in one column
+count as one), covered by a fullscreen window, or scrolling vertically, instead
+reduces its sizing viewport to the remaining desktop width, so its windows are
+resized to make room. Closing restores the original viewport and positions. With
+multiple tiles, each receives its share of the remaining desktop width, retaining
+full height.
 Reversing the swipe reverses progress. Release past halfway to
 commit; cancellation restores the previous state. Keyboard toggles and release
 settling use `stage_transition_ms`. The runtime choice lasts until plugin reload.
@@ -742,6 +853,7 @@ dispatcher is `hymission:stage_toggle`; Lua also supports `dispatch("stage_toggl
 | `stage_even_spacing` | `0` | Stretch the vertical card gaps so the stack spans the full sidebar height evenly instead of clustering at the top; `0` clusters cards at the top. Only meaningful with `stage_empty_slots > 0`. |
 | `stage_click_hover_recenter_guard` | `1` | After clicking a Stage card to switch workspaces, suppress hover-induced scrolling-layout recentering while moving right. The first leftward motion ends the guard. Hover focus and explicit click/keyboard focus remain available. `0` disables the guard. |
 | `stage_drop_follow` | `0` | After dropping a window, stay on the current workspace; `1` follows the moved window. |
+| `stage_drag_reorder` | `1` | Dragging a workspace card to another slot in its own sidebar column changes the real workspace numbers: numbers stay with the slots, the dragged workspace takes the number of the slot it is dropped on and the workspaces in between shift by one. Workspaces keep their windows and layout state; only their ids change, so `Super+N` and relative workspace navigation follow the new order. Only this monitor's (and tile column's) numbered cards take part; named workspaces never move, and dragging outside the sidebar cancels. `0` keeps the cards fixed in numeric order. |
 | `stage_maximize_cover_strip` | `0` | Maximization fills the right desktop; `1` lets maximization also cover the sidebar. True fullscreen always covers the output. |
 | `stage_refresh_ms` | `16` | Live preview repaint scheduling interval, clamped to `1`–`16` ms. Each repaint reads current window surfaces and sends native frame feedback; hidden sidebars stop repainting. Actual frame rate depends on output refresh, client updates and rendering load. |
 

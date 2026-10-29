@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -13,19 +14,63 @@ inline double visibilityGestureProgress(double start, double displacement, doubl
     return std::clamp(start + displacement / std::max(1.0, distance), 0.0, 1.0);
 }
 
-constexpr bool preserveScrollingWidth(bool scrolling, std::size_t columnCount) {
-    return scrolling && columnCount != 1;
+// A horizontal scrolling workspace spread over several columns keeps its
+// sizing width: Stage pushes the whole tape away from the sidebar and nothing
+// is resized. One column, or a workspace covered by a fullscreen window,
+// follows the visible desktop width instead, so that window is resized to make
+// room. A vertical tape (up/down) lays its columns along the height, so every
+// column spans the width and the narrowed viewport fits all of them; column
+// fractions there size heights and are never fitted to the sidebar.
+constexpr bool pushScrollingTape(bool scrolling, bool horizontal, std::size_t columns, bool fullscreen) {
+    return scrolling && horizontal && !fullscreen && columns > 1;
 }
 
-// Multiple scrolling columns retain their native width: Stage moves the entire tape,
-// while its rendering viewport clips the part behind the sidebar/output edge.
-inline Rect reservedWorkArea(Rect area, double reservation, double progress, bool right, bool preserveWidth) {
+// In a pushed tape, a maximized column (native width fraction 1) is the one
+// window that should still fit the visible desktop: its fraction of the
+// unchanged sizing width shrinks by the revealed reservation. Every other
+// column keeps its own fraction. Closing Stage returns it to the native value.
+inline double pushedColumnFraction(double native, double areaWidth, double reservation, double progress) {
+    if (areaWidth <= 1)
+        return native;
+    const double amount = std::min(std::max(0.0, reservation * std::clamp(progress, 0.0, 1.0)), areaWidth - 1);
+    return native * (areaWidth - amount) / areaWidth;
+}
+
+// The width fraction of a maximized column under Stage: fitted only while a
+// pushed tape reserves sidebar space; native (1) as soon as nothing is
+// reserved, e.g. after the last sidebar card went away, or the tape is not pushed.
+inline double maximizedColumnFraction(bool reserving, bool push, double areaWidth, double reservation, double progress) {
+    return reserving && push ? pushedColumnFraction(1, areaWidth, reservation, progress) : 1;
+}
+
+// Reserve the sidebar in layout coordinates. Without `push` the area narrows
+// and native scrolling resolves its normalized widths against the visible
+// part; with `push` it keeps its width and moves aside by the same amount.
+inline Rect reservedWorkArea(Rect area, double reservation, double progress, bool right, bool push = false) {
     const double amount = std::min(std::max(0.0, reservation * std::clamp(progress, 0.0, 1.0)), std::max(0.0, area.width - 1));
+    if (push) {
+        area.x += right ? -amount : amount;
+        return area;
+    }
     if (!right)
         area.x += amount;
-    if (!preserveWidth)
-        area.width -= amount;
+    area.width -= amount;
     return area;
+}
+
+// Reserve the common sidebar once and map tile widths as one output scene.
+// Native Stage keeps the desktop height and vertical gaps unchanged.
+inline Rect scaleDesktopRect(const Rect& area,const Rect& base,double reservation,double progress) {
+    const double amount=std::clamp(reservation,0.0,std::max(0.0,base.width-1))*std::clamp(progress,0.0,1.0);
+    const double scale=1-amount/std::max(1.0,base.width);
+    return {base.x+amount+(area.x-base.x)*scale,area.y,area.width*scale,area.height};
+}
+
+// Invert the actual presentation on each axis. Horizontal-only reservation
+// must not turn a pointer's vertical coordinate into the old uniform scale.
+inline std::pair<double,double> desktopInputPosition(const Rect& output,const Rect& mapped,double x,double y) {
+    return {output.x+(x-mapped.x)*output.width/std::max(1.0,mapped.width),
+            output.y+(y-mapped.y)*output.height/std::max(1.0,mapped.height)};
 }
 
 // Extend the actual Stage reservation through output/bar gaps to the physical
@@ -101,6 +146,8 @@ struct Geometry {
 };
 
 Settings normalize(Settings settings);
+// Multi-tile columns share the adaptive scale selected by the largest card count.
+Geometry tileLayout(double outputWidth, double outputHeight, double tileWidth, std::size_t tileCount, std::size_t cardCount, std::size_t referenceCount, Settings settings);
 Geometry layout(double width, double height, std::size_t count, Settings settings,
                 std::optional<double> frozenCardWidth = std::nullopt, double outputWidth = 0);
 std::vector<WindowSlot> arrangeWindows(const std::vector<WindowInput>& windows, const Geometry& geometry, const Rect& desktop);
@@ -116,6 +163,8 @@ std::pair<double, double> mapDropPoint(const Rect& card, const Rect& desktop, do
 std::pair<double, double> mapPreviewCenter(const Rect& card, const Rect& desktop, double x, double y);
 Rect sidebarArea(const Rect& base, const Geometry& geometry, bool right);
 Rect desktopArea(const Rect& base, const Geometry& geometry, bool right);
+// Native tile desktops retain output-height decorations above/below work areas.
+Rect nativeTileClip(const Rect& tile, const Rect& desktop);
 
 // The viewport is always a hard clip, including when all effect widths are 0.
 // Widths are measured at the displayed size, independently of window geometry.
@@ -129,8 +178,16 @@ struct EdgeViewport {
     // Overview card reveal only; desktop seams keep their moving viewport.
     FixedOuterEdge fixedOuterEdge = FixedOuterEdge::None;
     double fixedOuterX = 0;
+    // Desktop overview reveal: move the blur/fade band past the whole window,
+    // and composite decorations through the same mask as its contents.
+    bool revealDecorations = false;
 };
 EdgeViewport edgeViewport(const Rect& box, double left, double right, double top = 0, double bottom = 0);
+// Multi-tile native desktops own two horizontal seams. Stage flights must
+// retain both when handing back to the native tile scene.
+inline EdgeViewport desktopEdgeViewport(const Rect& box, double width, bool right, bool tiled) {
+    return edgeViewport(box, tiled || !right ? width : 0, tiled || right ? width : 0);
+}
 EdgeViewport desktopShadowViewport(const EdgeViewport& viewport, const Rect& output);
 EdgeViewport edgeViewportForWindow(const EdgeViewport& viewport, const Rect& window);
 double edgeOpacity(const EdgeViewport& viewport, double x, double y);
@@ -139,7 +196,8 @@ std::optional<std::size_t> activationCardAt(const std::vector<Rect>& cards, cons
 // Visible target length as a fraction of the desktop viewport along the scroll axis.
 double visibleAxisFraction(const Rect& target, const Rect& viewport, bool horizontal);
 // Preserve both the gradient's coordinate system and the actual card/strip clip.
-// A window fully outside clip must use an offscreen endpoint, not a reveal.
+// Fully clipped cards use an offscreen endpoint. Desktop tape columns retain
+// their real layout-side endpoint and carry the reveal mask even when hidden.
 struct OverviewEndpoint {
     Rect window;
     EdgeViewport viewport;
@@ -162,6 +220,27 @@ ScrollingFlightFrame scrollingFlightFrame(const Rect& from, const Rect& to, cons
 // Exit the source clip before entering the destination clip. Size changes while hidden.
 ScrollingFlightFrame edgeTransferFrame(const Rect& from, const Rect& to, const EdgeViewport& fromViewport,
     const EdgeViewport& toViewport, double progress);
+
+// Sidebar drag reorder. Workspace numbers belong to slots: moving a card from
+// slot `from` to slot `to` shifts the cards in between by one slot and then
+// every workspace takes the number of the slot it occupies.
+// The slot a lifted card previews: the nearest slot centre, but the current
+// target is kept until another centre is closer by `hysteresis`.
+std::size_t reorderTarget(const std::vector<double>& centres, double y, std::optional<std::size_t> current, double hysteresis);
+// The slot that card `index` occupies while card `from` previews at `to`.
+std::size_t reorderSlot(std::size_t index, std::size_t from, std::size_t to);
+struct WorkspaceIdChange {
+    int64_t from = 0;
+    int64_t to = 0;
+    bool operator==(const WorkspaceIdChange&) const = default;
+};
+// Id changes, in an order where every destination is free when it is used.
+// `temp` must be an id no workspace uses. Empty (synthetic) slots own no
+// workspace and are skipped. Empty for an invalid or no-op move.
+std::vector<WorkspaceIdChange> reorderSteps(const std::vector<int64_t>& slotIds, const std::vector<bool>& occupied, std::size_t from, std::size_t to,
+                                            int64_t temp);
+// Original id -> final id of every workspace that `steps` renumber.
+std::vector<WorkspaceIdChange> reorderMapping(const std::vector<WorkspaceIdChange>& steps);
 
 // Keep this policy independent of compositor enum values for state tests.
 enum class CoverMode { None, Maximized, Fullscreen };
