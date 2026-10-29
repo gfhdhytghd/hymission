@@ -167,7 +167,7 @@
     <h1>hymission</h1>
     <p class="lede">Release history of the hymission overview and Stage workspace sidebar plugin for Hyprland. Each version tag names the plugin version followed by the Hyprland release it was built for.</p>
     <ul class="actions">
-      <li><a class="button primary" href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.11.0-v0.56.2">Latest: v0.11.0-v0.56.2</a></li>
+      <li><a class="button primary" href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.12.0-v0.57.0">Latest: v0.12.0-v0.57.0</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission#installation">Installation</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission/releases">All GitHub releases</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/hymission">Source code</a></li>
@@ -178,7 +178,7 @@
   <nav class="toc" aria-labelledby="toc-title">
     <h2 id="toc-title">Versions</h2>
     <ol>
-      <li><a href="#unreleased">Unreleased <span>next</span></a></li>
+      <li><a href="#v0-12-0-v0-57-0">0.12.0 <span>2026-10-29</span></a></li>
       <li><a href="#v0-11-0-v0-56-2">0.11.0 <span>2026-10-11</span></a></li>
       <li><a href="#v0-10-2-v0-56-2">0.10.2 <span>2026-10-11</span></a></li>
       <li><a href="#v0-10-1-v0-56-2">0.10.1 <span>2026-10-11</span></a></li>
@@ -207,30 +207,58 @@
   <main id="changelog" tabindex="-1">
     <ol class="timeline" aria-label="Releases, newest first">
       <li>
-        <article class="entry unreleased" id="unreleased" aria-labelledby="unreleased-title">
+        <article class="entry" id="v0-12-0-v0-57-0" aria-labelledby="v0-12-0-v0-57-0-title">
           <div class="entry-head">
-            <h2 id="unreleased-title"><a href="#unreleased">Unreleased</a></h2>
-            <div class="meta"><span class="badge pending">Not yet released</span><span>Since v0.11.0-v0.56.2</span></div>
+            <h2 id="v0-12-0-v0-57-0-title"><a href="#v0-12-0-v0-57-0">0.12.0</a></h2>
+            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-10-29T00:01:38Z">Oct 29, 2026</time><span class="badge">Hyprland 0.57.0</span><code>v0.12.0-v0.57.0</code></div>
           </div>
-          <p class="summary">Natural is now the default layout. Set layout_engine = &quot;grid&quot; to keep the previous grid layout.</p>
+          <p class="headline">Hyprland 0.57, workspace tiles, natural layout by default and Stage that pushes scrolling layouts aside</p>
+          <h3>Hyprland 0.57</h3>
+          <ul>
+            <li>Targets Hyprland v0.57.0 from gfhdhytghd/Hyprland (<code>f6725e43</code>). Upstream hyprwm v0.57.0 is a different commit with a different plugin ABI.</li>
+            <li>The plugin refuses to load, with a notification, when the Hyprland headers it was built with do not match the running compositor; rebuild it for that compositor (<code>hyprpm update</code>).</li>
+            <li>Hooked compositor functions are checked against their exact 0.57 signatures at build time.</li>
+          </ul>
+          <h3>Workspace tiles (opt-in)</h3>
+          <ul>
+            <li>Split a monitor into up to three independent workspace tiles with <code>tiles_enabled = 1</code>. Each tile keeps its own active workspace and history; focus, fullscreen and maximize stay inside the owning tile.</li>
+            <li>Add, remove, focus and resize tiles with <code>hl.plugin.hymission.tile_*</code>, or drag a tile boundary; Esc restores the starting widths.</li>
+            <li>Overview and the workspace strip group windows by tile, and Stage gets a sidebar per tile. Drag previews between tiles to move windows or split a desktop.</li>
+            <li><code>tiles_state()</code>, <code>hyprctl -j hymission-tiles-state</code> and the <code>hymission-tiles</code> socket2 event expose tiles to bars.</li>
+          </ul>
           <h3>Natural layout by default</h3>
           <ul>
-            <li>The default layout_engine is now natural, using the former natural2 algorithm with stable session allocations and workspace/column-aware packing. Set layout_engine = &quot;grid&quot; to keep the previous grid layout.</li>
-            <li>natural2 remains an alias for natural in every scope override. The old natural solver has been removed; natural_scale_flex is accepted as a deprecated no-op. Grid scoring weights remain available for grid.</li>
+            <li>The default <code>layout_engine</code> is now <code>natural</code>, using the former natural2 algorithm with stable allocations and workspace/column-aware packing. Set <code>layout_engine = &quot;grid&quot;</code> to keep the previous layout.</li>
+            <li><code>natural2</code> remains an alias. The old natural solver has been removed; <code>natural_scale_flex</code> is accepted as a deprecated no-op.</li>
+            <li>Overview slots stay put when native focus resizes or rearranges the real windows; the selected and hovered enlargement pushes neighbours aside without swapping their order.</li>
           </ul>
-          <h3>Stable overview focus</h3>
+          <h3>Stage</h3>
           <ul>
-            <li>Keep natural overview slots frozen when native focus resizes or rearranges the real windows. Selected/hovered enlargement uses a separate ripple that preserves preview order and separating axes, including mid-animation retargeting.</li>
-            <li>Preserve the active enlargement animation during passive overview rebuilds. Window membership, viewport and layout-constraint changes still update the base layout.</li>
+            <li>Dragging a workspace card to another slot in its sidebar column renumbers the real workspaces (<code>stage_drag_reorder</code>, on by default).</li>
+            <li>On scrolling layouts with several columns, opening Stage pushes the whole layout aside instead of resizing every window. A single window, or a maximized column, still narrows to fit the remaining desktop and returns to its width when Stage closes.</li>
           </ul>
-          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/compare/v0.11.0-v0.56.2...master">Compare v0.11.0-v0.56.2…master</a></div>
+          <h3>Overview</h3>
+          <ul>
+            <li>The window search box is a single opaque surface, and the search header space is always reserved.</li>
+            <li>New defaults: <code>niri_scrolling_preview_gap = 24</code>, <code>focus_selected_thickness = 3</code>, <code>backdrop_color = 0x26000000</code>.</li>
+          </ul>
+          <h3>Fixed</h3>
+          <ul>
+            <li>Unloading the plugin right after a config reload while the overview is open no longer crashes Hyprland: deferred work is owned and cancelled on unload.</li>
+            <li><code>hyprctl reload full-reset</code> keeps Hymission&#x27;s Lua functions and options.</li>
+            <li>Window shadows no longer fade out while the overview closes, and workspace strip thumbnails follow the live desktop.</li>
+            <li>Overview opacity follows native focus changes.</li>
+            <li>A continuous swipe from the overview through the desktop into the workspace overview no longer leaves a dimmed ghost window.</li>
+            <li>Overview initialization failures are reported instead of opening silently; invalid UTF-8 in window titles no longer breaks the state JSON; numeric options are validated.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/releases/tag/v0.12.0-v0.57.0">Release notes for v0.12.0-v0.57.0 on GitHub</a><a href="https://github.com/gfhdhytghd/hymission/compare/v0.11.0-v0.56.2...v0.12.0-v0.57.0">Compare with v0.11.0-v0.56.2</a></div>
         </article>
       </li>
       <li>
         <article class="entry" id="v0-11-0-v0-56-2" aria-labelledby="v0-11-0-v0-56-2-title">
           <div class="entry-head">
             <h2 id="v0-11-0-v0-56-2-title"><a href="#v0-11-0-v0-56-2">0.11.0</a></h2>
-            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-10-11T21:39:11Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.11.0-v0.56.2</code></div>
+            <div class="meta"><time datetime="2026-10-11T21:39:11Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.11.0-v0.56.2</code></div>
           </div>
           <p class="headline">Complete session-lock input safety, HDR Stage strips and steadier Stage clicks</p>
           <h3>Session-lock input safety</h3>
