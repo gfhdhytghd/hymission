@@ -15,7 +15,7 @@
           };
           hymission = pkgs.hyprlandPlugins.mkHyprlandPlugin {
             pluginName = "hymission";
-            version = "0.12.0";
+            version = "0.12.1";
             src = self;
             # python3 registers the hook ABI type check (tools/verify_dev_hooks.py --types-only).
             nativeBuildInputs = with pkgs; [ cmake pkg-config python3 ];

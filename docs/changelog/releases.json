@@ -4,6 +4,21 @@
   "site_url": "https://gfhdhytghd.github.io/hymission/",
   "releases": [
     {
+      "tag": "v0.12.1-v0.57.0",
+      "version": "0.12.1",
+      "hyprland": "0.57.0",
+      "published_at": "2026-11-02T18:01:03Z",
+      "headline": "No false deprecation notice on Hyprland 0.57",
+      "sections": [
+        {
+          "title": "Fixed",
+          "items": [
+            "The `expand_selected_window is ignored` migration notice no longer appears when the option is not in your config (#48). Setting the deprecated option explicitly still shows the notice."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.12.0-v0.57.0",
       "version": "0.12.0",
       "hyprland": "0.57.0",
