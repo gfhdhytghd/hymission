@@ -13242,7 +13242,7 @@ void OverviewController::warnAboutDeprecatedExpansionConfig() {
         return;
 
     const auto legacy = Config::mgr()->getConfigValue("plugin:hymission:expand_selected_window");
-    if (!legacy.setByUser)
+    if (!legacy.setByUser || !*legacy.setByUser)
         return;
 
     m_deprecatedExpansionConfigWarned = true;
