@@ -49,6 +49,10 @@ namespace {
 // from the performance profiler and is never enabled in a host session.
 struct CapturedFrame { int width,height; std::vector<unsigned char> pixels; nlohmann::json state; };
 bool recordingFrames=false;
+bool captureFullDamage=true;
+bool captureOutput=false;
+SP<Render::GL::CGLFramebuffer> captureOutputFramebuffer;
+size_t captureLimit=180;
 std::string captureMonitor;
 CHyprSignalListener captureDamageListener;
 std::vector<CapturedFrame> capturedFrames;
@@ -80,7 +84,9 @@ bool readFramePixels(Framebuffer& fb,std::vector<uint8_t>& bytes) {
         if (ok) return true;
     }
     if constexpr (requires { fb.readPixelsRGBA8(bytes); }) {
-        if (!fp16) return fb.readPixelsRGBA8(bytes);
+        // Imported output renderbuffers may have no texture. The HDR helper
+        // rejects those; GLES readback below also supports renderbuffer FBOs.
+        if (!fp16 && fb.getTexture()) return fb.readPixelsRGBA8(bytes);
     }
     {
         // Upstream main lacks the HDR tree's convenience readback API. Keep
@@ -141,29 +147,32 @@ int layoutState(lua_State* L) {
 class CaptureFramePass final:public IPassElement {
  public:
     std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override {
-        if (!recordingFrames || capturedFrames.size()>=180 || !ctx.m_data.currentFB ||
+        if (!recordingFrames || capturedFrames.size()>=captureLimit || !ctx.m_data.currentFB ||
             (!captureMonitor.empty() && ctx.m_data.pMonitor->m_name!=captureMonitor)) return {};
         const auto fb=dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.currentFB);
         if (!fb) throw std::runtime_error("private capture requires native GL framebuffer");
         const auto size=fb->m_size;
         CapturedFrame frame{static_cast<int>(size.x),static_cast<int>(size.y),{}, {}};
         // Sample animation phase before synchronous GPU readback advances time.
-        const auto stageBeforeReadback=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-stage-state","","j"));
-        const auto overviewBeforeReadback=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-overview-state","","j"));
+        const auto stageBeforeReadback=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-stage-state","","j"),nullptr,false);
+        const auto overviewBeforeReadback=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-overview-state","","j"),nullptr,false);
         const auto layoutBeforeReadback=nativeLayoutState();
         const auto readbackStart=std::chrono::steady_clock::now();
         std::vector<uint8_t> rgba(frame.width*frame.height*4);
-        if (!readFramePixels(*fb,rgba)) throw std::runtime_error("private framebuffer readback failed");
-        frame.pixels.resize(frame.width*frame.height*3);
-        for (size_t i=0;i<frame.pixels.size()/3;++i) std::copy_n(rgba.data()+i*4,3,frame.pixels.data()+i*3);
+        if (!captureOutput) {
+            if (!readFramePixels(*fb,rgba)) throw std::runtime_error("private framebuffer readback failed");
+            frame.pixels.resize(frame.width*frame.height*3);
+            for (size_t i=0;i<frame.pixels.size()/3;++i) std::copy_n(rgba.data()+i*4,3,frame.pixels.data()+i*3);
+        } else captureOutputFramebuffer=dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_currentRenderbuffer->getFB());
         auto tiles=nlohmann::json::parse(HyprlandAPI::invokeHyprctlCommand("hymission-tiles-state","","j"),nullptr,false);
         if (tiles.is_discarded()) tiles={{"enabled",false},{"tiles",nlohmann::json::array()}};
-        frame.state={{"overview",overviewBeforeReadback}, {"tiles",tiles}};
+        frame.state={{"overview",overviewBeforeReadback.is_discarded()?nlohmann::json(nullptr):overviewBeforeReadback}, {"tiles",tiles}};
         frame.state["layout"]=layoutBeforeReadback;
         frame.state["monitor"]=ctx.m_data.pMonitor->m_name;
         frame.state["framebuffer"]={{"drm_format",fb->getTexture()->m_drmFormat},{"format",fb->m_drmFormat},{"mirror_format",fb->getMirrorTexture()?fb->getMirrorTexture()->m_drmFormat:0},{"current",fb->getFBID()},{"main",dynamicPointerCast<Render::GL::CGLFramebuffer>(ctx.m_data.mainFB)->getFBID()},{"damage",nlohmann::json::array()}};
+        frame.state["framebuffer"]["output_capture"]=captureOutput;
         ctx.m_data.damage.forEachRect([&](const auto& rect) { frame.state["framebuffer"]["damage"].push_back({rect.x1,rect.y1,rect.x2,rect.y2}); });
-        frame.state["stage"]=stageBeforeReadback;
+        frame.state["stage"]=stageBeforeReadback.is_discarded()?nlohmann::json(nullptr):stageBeforeReadback;
         const auto focused=Desktop::focusState()->window();
         frame.state["focus"]=focused?std::format("0x{:x}",reinterpret_cast<uintptr_t>(focused.get())):"";
         frame.state["readback_ms"]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-readbackStart).count();
@@ -194,7 +203,11 @@ class CaptureFramePass final:public IPassElement {
 };
 int frameCapture(lua_State* L) {
     const std::string action=luaL_checkstring(L,1);
-    if (action=="begin") { capturedFrames.clear();captureMonitor=luaL_optstring(L,2,"");recordingFrames=true; }
+    if (action=="begin" || action=="begin_partial") {
+        capturedFrames.clear();captureMonitor=luaL_optstring(L,2,"");recordingFrames=true;
+        captureFullDamage=action=="begin";captureLimit=luaL_optinteger(L,3,180);
+        captureOutput=lua_toboolean(L,4);captureOutputFramebuffer.reset();
+    }
     else if (action=="end") {
         recordingFrames=false;const std::string prefix=luaL_checkstring(L,2);
         nlohmann::json states=nlohmann::json::array();
@@ -558,9 +571,20 @@ APICALL EXPORT std::string PLUGIN_API_VERSION() { return HYPRLAND_API_VERSION; }
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     fixtureHandle=handle;
     captureDamageListener=Event::bus()->m_events.render.preChecks.listen([](PHLMONITOR monitor) {
-        if (recordingFrames && (captureMonitor.empty() || captureMonitor==monitor->m_name)) g_pHyprRenderer->damageMonitor(monitor);
+        if (recordingFrames && captureFullDamage && (captureMonitor.empty() || captureMonitor==monitor->m_name)) g_pHyprRenderer->damageMonitor(monitor);
     });
     frameListener=Event::bus()->m_events.render.stage.listen([](Event::SRenderStageEvent event) { frameProfile.stage(event);
+        // A partial workbuffer is undefined outside damage. Read the completed
+        // swapchain buffer after endRender(), before native submission, instead.
+        if (recordingFrames && captureOutputFramebuffer && event.stage==RENDER_POST) {
+            auto& frame=capturedFrames.back();
+            std::vector<uint8_t> rgba(frame.width*frame.height*4);
+            if (!readFramePixels(*captureOutputFramebuffer,rgba)) throw std::runtime_error("private output readback failed");
+            frame.pixels.resize(frame.width*frame.height*3);
+            for (size_t i=0;i<frame.pixels.size()/3;++i) std::copy_n(rgba.data()+i*4,3,frame.pixels.data()+i*3);
+            frame.state["framebuffer"]["output"]=captureOutputFramebuffer->getFBID();
+            captureOutputFramebuffer.reset();
+        }
         if (recordingFrames && event.stage==RENDER_LAST_MOMENT && event.context) event.context->get().m_pass.add(makeUnique<CaptureFramePass>()); });
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","profile",profile);
     HyprlandAPI::addLuaFunction(handle,"hymission_tiles_test","frame_capture",frameCapture);
