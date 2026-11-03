@@ -29,6 +29,8 @@ def main():
     ap.add_argument("--default-off-regression", action="store_true")
     ap.add_argument("--search-geometry-regression", action="store_true")
     ap.add_argument("--opacity-regression", action="store_true")
+    ap.add_argument("--blur-flicker-regression", choices=("reference", "never", "off", "stage", "tiles", "stage-tiles"))
+    ap.add_argument("--blur-flicker-opacity", choices=("client", "rule"), default="client")
     ap.add_argument("--opacity-observe", action="store_true")
     ap.add_argument("--opacity-fp16", action="store_true")
     ap.add_argument("--opacity-tiles", action="store_true")
@@ -120,7 +122,7 @@ def main():
     config = root / "hyprland.lua"
     config.write_text('hl.monitor({output="",mode="1920x1080@60",position="auto",scale="1"})\n'
                       'hl.config({misc={disable_hyprland_logo=true,disable_splash_rendering=true,disable_watchdog_warning=true},animations={enabled=false},xwayland={enabled=false},debug={enable_stdout_logs=true}})\n'
-                      f'hl.plugin.load({json.dumps(str(Path(args.plugin).resolve()))})\n')
+                      + (f'hl.plugin.load({json.dumps(str(Path(args.plugin).resolve()))})\n' if args.blur_flicker_regression != "reference" else ""))
     if args.fixture:
         with config.open("a") as output:
             output.write(f"hl.plugin.load({json.dumps(str(Path(args.fixture).resolve()))})\n")
@@ -147,6 +149,8 @@ def main():
         flags = subprocess.check_output(["pkg-config", "--cflags", "wayland-client"], text=True).split()
         subprocess.run(["cc", "-shared", "-fPIC", str(Path(__file__).with_name("tiles_wayland_test_shim.c")), *flags, "-ldl", "-o", str(shim)], check=True)
         env["LD_PRELOAD"] = str(shim)
+        if args.blur_flicker_regression:
+            env["HM_TEST_CONFIGURE_ORDER"] = "1"
         if args.stage_animation_profile:
             gl_shim=root/"stage-gl-profile-shim.so"
             subprocess.run(["cc","-O2","-shared","-fPIC",str(Path(__file__).with_name("tiles_stage_gl_profile_shim.c")),"-ldl","-o",str(gl_shim)],check=True)
@@ -197,7 +201,7 @@ def main():
 
         for _ in range(100):
             try:
-                state = json.loads(request("j/hymission-stage-state" if (args.fb19_regression or args.overview_reveal_regression or args.default_off_regression or args.stage_animation_profile or args.stage_height_regression or args.focus_reflow_regression or args.stage_switch_regression or args.stage_flight_clip_regression) else "j/hymission-tiles-state"))
+                state = json.loads(request("j/monitors" if args.blur_flicker_regression == "reference" else "j/hymission-stage-state" if (args.fb19_regression or args.overview_reveal_regression or args.default_off_regression or args.stage_animation_profile or args.stage_height_regression or args.focus_reflow_regression or args.stage_switch_regression or args.stage_flight_clip_regression) else "j/hymission-tiles-state"))
                 break
             except (ValueError, OSError):
                 time.sleep(0.1)
@@ -211,6 +215,10 @@ def main():
         else:
             raise RuntimeError("nested output did not appear")
         expected_width = monitors[0]["width"] / monitors[0].get("scale", 1)
+        if args.blur_flicker_regression:
+            from blur_flicker_regression import run
+            run(args.blur_flicker_regression, request, root, env, runtime, processes, handles, args.blur_flicker_opacity)
+            return
         if args.fb19_regression:
             from overview_fb19_regression import run
             run(args.fb19_regression,args.fb19_observe,args.fb19_fp16,request,root,env,runtime,processes,handles)
