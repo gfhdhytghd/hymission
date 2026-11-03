@@ -15,6 +15,12 @@ static struct xdg_wm_base* shell;
 static struct wl_surface* surface;
 static struct xdg_surface* xsurface;
 static int width=640,height=480,running=1;
+static unsigned frame=0;
+static void paint(void);
+static void frame_done(void* data,struct wl_callback* callback,uint32_t time) {
+    wl_callback_destroy(callback); paint();
+}
+static const struct wl_callback_listener frame_listener={frame_done};
 struct Buffer { struct wl_buffer* buffer; void* pixels; size_t bytes; };
 static void released(void* data,struct wl_buffer* buffer) {
     struct Buffer* b=data; wl_buffer_destroy(buffer); munmap(b->pixels,b->bytes); free(b);
@@ -32,6 +38,12 @@ static void paint(void) {
     const unsigned alpha=alphaText?(unsigned)strtoul(alphaText,NULL,10):255;
     const uint32_t body=(alpha<<24)|((240*alpha/255)<<16)|((160*alpha/255)<<8)|(64*alpha/255);
     for (int y=0;y<total;++y) for(int x=0;x<width;++x) pixels[y*width+x]=y<header?0xffff0000:body;
+    if (getenv("FB20_PATTERN")) {
+        // Opaque panels and text-like strokes inside a translucent surface
+        // exercise the native blur stencil's DISCARD_OPAQUE path as well.
+        for (int y=height/6;y<height*5/6;++y) for (int x=width/2;x<width*5/6;++x)
+            pixels[y*width+x]=(y/24%2)?0xff2850b0:0xffd0d0d0;
+    }
     struct wl_shm_pool* pool=wl_shm_create_pool(shm,fd,b->bytes);
     b->buffer=wl_shm_pool_create_buffer(pool,0,width,total,stride,WL_SHM_FORMAT_ARGB8888);
     wl_shm_pool_destroy(pool); close(fd);
@@ -42,10 +54,21 @@ static void paint(void) {
         wl_region_add(opaque,0,0,width,total);wl_surface_set_opaque_region(surface,opaque);wl_region_destroy(opaque);
     }
     wl_surface_attach(surface,b->buffer,0,0);
-    wl_surface_damage_buffer(surface,0,0,INT_MAX,INT_MAX);
+    if (getenv("FB20_SMALL_DAMAGE")) {
+        if (!frame++) wl_surface_damage_buffer(surface,0,0,INT_MAX,INT_MAX);
+        else {
+            // Identical buffers, disjoint small damage. The complete image must
+            // stay constant across buffer ages, including the undamaged gaps.
+            int x=32+(frame*13)%(width>96?width-96:1);
+            wl_surface_damage_buffer(surface,x,32,8,8);
+            wl_surface_damage_buffer(surface,width-x-8,height-40,8,8);
+        }
+        struct wl_callback* callback=wl_surface_frame(surface);
+        wl_callback_add_listener(callback,&frame_listener,NULL);
+    } else wl_surface_damage_buffer(surface,0,0,INT_MAX,INT_MAX);
     wl_surface_commit(surface);
 }
-static void configured(void* data,struct xdg_surface* s,uint32_t serial) { xdg_surface_ack_configure(s,serial); paint(); }
+static void configured(void* data,struct xdg_surface* s,uint32_t serial) { xdg_surface_ack_configure(s,serial); frame=0; paint(); }
 static const struct xdg_surface_listener surface_listener={configured};
 static void resized(void* data,struct xdg_toplevel* top,int32_t w,int32_t h,struct wl_array* states) {
     if(w>0) width=w; if(h>0) height=h;

@@ -3950,7 +3950,11 @@ void StageController::Impl::drawWindowPasses(StageWindowPassElement::Elements& e
                     continue; // An empty native clip means UNCLIPPED, not invisible.
                 }
             }
-            if (optimize)
+            // Only the transparent edge scratch layer needs a live backdrop.
+            // A hard viewport clip retains native window coordinates and its
+            // precomputed wallpaper blur. Forcing live blur there samples the
+            // partially repainted window itself at disjoint damage boundaries.
+            if (optimize && edgeEffect.backdrop())
                 *optimize = true;
             g_pHyprRenderer->draw(renderContext(), element, damage);
         }
