@@ -2540,7 +2540,10 @@ void OverviewController::recordWindowActivation(const PHLWINDOW& window, bool al
 }
 
 bool OverviewController::shouldUseRecentWindowOrdering(const State& state) const {
-    return !state.collectionPolicy.onlyActiveWorkspace && multiWorkspaceSortRecentFirstEnabled();
+    // A switch session cycles this order, so the previous window must come next
+    // even when the plain overview keeps windows in stable workspace order.
+    return !state.collectionPolicy.onlyActiveWorkspace &&
+        (multiWorkspaceSortRecentFirstEnabled() || m_toggleOpeningSwitchSession || m_toggleSwitchSessionActive);
 }
 
 SP<IKeyboard> OverviewController::inputKeyboardWithState() const {
@@ -2761,7 +2764,9 @@ SDispatchResult OverviewController::toggle(const std::string& args) {
 
     if (m_state.phase == Phase::Inactive || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle) {
         const bool activateSwitchSession = toggleSwitchModeEnabled();
+        m_toggleOpeningSwitchSession = activateSwitchSession;
         const auto result = open(toggleArguments->scope);
+        m_toggleOpeningSwitchSession = false;
         if (!result.success)
             return result;
 
