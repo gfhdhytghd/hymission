@@ -1,4 +1,5 @@
 #include "hook_broker.hpp"
+#include "hook_lookup.hpp"
 #include "overview_controller.hpp"
 #include "hook_abi.hpp"
 #include "numeric_config.hpp"
@@ -8114,7 +8115,7 @@ void* OverviewController::findFunction(const std::string& symbolName, const std:
 }
 
 void* OverviewController::findFunction(const std::string& symbolName, const std::vector<std::string>& demangledNeedles) const {
-    const auto matches = HyprlandAPI::findFunctionsByName(m_handle, symbolName);
+    const auto matches = hooks::findFunctions(m_handle, symbolName);
     for (const auto& demangledNeedle : demangledNeedles) {
         if (void* source=hooks::findSymbol(matches,demangledNeedle))
             return source;

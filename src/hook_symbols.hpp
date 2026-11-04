@@ -9,6 +9,10 @@
 #include <utility>
 
 namespace hymission::hooks {
+// Linux appends " (deleted)" to the /proc/self/exe link once the running binary
+// was replaced on disk, which is every package update until the next login.
+inline bool isReplacedBinaryLink(std::string_view link) { return link.ends_with(" (deleted)"); }
+
 inline std::string normalizedSignature(std::string_view input) {
     std::string result;
     result.reserve(input.size());

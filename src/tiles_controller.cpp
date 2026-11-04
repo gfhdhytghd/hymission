@@ -1,4 +1,5 @@
 #include "tiles_controller.hpp"
+#include "hook_lookup.hpp"
 #include "hook_abi.hpp"
 #include "hook_broker.hpp"
 #include "workspace_key.hpp"
@@ -351,7 +352,7 @@ struct TilesController::Impl {
     }
     template<class Fn> bool attach(const char* key, Fn fn, hooks::Lease*& lease, int priority=0) {
         const auto sig = tiles::symbols::lookup(key);
-        const auto source=hooks::findSymbol(HyprlandAPI::findFunctionsByName(handle, std::string(sig.substr(0, sig.find('('))).substr(std::string(sig.substr(0, sig.find('('))).rfind("::") + 2)),sig,true);
+        const auto source=hooks::findSymbol(hooks::findFunctions(handle, std::string(sig.substr(0, sig.find('('))).substr(std::string(sig.substr(0, sig.find('('))).rfind("::") + 2)),sig,true);
         if (!source) { initError = std::string("tiles disabled: expected one exact symbol: ") + std::string(sig); return false; }
         lease = hooks::create(handle, source, hooks::target(fn));
         if (lease) { lease->priority=priority; leases.push_back(lease); }

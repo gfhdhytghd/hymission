@@ -40,6 +40,8 @@ void* nativeOriginal(void* p) { return static_cast<Native*>(p)->original; }
 void nativeRemove(void*, void* p) { delete static_cast<Native*>(p); --allocations; }
 }
 int main() {
+    assert(!h::isReplacedBinaryLink("/usr/bin/Hyprland"));
+    assert(h::isReplacedBinaryLink("/usr/bin/Hyprland (deleted)"));
     // Actual release end() and scrolling update() prologues from both host cores.
     const std::array<unsigned char,6> tail{0xe9,0x6b,0xe3,0xff,0xff,0x90};
     std::vector<unsigned char> copied(tail.begin(),tail.end()); copied.resize(11); copied[6]=0xe9;
