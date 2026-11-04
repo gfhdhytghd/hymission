@@ -1,3 +1,4 @@
+#include "native_function_lookup.hpp"
 #include "hook_broker.hpp"
 #include "stage_controller.hpp"
 #include "numeric_config.hpp"
@@ -1377,7 +1378,7 @@ bool StageController::Impl::installHooks() {
     if (hookFailure)
         return false;
     const auto find = [&](const char* name, const char* qualified) -> void* {
-        void* address=hooks::findSymbol(HyprlandAPI::findFunctionsByName(handle,name),qualified);
+        void* address=hooks::findSymbol(hooks::findFunctions(handle,name),qualified);
         if (!address)
             error = std::string("stage disabled: missing symbol ") + qualified;
         return address;
@@ -1450,7 +1451,7 @@ bool StageController::Impl::installHooks() {
 
 bool StageController::Impl::ensureOverviewRenderHook() {
     if (!renderWindowHook) {
-        const auto source=hooks::findSymbol(HyprlandAPI::findFunctionsByName(handle,"renderWindow"),
+        const auto source=hooks::findSymbol(hooks::findFunctions(handle,"renderWindow"),
             "Render::IHyprRenderer::renderWindow(Render::CRenderContext&, Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>, Render::SWindowRenderPresentation const&, std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > > const&, bool, Render::eRenderPassMode, bool, bool)",true);
         if (!source) return false;
         renderWindowHook=hooks::create(handle,source,hooks::target(&renderWindowThunk));
@@ -1464,7 +1465,7 @@ bool StageController::Impl::ensureEdgeHook() {
     if (blurFramebufferHook) return true;
     return edgeHookAttempt.run([&] {
     constexpr auto signature="Render::IHyprRenderer::blurMainFramebuffer(Render::CRenderContext&, float, Hyprutils::Math::CRegion const&, Render::SBlurContext const&)";
-    void* address=hooks::findSymbol(HyprlandAPI::findFunctionsByName(handle,"blurMainFramebuffer"),signature,true);
+    void* address=hooks::findSymbol(hooks::findFunctions(handle,"blurMainFramebuffer"),signature,true);
     if (!address) return false;
     blurFramebufferHook=hooks::create(handle,address,hooks::target(&blurFramebufferThunk));
     if (blurFramebufferHook && blurFramebufferHook->hook()) return true;
