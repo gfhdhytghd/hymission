@@ -931,6 +931,7 @@ class OverviewController {
                       const State* previousLayoutState = nullptr) const;
     State  m_state;
     HANDLE m_handle = nullptr;
+    void* m_stripRenderWindow = nullptr;
 
     hooks::Lease*            m_surfaceTexBoxHook = nullptr;
     hooks::Lease*            m_surfaceBoundingBoxHook = nullptr;
