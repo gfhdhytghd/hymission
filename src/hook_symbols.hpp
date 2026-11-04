@@ -1,5 +1,6 @@
 #pragma once
 #include <cctype>
+#include <exception>
 #include <cstdlib>
 #include <cxxabi.h>
 #include <memory>
@@ -9,6 +10,13 @@
 #include <utility>
 
 namespace hymission::hooks {
+// Native symbol lookup can throw filesystem_error after the running compositor
+// executable is replaced. Treat lookup failure like a missing optional symbol.
+template<class Lookup> auto tryLookup(Lookup&& lookup) -> decltype(lookup()) {
+    try { return std::forward<Lookup>(lookup)(); }
+    catch (const std::exception&) { return {}; }
+}
+
 inline std::string normalizedSignature(std::string_view input) {
     std::string result;
     result.reserve(input.size());

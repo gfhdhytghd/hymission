@@ -74,6 +74,9 @@ add_executable(hymission-layout-demo
 target_include_directories(hymission-layout-demo PRIVATE src)
 
 if(BUILD_TESTING)
+  add_executable(hymission-function-lookup-test tools/function_lookup_test.cpp)
+  target_include_directories(hymission-function-lookup-test PRIVATE src)
+  add_test(NAME hymission-function-lookup-test COMMAND hymission-function-lookup-test)
   add_library(hymission-tiles-test MODULE tools/tiles_native_test_plugin.cpp)
   get_target_property(TILES_TEST_INCLUDES hymission INCLUDE_DIRECTORIES)
   target_include_directories(hymission-tiles-test PRIVATE ${TILES_TEST_INCLUDES})
@@ -87,6 +90,9 @@ if(BUILD_TESTING)
   # works with every CMake generator.
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_Interpreter_FOUND)
+    add_test(NAME hymission-deleted-executable-lookup-test
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/deleted_executable_lookup_test.py
+        $<TARGET_FILE:hymission-function-lookup-test>)
     file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/hook-abi-flags.rsp" CONTENT
 "-D$<JOIN:$<TARGET_PROPERTY:hymission,COMPILE_DEFINITIONS>,\n-D>
 -I$<JOIN:$<TARGET_PROPERTY:hymission,INCLUDE_DIRECTORIES>,\n-I>

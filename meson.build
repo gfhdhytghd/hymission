@@ -156,3 +156,8 @@ state_json_test = executable('hymission-state-json-test',
   install: false,
 )
 test('hymission-state-json-test', state_json_test)
+
+lookup_test = executable('hymission-function-lookup-test', 'tools/function_lookup_test.cpp', include_directories: include_directories('src'), install: false)
+test('hymission-function-lookup-test', lookup_test)
+test('hymission-deleted-executable-lookup-test', find_program('python3'),
+  args: [files('tools/deleted_executable_lookup_test.py'), lookup_test])
