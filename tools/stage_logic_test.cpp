@@ -146,29 +146,73 @@ int main() {
     ok &= expect(!pushScrollingTape(false, true, 3, false), "non-scrolling layouts keep the narrowed work area");
     ok &= expect(!pushScrollingTape(true, false, 3, false) && !pushScrollingTape(true, false, 1, false),
                  "a vertical tape is narrowed, never pushed, so no horizontal fraction reaches its column heights");
-    // Inside a pushed tape only a maximized column narrows to fit the desktop.
-    ok &= expect(near(pushedColumnFraction(1, 1228, 276, 1) * 1228, 952), "a maximized column in a pushed tape fits the visible desktop");
-    ok &= expect(near(pushedColumnFraction(1, 1228, 276, 0), 1) && near(pushedColumnFraction(1, 1228, 276, 0.5) * 1228, 1228 - 138),
-                 "the maximized column follows the revealed reservation and is native when Stage is closed");
-    ok &= expect(near(pushedColumnFraction(0.5, 1228, 0, 1), 0.5) && near(pushedColumnFraction(1, 0, 276, 1), 1),
-                 "no reservation or a degenerate area keeps the native fraction");
-    ok &= expect(pushedColumnFraction(1, 300, 400, 1) * 300 >= 1 - 1e-9, "a reservation wider than the area never collapses the column");
-    ok &= expect(near(maximizedColumnFraction(true, true, 1240, 276, 1) * 1240, 964), "a reserving pushed tape fits its maximized column");
-    ok &= expect(near(maximizedColumnFraction(false, true, 1240, 276, 1), 1) && near(maximizedColumnFraction(false, true, 1240, 276, 0.5), 1),
-                 "once nothing is reserved (no sidebar cards left) the maximized column is native, whatever the Stage progress");
-    ok &= expect(near(maximizedColumnFraction(true, false, 1240, 276, 1), 1), "a tape that is not pushed never fits a maximized column");
+    // Scaled fractions retain pixel widths while the narrowed viewport owns scrolling.
     for (const double progress : {0.0, 0.25, 0.5, 1.0, 0.5, 0.0}) {
         const hymission::Rect native{-1440, 30, 1440, 842};
+        const double scale = pushedColumnScale(native.width, 240, progress);
         for (const bool sidebarRight : {false, true}) {
-            const auto pushed = reservedWorkArea(native, 240, progress, sidebarRight, true);
-            ok &= expect(near(pushed.width, native.width) && near(pushed.height, native.height) && near(pushed.y, native.y),
-                         "a pushed tape keeps its sizing width and height throughout opening, closing and reversal");
-            ok &= expect(near(pushed.x, native.x + (sidebarRight ? -240 : 240) * progress), "the tape moves away from the sidebar by the revealed reservation");
+            const auto pushed = reservedWorkArea(native, 240, progress, sidebarRight);
+            double extent = 0;
+            for (const double fraction : {0.2, 0.3, 0.5}) {
+                const double written = pushedColumnFraction(fraction, scale);
+                extent += written * pushed.width;
+                ok &= expect(near(written * pushed.width, fraction * native.width), "pushed columns keep pixel widths");
+                ok &= expect(near(nativeColumnFraction(written, scale), fraction), "column fractions round-trip through reservation scaling");
+            }
+            ok &= expect(near(extent - pushed.width, 240 * progress), "an exact-fit tape gains the reservation amount as scroll range on either side");
+            ok &= expect(
+                near(pushedColumnFraction(1, scale), 1) && near(pushedColumnFraction((1 + scale) / 2, scale), 1), "maximized and wider columns clamp to one visible viewport");
         }
-        // Closing restores exactly the native area.
-        if (progress == 0.0)
-            ok &= expect(near(reservedWorkArea(native, 240, 0, false, true).x, native.x) && near(reservedWorkArea(native, 240, 0, false, false).width, native.width),
-                         "a closed Stage leaves the native work area untouched in both modes");
+        const double born = nativeColumnFraction(0.4, scale);
+        ok &= expect(near(born * native.width, 0.4 * native.width * scale) && near(pushedColumnFraction(born, scale), 0.4),
+            "a column first seen mid-reservation retains its written fraction and pixel width across restore");
+    }
+    ok &= expect(near(pushedColumnFraction(0.5, pushedColumnScale(1440, 240, 0)), 0.5), "progress zero is the identity");
+    ok &= expect(near(pushedColumnScale(0, 240, 1), 1) && near(pushedColumnScale(300, 400, 1), 1.0 / 300), "degenerate and excessive reservations stay bounded");
+    ok &= expect(near(pushedColumnFraction(nativeColumnFraction(0.6, 0.75), 0.9), 0.5), "user width edits use the last written scale before rescaling");
+    ok &= expect(
+        near(nativeColumnFraction(1, 0.75), 1) && near(nativeColumnFraction(1 - 1e-6, 0.75), 1), "a column filled to the viewport while Stage is open is native 1 after restore");
+    // Use float32 readback, as SColumnData does, when remembering our writes.
+    const auto recheckColumn = [](ColumnFraction state, double current, double scale) {
+        state = foreignColumnNative(state, current);
+        state.written = static_cast<float>(pushedColumnFraction(state.native, scale));
+        state.scale = scale;
+        return state;
+    };
+    for (const double scaleWhileFilled : {1.0, 0.9, 0.6}) {
+        ColumnFraction state{0.5, static_cast<float>(pushedColumnFraction(0.5, 0.75)), 0.75, std::nullopt};
+        const double savedByHyprland = state.written;
+        state = recheckColumn(state, 1, scaleWhileFilled);
+        ok &= expect(state.fill && near(state.fill->writtenBeforeFill, savedByHyprland) && near(state.fill->nativeBeforeFill, 0.5) && near(state.native, 1),
+                     "a foreign fill remembers the float32 write and native fraction from before maximize");
+        for (int i = 0; i < 100; ++i)
+            state = recheckColumn(state, state.written, i % 2 ? scaleWhileFilled : 1.0);
+        state = recheckColumn(state, savedByHyprland, 0.85);
+        ok &= expect(!state.fill && near(state.native, 0.5) && near(state.written, static_cast<float>(0.5 / 0.85)),
+                     "unmaximize restores the original native despite covered rechecks and changed reservation scales");
+        state = recheckColumn(state, 0.6, 0.7);
+        ok &= expect(!state.fill && near(state.native, 0.6 * 0.85), "a resize after unmaximize uses the last written scale");
+    }
+    {
+        ColumnFraction state{0.5, static_cast<float>(0.5 / 0.75), 0.75, std::nullopt};
+        state = recheckColumn(state, 1, 0.9);
+        const auto resized = foreignColumnNative(state, 0.4);
+        ok &= expect(near(resized.native, 0.4 * 0.9), "a user resize while at fill does not match the saved pre-fill fraction");
+        ok &= expect(near(foreignColumnNative(state, state.written).native, 1), "closing Stage while still at fill keeps width 1");
+        const auto restored = foreignColumnNative(state, state.fill->writtenBeforeFill + 5e-7);
+        ok &= expect(near(restored.native, 0.5) && !restored.fill, "unmaximize recognizes a saved float32 fraction within tolerance on close too");
+        ColumnFraction ordinary{0.5, static_cast<float>(0.5 / 0.75), 0.75, std::nullopt};
+        ok &= expect(near(foreignColumnNative(ordinary, 0.6).native, 0.45), "closing Stage retains a user resize since the last recheck");
+    }
+    {
+        ColumnFraction state{0.5, static_cast<float>(0.5 / 0.75), 0.75, std::nullopt};
+        for (int i = 0; i < 1000; ++i) {
+            const double savedByHyprland = state.written;
+            state = recheckColumn(state, 1, 1);
+            state = recheckColumn(state, state.written, 0.9);
+            state = recheckColumn(state, savedByHyprland, 0.75);
+        }
+        ok &= expect(near(state.native, 0.5) && !state.fill, "repeated maximize round trips do not grow the native fraction");
     }
     for (const bool right : {false,true}) {
         const hymission::Rect desktop{240,0,520,720};

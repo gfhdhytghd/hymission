@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -15,8 +16,8 @@ inline double visibilityGestureProgress(double start, double displacement, doubl
 }
 
 // A horizontal scrolling workspace spread over several columns keeps its
-// sizing width: Stage pushes the whole tape away from the sidebar and nothing
-// is resized. One column, or a workspace covered by a fullscreen window,
+// pixel widths: Stage narrows the viewport and scales fractions so the hidden
+// part remains scrollable. One column, or a workspace covered by a fullscreen window,
 // follows the visible desktop width instead, so that window is resized to make
 // room. A vertical tape (up/down) lays its columns along the height, so every
 // column spans the width and the narrowed viewport fits all of them; column
@@ -25,33 +26,47 @@ constexpr bool pushScrollingTape(bool scrolling, bool horizontal, std::size_t co
     return scrolling && horizontal && !fullscreen && columns > 1;
 }
 
-// In a pushed tape, a maximized column (native width fraction 1) is the one
-// window that should still fit the visible desktop: its fraction of the
-// unchanged sizing width shrinks by the revealed reservation. Every other
-// column keeps its own fraction. Closing Stage returns it to the native value.
-inline double pushedColumnFraction(double native, double areaWidth, double reservation, double progress) {
+// Ratio of visible to native width, using the same reservation as reservedWorkArea.
+inline double pushedColumnScale(double areaWidth, double reservation, double progress) {
     if (areaWidth <= 1)
-        return native;
+        return 1;
     const double amount = std::min(std::max(0.0, reservation * std::clamp(progress, 0.0, 1.0)), areaWidth - 1);
-    return native * (areaWidth - amount) / areaWidth;
+    return (areaWidth - amount) / areaWidth;
 }
 
-// The width fraction of a maximized column under Stage: fitted only while a
-// pushed tape reserves sidebar space; native (1) as soon as nothing is
-// reserved, e.g. after the last sidebar card went away, or the tape is not pushed.
-inline double maximizedColumnFraction(bool reserving, bool push, double areaWidth, double reservation, double progress) {
-    return reserving && push ? pushedColumnFraction(1, areaWidth, reservation, progress) : 1;
-}
+// Preserve pixel width up to the native maximum: one visible viewport.
+inline double pushedColumnFraction(double native, double scale) { return std::min(1.0, native / scale); }
 
-// Reserve the sidebar in layout coordinates. Without `push` the area narrows
-// and native scrolling resolves its normalized widths against the visible
-// part; with `push` it keeps its width and moves aside by the same amount.
-inline Rect reservedWorkArea(Rect area, double reservation, double progress, bool right, bool push = false) {
-    const double amount = std::min(std::max(0.0, reservation * std::clamp(progress, 0.0, 1.0)), std::max(0.0, area.width - 1));
-    if (push) {
-        area.x += right ? -amount : amount;
-        return area;
+// Viewport-filling writes stay native 1.
+inline double nativeColumnFraction(double written, double scale) { return written >= 1 - 1e-6 ? 1 : written * scale; }
+
+struct ColumnFraction {
+    double native, written, scale;
+    struct Fill {
+        double writtenBeforeFill, nativeBeforeFill;
+    };
+    std::optional<Fill> fill;
+};
+
+// Hyprland restores the fraction it saved before maximize, even if Stage's
+// reservation has changed since then. Keep that round trip in native units.
+inline ColumnFraction foreignColumnNative(ColumnFraction state, double current) {
+    if (std::abs(current - state.written) <= 1e-6)
+        return state;
+    if (state.fill && std::abs(current - state.fill->writtenBeforeFill) <= 1e-6) {
+        state.native = state.fill->nativeBeforeFill;
+        state.fill.reset();
+    } else {
+        if (current >= 1 - 1e-6 && !state.fill)
+            state.fill = ColumnFraction::Fill{state.written, state.native};
+        state.native = nativeColumnFraction(current, state.scale);
     }
+    return state;
+}
+
+// Reserve the sidebar in layout coordinates; native scrolling owns the range.
+inline Rect reservedWorkArea(Rect area, double reservation, double progress, bool right) {
+    const double amount = std::min(std::max(0.0, reservation * std::clamp(progress, 0.0, 1.0)), std::max(0.0, area.width - 1));
     if (!right)
         area.x += amount;
     area.width -= amount;
