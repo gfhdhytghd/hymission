@@ -49,24 +49,28 @@ mapped_paths() {
   done <<<"$instances"
 }
 
+# A soname bump in Hyprland's libraries keeps the commit but breaks the old build.
+abi_broken() { ldd "$1" 2>/dev/null | grep -q 'not found'; }
+
 status() {
-  local commit loaded built="" stamp=null available=false
+  local commit loaded built="" stamp=null available=false broken=false
   commit=$(running_commit)
   loaded=$(loaded_path)
   if [[ -f $STAMP ]]; then
     stamp=$(cat "$STAMP")
     built=$(jq -r '.dir + "/" + .lib' <<<"$stamp")
     [[ -f $built ]] && available=true
+    [[ -z $loaded && $available == true ]] && abi_broken "$built" && broken=true
   fi
   jq -nc --arg loaded "$loaded" --arg cache "$CACHE/" --arg built "$built" \
     --arg commit "$commit" --arg source "$(source_commit)" \
-    --argjson stamp "$stamp" --argjson available "$available" '
+    --argjson stamp "$stamp" --argjson available "$available" --argjson broken "$broken" '
     {
       state: (
         if $stamp != null and ($available | not) then "missing"
         elif $loaded != "" then (if ($loaded | startswith($cache)) then "loaded" else "foreign" end)
         elif $stamp == null or ($available | not) then "missing"
-        elif $stamp.hyprland != $commit then "stale"
+        elif $stamp.hyprland != $commit or $broken then "stale"
         else "ready" end),
       outdated: ($stamp != null and $stamp.source != $source),
       swap: ($available and $loaded != "" and ($loaded | startswith($cache)) and $built != $loaded
@@ -259,6 +263,7 @@ setup() (
   source=$(source_commit)
   out="$CACHE/${running:0:12}-${source:0:12}"
   for file in "${FILES[@]}"; do [[ -f $out/$file ]] || complete=false; done
+  [[ $complete == true ]] && abi_broken "$out/${FILES[0]}" && complete=false
   if [[ $complete != true ]]; then
     headers=$(header_commit)
     [[ -n $headers ]] || die "Hyprland headers not found in /usr/include/hyprland"

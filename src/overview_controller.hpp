@@ -631,6 +631,7 @@ class OverviewController {
     [[nodiscard]] bool         workspaceStripEnabled(const State& state) const;
     [[nodiscard]] bool         isStripOnlyOverviewState(const State& state) const;
     [[nodiscard]] bool         shouldContinuouslyRefreshWorkspaceStripSnapshots() const;
+    bool                         refreshWorkspaceStripActivity();
     [[nodiscard]] bool         isCurrentActiveWorkspaceStripEntry(const WorkspaceStripEntry& entry) const;
     [[nodiscard]] int          resolveOverviewWorkspaceSwipeStep(eTrackpadGestureDirection direction, double totalDelta, double lastDelta) const;
     [[nodiscard]] bool         switchOverviewWorkspaceByStep(int step);

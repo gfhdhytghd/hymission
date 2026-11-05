@@ -1,0 +1,113 @@
+{
+  "owner": "gfhdhytghd",
+  "hyprland_reference": "/home/wilf/data/Hyprland",
+  "branch_targets": {
+    "master": {
+      "hyprland": [
+        "hyprwm/Hyprland",
+        "latest-release"
+      ]
+    },
+    "main": {
+      "hyprland": [
+        "hyprwm/Hyprland",
+        "latest-release"
+      ]
+    },
+    "hyprland-master": {
+      "hyprland": [
+        "hyprwm/Hyprland",
+        "main"
+      ]
+    },
+    "my-hyprland-master": {
+      "hyprland": [
+        "gfhdhytghd/Hyprland",
+        "main"
+      ],
+      "aquamarine": [
+        "gfhdhytghd/aquamarine",
+        "master"
+      ]
+    },
+    "omarchy-plugin": {
+      "hyprland": [
+        "hyprwm/Hyprland",
+        "flake-lock"
+      ]
+    },
+    "omarchy-marketplace": {
+      "hyprland": [
+        "hyprwm/Hyprland",
+        "flake-lock"
+      ]
+    }
+  },
+  "repos": {
+    "hymission": {
+      "local": "/home/wilf/data/hyprland_plugins/hymission",
+      "plugin": true,
+      "smoke": [
+        "hymission:toggle",
+        "hymission:toggle"
+      ],
+      "notes": "Keep master/hyprland-master/omarchy-* in sync per AGENTS.md; marketplace submissions stay manual.",
+      "sync_into": [
+        "hyprland-master",
+        "omarchy-plugin",
+        "omarchy-marketplace"
+      ]
+    },
+    "HyprCapture": {
+      "local": "/home/wilf/data/hyprland_plugins/hyprcapture",
+      "plugin": true,
+      "smoke": [
+        "hyprcapture:cancel"
+      ],
+      "sync_into": [
+        "hyprland-master",
+        "omarchy-marketplace"
+      ]
+    },
+    "hypr-edgehover": {
+      "local": "/home/wilf/data/hyprland_plugins/hypr-edgehover",
+      "plugin": true,
+      "smoke": [],
+      "sync_into": [
+        "hyprland-master"
+      ]
+    },
+    "UltraEdge": {
+      "local": "/home/wilf/data/hyprland_plugins/UltraEdge",
+      "plugin": true,
+      "smoke": [],
+      "sync_into": [
+        "hyprland-master"
+      ]
+    },
+    "hypr-sdr-white": {
+      "local": "/home/wilf/data/hyprland_plugins/hypr-sdr-white",
+      "plugin": true,
+      "smoke": [
+        "hypr_sdr_white:refresh"
+      ],
+      "sync_into": [
+        "my-hyprland-master"
+      ]
+    },
+    "Hypr-Agent-Portal": {
+      "local": "/home/wilf/data/hyprland_plugins/Hypr-ComputerUse-MCP",
+      "plugin": true,
+      "smoke": [],
+      "sync_into": [
+        "hyprland-master"
+      ]
+    },
+    "hypr-kdeconnect-fix": {
+      "local": "/home/wilf/data/hyprland_plugins/hypr-kdeconnect-fix",
+      "plugin": false,
+      "smoke": [],
+      "notes": "Standalone Qt/Wayland helper, not a compositor plugin: build with the system toolchain and run its tests; no Hyprland prefix or smoke run."
+    }
+  }
+}
