@@ -4035,25 +4035,25 @@ void OverviewController::handleWindowSetChange(PHLWINDOW window, WindowSetChange
     }
 }
 
+bool OverviewController::refreshWorkspaceStripActivity() {
+    bool changed = false;
+    for (auto& entry : m_state.stripEntries) {
+        const bool active = isCurrentActiveWorkspaceStripEntry(entry);
+        if (entry.active == active)
+            continue;
+
+        entry.active = active;
+        changed = true;
+    }
+    return changed;
+}
+
 void OverviewController::handleWorkspaceChange(PHLWORKSPACE workspace) {
     const bool liveFocusWorkspaceChange = matchesPendingLiveFocusWorkspaceChange(workspace);
     const bool stripWorkspaceChange = matchesPendingStripWorkspaceChange(workspace);
     const auto action = resolveOverviewWorkspaceChangeAction(isVisible(), m_applyingWorkspaceTransitionCommit, m_workspaceTransition.active,
                                                              m_beginCloseInProgress || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle,
                                                              liveFocusWorkspaceChange || stripWorkspaceChange, allowsWorkspaceSwitchInOverview());
-    const auto refreshWorkspaceStripActivity = [this]() {
-        bool changed = false;
-        for (auto& entry : m_state.stripEntries) {
-            const bool active = isCurrentActiveWorkspaceStripEntry(entry);
-            if (entry.active == active)
-                continue;
-
-            entry.active = active;
-            changed = true;
-        }
-        return changed;
-    };
-
     if (action == OverviewWorkspaceChangeAction::Ignore)
         return;
 
@@ -7310,6 +7310,9 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         clearOverviewWorkspaceTransition(targetWorkspace);
         carryOverWorkspaceStripSnapshots(next, m_state);
         m_state = std::move(next);
+        // The target state was built before the monitor switched, so its strip
+        // still marks the workspace we just left as active.
+        (void)refreshWorkspaceStripActivity();
         sendSearchResultCount();
         applyWorkspaceNameOverrides(m_state);
         refreshWorkspaceStripSnapshots();
