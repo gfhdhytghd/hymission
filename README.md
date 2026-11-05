@@ -696,8 +696,8 @@ Search filters the current overview scope by Unicode-normalized, case-insensitiv
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `backdrop_blur` | bool | `0` | Blur the full-monitor overview backdrop. |
-| `focus_hover_thickness` | float | `2` | Hover focus outline thickness. |
-| `focus_selected_thickness` | float | `3` | Selected focus outline thickness. |
+| `focus_hover_thickness` | float | `2` | Hover focus outline thickness in logical pixels, rounded to a whole number; `0` draws no outline. |
+| `focus_selected_thickness` | float | `3` | Selected focus outline thickness in logical pixels, rounded to a whole number; `0` draws no outline. |
 
 ### Workspace strip and bar
 
