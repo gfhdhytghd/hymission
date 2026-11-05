@@ -920,6 +920,7 @@ class OverviewController {
     void refreshDraggedWindowCompositeTexture();
     void renderPickLabels() const;
     void renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const;
+    void renderPreviewOutline(const PHLWINDOW& window, const Rect& rect, const CHyprColor& color, double thickness) const;
     void activateStripTarget(std::size_t index);
     void clearStripWindowDragState();
     void clearPendingStripWorkspaceChange();
