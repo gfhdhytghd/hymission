@@ -2547,7 +2547,10 @@ void OverviewController::recordWindowActivation(const PHLWINDOW& window, bool al
 }
 
 bool OverviewController::shouldUseRecentWindowOrdering(const State& state) const {
-    return !state.collectionPolicy.onlyActiveWorkspace && multiWorkspaceSortRecentFirstEnabled();
+    // A switch session cycles this order, so the previous window must come next
+    // even when the plain overview keeps windows in stable workspace order.
+    return !state.collectionPolicy.onlyActiveWorkspace &&
+        (multiWorkspaceSortRecentFirstEnabled() || m_toggleOpeningSwitchSession || m_toggleSwitchSessionActive);
 }
 
 SP<IKeyboard> OverviewController::inputKeyboardWithState() const {
@@ -2768,7 +2771,9 @@ SDispatchResult OverviewController::toggle(const std::string& args) {
 
     if (m_state.phase == Phase::Inactive || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle) {
         const bool activateSwitchSession = toggleSwitchModeEnabled();
+        m_toggleOpeningSwitchSession = activateSwitchSession;
         const auto result = open(toggleArguments->scope);
+        m_toggleOpeningSwitchSession = false;
         if (!result.success)
             return result;
 
@@ -15065,8 +15070,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     if (!monitor || !monitor->m_activeWorkspace)
         return state;
 
+    // A switch session opened during the close animation still needs recent order.
     const bool preserveExistingOrder =
-        workspaceOverrides.empty() && isVisible() && requestedScope == m_state.collectionPolicy.requestedScope && (!m_state.ownerMonitor || monitor == m_state.ownerMonitor);
+        !m_toggleOpeningSwitchSession && workspaceOverrides.empty() && isVisible() && requestedScope == m_state.collectionPolicy.requestedScope && (!m_state.ownerMonitor || monitor == m_state.ownerMonitor);
     const auto groupPolicy = groupedWindowsPolicy();
 
     state.ownerMonitor = monitor;
