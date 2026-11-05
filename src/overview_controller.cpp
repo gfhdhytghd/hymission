@@ -13592,7 +13592,7 @@ void OverviewController::renderSelectionChrome() const {
             if (groupRect.width > 0 && groupRect.height > 0)
                 renderOutline(groupRect, colorWithAlphaMultiplier(focusHoverColor(), progress), focusHoverThickness());
         } else {
-            renderOutline(currentPreviewRect(m_state.windows[*m_state.hoveredIndex]), colorWithAlphaMultiplier(focusHoverColor(), progress), focusHoverThickness());
+            renderPreviewOutline(m_state.windows[*m_state.hoveredIndex].window, currentPreviewRect(m_state.windows[*m_state.hoveredIndex]), colorWithAlphaMultiplier(focusHoverColor(), progress), focusHoverThickness());
         }
     }
 
@@ -13606,7 +13606,7 @@ void OverviewController::renderSelectionChrome() const {
             const auto& window = m_state.windows[*m_state.selectedIndex];
             const Rect  rectGlobal = currentPreviewRect(window);
             const Rect  rect = rectToMonitorRenderLocal(rectGlobal, renderMonitor);
-            renderOutline(rectGlobal, colorWithAlphaMultiplier(focusSelectedColor(), progress), focusSelectedThickness());
+            renderPreviewOutline(window.window, rectGlobal, colorWithAlphaMultiplier(focusSelectedColor(), progress), focusSelectedThickness());
             auto texture =
                 g_pHyprRenderer->renderText(window.title, colorWithAlphaMultiplier(focusTitleColor(), progress), scaleFontSizeForRender(renderMonitor, 16), false, "",
                                             static_cast<int>(rect.width));
@@ -14042,6 +14042,35 @@ void OverviewController::renderOutline(const Rect& rect, const CHyprColor& color
     g_pHyprOpenGL->renderRect(renderContext(), toBox(bottom), color, {});
     g_pHyprOpenGL->renderRect(renderContext(), toBox(left), color, {});
     g_pHyprOpenGL->renderRect(renderContext(), toBox(right), color, {});
+}
+
+void OverviewController::renderPreviewOutline(const PHLWINDOW& window, const Rect& rect, const CHyprColor& color, double thickness) const {
+    const auto renderMonitor = renderContext().m_data.pMonitor.lock();
+    if (!renderMonitor || !window)
+        return;
+
+    const CBox box = toBox(rectToMonitorRenderLocal(rect, renderMonitor)).round();
+    const int  borderSize = static_cast<int>(std::lround(thickness)); // renderBorder applies the monitor scale
+    if (borderSize < 1 || box.width < 1 || box.height < 1)
+        return;
+
+    // Follow the preview's own corners: renderWindow draws fullscreen windows square,
+    // otherwise the preview keeps the window's unscaled rounding.
+    const bool   fullscreen = Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
+    const double rounding = fullscreen ? 0.0 : std::max(0.0, static_cast<double>(window->presentation().rounding()));
+    const double roundingPower = fullscreen ? 2.0 : window->presentation().roundingPower();
+    const double renderScale = renderScaleForMonitor(renderMonitor);
+    // Same outer corner as renderOverviewBorderForRect and Hyprland's border decoration.
+    const double correctionOffset = borderSize * (M_SQRT2 - 1.0) * std::max(2.0 - roundingPower, 0.0);
+    const int    round = std::min(static_cast<int>(std::floor(std::min(box.width, box.height) * 0.5)), static_cast<int>(std::lround(rounding * renderScale)));
+    const Render::GL::CHyprOpenGLImpl::SBorderRenderData data{
+        .round = round,
+        .roundingPower = static_cast<float>(roundingPower),
+        .borderSize = borderSize,
+        .a = 1.F,
+        .outerRound = std::max(0, static_cast<int>(std::lround((rounding + borderSize - correctionOffset) * renderScale))),
+    };
+    g_pHyprOpenGL->renderBorder(renderContext(), box, Config::CGradientValueData{color}, data);
 }
 
 Rect OverviewController::workspaceStripThumbRect(const WorkspaceStripEntry& entry, const PHLMONITOR& monitor) const {
