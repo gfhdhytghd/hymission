@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <iterator>
 #include <optional>
 #include <limits>
 #include <string>
@@ -107,7 +108,7 @@ Layout::Tiled::CScrollingAlgorithm* scrollingAlgorithm(const PHLWORKSPACE& works
     return scrollingWorkspace(workspace) ? dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(workspace->space()->algorithm()->tiledAlgo().get()) : nullptr;
 }
 
-// Several scrolling columns: Stage moves the tape instead of narrowing it.
+// Several scrolling columns: Stage preserves pixel widths in a narrowed viewport.
 // A covering fullscreen window makes the workspace non-scrolling for Stage.
 bool pushesScrollingTape(const PHLWORKSPACE& workspace) {
     auto* algorithm = scrollingAlgorithm(workspace);
@@ -117,20 +118,9 @@ bool pushesScrollingTape(const PHLWORKSPACE& workspace) {
     return stage::pushScrollingTape(algorithm != nullptr, horizontal, columns, false);
 }
 
-// Columns holding a maximized window (scrolling maximize gives them width 1).
-std::vector<SP<Layout::Tiled::SColumnData>> maximizedColumns(const PHLWORKSPACE& workspace) {
-    std::vector<SP<Layout::Tiled::SColumnData>> result;
+std::vector<SP<Layout::Tiled::SColumnData>> scrollingColumns(const PHLWORKSPACE& workspace) {
     auto* algorithm = scrollingAlgorithm(workspace);
-    if (!algorithm || !algorithm->m_scrollingData)
-        return result;
-    for (const auto& column : algorithm->m_scrollingData->columns)
-        for (const auto& data : column->targetDatas)
-            if (const auto target = data->target.lock(); target && target->window() &&
-                Fullscreen::controller()->getFullscreenModes(target->window()).internal == Fullscreen::FSMODE_MAXIMIZED) {
-                result.push_back(column);
-                break;
-            }
-    return result;
+    return algorithm && algorithm->m_scrollingData ? algorithm->m_scrollingData->columns : std::vector<SP<Layout::Tiled::SColumnData>>{};
 }
 
 bool scrollingTiled(const PHLWINDOW& window) {
@@ -320,8 +310,8 @@ struct StageController::Impl {
         // Slot the lifted card previews (drag reorder); reorderHover is its source.
         std::optional<std::size_t> reorderTo;
         bool covered = false;
-        bool pushScrollingTape = false; // active workspace's tape moves instead of narrowing
-        bool fitMaximized = false;      // ...and holds a maximized column fitted to the desktop
+        bool pushScrollingTape = false; // active workspace's columns keep their pixel widths
+        std::vector<WP<Layout::Tiled::SColumnData>> pushedColumns;
         bool suspended = false;
         bool revealFromBottom = false;
         double shown = 1;
@@ -631,9 +621,13 @@ struct StageController::Impl {
     void drawSidebarGhost(const PHLMONITOR& monitor);
     void returnSidebarCard(const PHLWORKSPACE& workspace, const PHLMONITOR& monitor, tiles::Id tile, const std::vector<WindowSlot>& ghosts, const std::vector<PHLWINDOW>& members);
     bool dragReorder() const { return setting("stage_drag_reorder", 1) != 0; }
-    // Maximized columns narrowed to fit a pushed tape; their native width is 1.
-    std::vector<WP<Layout::Tiled::SColumnData>> fittedColumns;
-    void fitMaximizedColumns(const PHLWORKSPACE& workspace, double fraction);
+    struct FittedColumn {
+        WP<Layout::Tiled::SColumnData> column;
+        PHLWORKSPACEREF workspace;
+        stage::ColumnFraction fraction;
+    };
+    std::vector<FittedColumn> fittedColumns;
+    void fitColumns(const PHLWORKSPACE& workspace, double scale);
     void restoreFittedColumns();
     double previewDuration() const;
     double previewOffset(const Card& card) const;
@@ -1681,9 +1675,9 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
     if (!screen || (!screen->geometry.enabled() && !clustered(*screen)) ||
         (maximizeCover && Fullscreen::controller()->getFullscreenModes(workspace).internal == Fullscreen::FSMODE_MAXIMIZED)) {
         // Nothing is reserved now, e.g. the last sidebar card went away. The
-        // native recheck does not touch column widths, so a maximized column
-        // fitted earlier must get its native width back here.
-        fitMaximizedColumns(workspace, stage::maximizedColumnFraction(false, false, 0, 0, 0));
+        // native recheck does not touch column widths. Retain the records so
+        // a later unmaximize can recognize Hyprland's saved scaled fraction.
+        fitColumns(workspace, 1);
         return;
     }
     // Each invocation starts from the original recheckWorkArea output. Retain
@@ -1691,18 +1685,16 @@ void StageController::Impl::afterRecheck(Layout::CSpace* space) {
     // Native layouts receive the remaining desktop width; scrolling column
     // fractions then resolve against that narrower viewport and no second
     // raster-scale is applied. A scrolling tape spread over several columns
-    // keeps its width and is pushed aside instead, so no window is resized;
+    // keeps its pixel widths through scaled fractions in the narrowed viewport;
     // floating placement still uses the visible part.
     const bool push = !clustered(*screen) && pushesScrollingTape(workspace);
     const double nativeWidth = space->m_workArea.w;
     for (auto* box : {&space->m_workArea, &space->m_floatingWorkArea}) {
-        const auto area = clustered(*screen) ? stage::scaleDesktopRect(rect(*box),rect(baseArea(monitor)),desktopReservation(*screen),visibility) :
-            stage::reservedWorkArea(rect(*box), desktopReservation(*screen), visibility, screen->right, push && box == &space->m_workArea);
+        const auto area = clustered(*screen) ? stage::scaleDesktopRect(rect(*box), rect(baseArea(monitor)), desktopReservation(*screen), visibility)
+                                             : stage::reservedWorkArea(rect(*box), desktopReservation(*screen), visibility, screen->right);
         *box = hymission::box(area);
     }
-    // A maximized window in a pushed tape still fits the visible desktop; only
-    // its column narrows. The other columns keep their native widths.
-    fitMaximizedColumns(workspace, stage::maximizedColumnFraction(true, push, nativeWidth, desktopReservation(*screen), visibility));
+    fitColumns(workspace, push ? stage::pushedColumnScale(nativeWidth, desktopReservation(*screen), visibility) : 1);
     if (!syncing && !sameBox(screen->base, screenBase(monitor,screen->tile)))
         request();
 }
@@ -2001,13 +1993,13 @@ void StageController::Impl::sync() {
             screen->paneTransition = false;
             screen->departingCards.clear();
         }
-        // Opening/closing windows can move the active tape across one column,
-        // and (un)maximizing changes which column must fit the desktop.
+        // New or removed columns need rescaling even when the tape stays pushed.
         const bool push = !clustered(*screen) && pushesScrollingTape(activeWorkspace);
-        const bool fit = push && !maximizedColumns(activeWorkspace).empty();
-        const bool changedPush = screen->pushScrollingTape != push || screen->fitMaximized != fit;
+        const auto columns = push ? scrollingColumns(activeWorkspace) : std::vector<SP<Layout::Tiled::SColumnData>>{};
+        const bool changedPush =
+            screen->pushScrollingTape != push || !std::ranges::equal(screen->pushedColumns, columns, [](const auto& ref, const auto& column) { return ref.lock() == column; });
         screen->pushScrollingTape = push;
-        screen->fitMaximized = fit;
+        screen->pushedColumns.assign(columns.begin(), columns.end());
         if (changedGeometry || changedPolicy || changedCover || changedPush || reconfigure)
             relayout.push_back(monitor);
         for (auto& card : screen->cards) {
@@ -3321,30 +3313,46 @@ void StageController::Impl::drawSidebarGhost(const PHLMONITOR& monitor) {
         drawPreview(members[slot.index],monitor,box(slot.target),clip,8,stage::edgeViewport(rect(monitor->logicalBox()),0,0));
 }
 
-void StageController::Impl::fitMaximizedColumns(const PHLWORKSPACE& workspace, double fraction) {
-    for (const auto& column : maximizedColumns(workspace)) {
-        if (std::abs(column->getColumnWidth() - fraction) > 1e-6)
-            column->setColumnWidth(static_cast<float>(fraction));
-        const auto known = std::ranges::find_if(fittedColumns, [&](const auto& ref) { return ref.lock() == column; });
-        if (fraction != 1 && known == fittedColumns.end())
-            fittedColumns.emplace_back(column);
-        else if (fraction == 1 && known != fittedColumns.end())
-            fittedColumns.erase(known);
+void StageController::Impl::fitColumns(const PHLWORKSPACE& workspace, double scale) {
+    std::erase_if(fittedColumns, [](const auto& entry) { return !entry.column.lock(); });
+    if (scale == 1) {
+        for (auto& entry : fittedColumns) {
+            if (entry.workspace != workspace)
+                continue;
+            const auto column = entry.column.lock();
+            entry.fraction = stage::foreignColumnNative(entry.fraction, column->getColumnWidth());
+            column->setColumnWidth(static_cast<float>(entry.fraction.native));
+            entry.fraction.written = column->getColumnWidth();
+            entry.fraction.scale = 1;
+        }
+        return;
     }
-    std::erase_if(fittedColumns, [](const auto& ref) { return !ref.lock(); });
+    const bool starting = std::ranges::none_of(fittedColumns, [&](const auto& entry) { return entry.workspace == workspace; });
+    for (const auto& column : scrollingColumns(workspace)) {
+        const double current = column->getColumnWidth();
+        auto known = std::ranges::find_if(fittedColumns, [&](const auto& entry) { return entry.column.lock() == column; });
+        if (known == fittedColumns.end()) {
+            fittedColumns.push_back({column, workspace, {starting ? current : stage::nativeColumnFraction(current, scale), current, scale, std::nullopt}});
+            known = std::prev(fittedColumns.end());
+        } else
+            known->fraction = stage::foreignColumnNative(known->fraction, current);
+        column->setColumnWidth(static_cast<float>(stage::pushedColumnFraction(known->fraction.native, scale)));
+        known->fraction.written = column->getColumnWidth();
+        known->fraction.scale = scale;
+    }
 }
 
-// Stage off or unloading: give maximized columns back their native width.
-// Columns that left maximize already had their width restored natively.
+// Also retain a user resize made since the last reservation recheck.
 void StageController::Impl::restoreFittedColumns() {
-    for (const auto& ref : std::exchange(fittedColumns, {}))
-        if (const auto column = ref.lock())
-            for (const auto& data : column->targetDatas)
-                if (const auto target = data->target.lock(); target && target->window() &&
-                    Fullscreen::controller()->getFullscreenModes(target->window()).internal == Fullscreen::FSMODE_MAXIMIZED) {
-                    column->setColumnWidth(1.F);
-                    break;
-                }
+    for (const auto& entry : std::exchange(fittedColumns, {})) {
+        if (const auto column = entry.column.lock()) {
+            const auto fraction = stage::foreignColumnNative(entry.fraction, column->getColumnWidth());
+            // Closing at fill leaves width 1. Hyprland's private restore width
+            // still holds our pre-fill scaled fraction; unmaximize after Stage
+            // closes restores that scaled value. We cannot correct that here.
+            column->setColumnWidth(static_cast<float>(fraction.native));
+        }
+    }
 }
 
 double StageController::Impl::previewDuration() const {
@@ -4412,6 +4420,8 @@ StageController::StageController(HANDLE handle, std::function<bool()> suspended,
 StageController::~StageController() = default;
 void StageController::Impl::applyVisibility(double progress) {
     visibility = std::clamp(progress, 0.0, 1.0);
+    if (visibility == 0)
+        restoreFittedColumns();
     for (auto& screen : screens) {
         screen.flights.clear();
         screen.paneTransition = false;
