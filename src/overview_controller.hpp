@@ -1061,6 +1061,7 @@ class OverviewController {
     std::size_t              m_workspaceTransitionCommitGeneration = 0;
     bool                     m_beginCloseInProgress = false;
     bool                     m_toggleSwitchSessionActive = false;
+    bool                     m_toggleOpeningSwitchSession = false;
     bool                     m_toggleSwitchReleaseArmed = false;
     std::size_t              m_stripSnapshotRenderDepth = 0;
     std::size_t              m_externalRawWindowRenderDepth = 0;
