@@ -15067,8 +15067,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     if (!monitor || !monitor->m_activeWorkspace)
         return state;
 
+    // A switch session opened during the close animation still needs recent order.
     const bool preserveExistingOrder =
-        workspaceOverrides.empty() && isVisible() && requestedScope == m_state.collectionPolicy.requestedScope && (!m_state.ownerMonitor || monitor == m_state.ownerMonitor);
+        !m_toggleOpeningSwitchSession && workspaceOverrides.empty() && isVisible() && requestedScope == m_state.collectionPolicy.requestedScope && (!m_state.ownerMonitor || monitor == m_state.ownerMonitor);
     const auto groupPolicy = groupedWindowsPolicy();
 
     state.ownerMonitor = monitor;
