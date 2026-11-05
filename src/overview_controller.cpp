@@ -14039,15 +14039,21 @@ void OverviewController::renderPreviewOutline(const PHLWINDOW& window, const Rec
     if (borderSize < 1 || box.width < 1 || box.height < 1)
         return;
 
-    // Follow the preview's own corners, which keep the window's unscaled rounding.
-    const int round = std::min(static_cast<int>(std::floor(std::min(box.width, box.height) * 0.5)),
-                               std::max(0, static_cast<int>(std::lround(window->presentation().rounding() * renderScaleForMonitor(renderMonitor)))));
+    // Follow the preview's own corners: renderWindow draws fullscreen windows square,
+    // otherwise the preview keeps the window's unscaled rounding.
+    const bool   fullscreen = Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
+    const double rounding = fullscreen ? 0.0 : std::max(0.0, static_cast<double>(window->presentation().rounding()));
+    const double roundingPower = fullscreen ? 2.0 : window->presentation().roundingPower();
+    const double renderScale = renderScaleForMonitor(renderMonitor);
+    // Same outer corner as renderOverviewBorderForRect and Hyprland's border decoration.
+    const double correctionOffset = borderSize * (M_SQRT2 - 1.0) * std::max(2.0 - roundingPower, 0.0);
+    const int    round = std::min(static_cast<int>(std::floor(std::min(box.width, box.height) * 0.5)), static_cast<int>(std::lround(rounding * renderScale)));
     const Render::GL::CHyprOpenGLImpl::SBorderRenderData data{
         .round = round,
-        .roundingPower = static_cast<float>(window->presentation().roundingPower()),
+        .roundingPower = static_cast<float>(roundingPower),
         .borderSize = borderSize,
         .a = 1.F,
-        .outerRound = round + static_cast<int>(std::lround(borderSize * renderScaleForMonitor(renderMonitor))),
+        .outerRound = std::max(0, static_cast<int>(std::lround((rounding + borderSize - correctionOffset) * renderScale))),
     };
     g_pHyprOpenGL->renderBorder(renderContext(), box, Config::CGradientValueData{color}, data);
 }
