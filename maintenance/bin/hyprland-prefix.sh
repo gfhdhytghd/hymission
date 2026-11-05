@@ -53,7 +53,7 @@ if [ -n "$aq_ref" ]; then build_dep aquamarine "$aq_slug" "$aq_ref"
 elif [ -n "$min" ] && ! vergte "$have" "$min"; then build_dep aquamarine hyprwm/aquamarine "v$min"; fi
 
 echo "== building Hyprland"
-cmake -S "$src" -B "$src/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" -DNO_XWAYLAND=ON
+cmake -S "$src" -B "$src/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix"
 ninja -C "$src/build" -j "$jobs"
 cmake --install "$src/build"
 # Headers + hyprland.pc: the install target does not ship them on every version.
