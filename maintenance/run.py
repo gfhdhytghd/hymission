@@ -178,8 +178,10 @@ def update_local(repo, branch, published):
     entries = run('git', 'worktree', 'list', '--porcelain', cwd=local).split('\n\n')
     for entry in entries:
         lines = entry.splitlines()
-        if f'branch refs/heads/{branch}' in lines:
-            worktree = Path(lines[0].split(' ', 1)[1])
+        if f'branch refs/heads/{branch}' in lines and 'prunable' not in entry:
+            candidate = Path(lines[0].split(' ', 1)[1])
+            if candidate.is_dir():  # a deleted worktree still lists the branch until it is pruned
+                worktree = candidate
     if worktree is None:
         run('git', 'update-ref', f'refs/heads/{branch}', published, current, cwd=local)
         return f'{repo}/{branch}: fast-forwarded {current[:9]}..{published[:9]}'
