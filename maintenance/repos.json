@@ -91,9 +91,8 @@
       "smoke": [
         "hypr_sdr_white:refresh"
       ],
-      "sync_into": [
-        "my-hyprland-master"
-      ]
+      "sync_into": [],
+      "notes": "The user's Hyprland fork does not ship this plugin: my-hyprland-master is not synchronized and gets no fork builds."
     },
     "Hypr-Agent-Portal": {
       "local": "/home/wilf/data/hyprland_plugins/Hypr-ComputerUse-MCP",
