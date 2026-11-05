@@ -14035,8 +14035,8 @@ void OverviewController::renderPreviewOutline(const PHLWINDOW& window, const Rec
         return;
 
     const CBox box = toBox(rectToMonitorRenderLocal(rect, renderMonitor)).round();
-    const int  borderSize = std::max(1, static_cast<int>(std::lround(thickness))); // renderBorder applies the monitor scale
-    if (box.width < 1 || box.height < 1)
+    const int  borderSize = static_cast<int>(std::lround(thickness)); // renderBorder applies the monitor scale
+    if (borderSize < 1 || box.width < 1 || box.height < 1)
         return;
 
     // Follow the preview's own corners, which keep the window's unscaled rounding.
