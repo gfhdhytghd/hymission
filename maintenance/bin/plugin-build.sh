@@ -1,10 +1,15 @@
 #!/bin/bash
-# plugin-build.sh REPO_DIR HYPRLAND_PREFIX [LABEL]
-# Configures, builds and runs the offline tests of a plugin checkout against one Hyprland prefix, inside the
-# sandbox (no network, no home, no live compositor). Output: REPO_DIR/build-LABEL and build-LABEL.log.
-# Exit code 0 = configure, build and ctest all passed. Pass HYPRLAND_PREFIX=system to use the system headers.
+# plugin-build.sh [--trusted] REPO_DIR HYPRLAND_PREFIX [LABEL]
+# Configures, builds and runs the offline tests of a plugin checkout against one Hyprland prefix.
+# Default: inside the bubblewrap sandbox (no network, no home, no live compositor) for code that is not the
+# user's own. --trusted: the user's own branches; no sandbox, but a scrubbed environment (no compositor or
+# display variables, private TMPDIR and XDG_RUNTIME_DIR). The sandbox maps root-owned files to nobody, so tests
+# that require root-owned trusted executables (ffmpeg, hyprctl) only pass in --trusted mode.
+# Output: REPO_DIR/build-LABEL and build-LABEL.log. Exit code 0 = configure, build and ctest all passed.
+# Pass HYPRLAND_PREFIX=system to use the system headers.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
+trusted=0; [ "${1:-}" = --trusted ] && { trusted=1; shift; }
 repo=$(readlink -f "$1"); prefix=$2; label=${3:-check}
 build=$repo/build-$label; log=$repo/build-$label.log
 cat > "$repo/.plugin-build-inner.sh" <<'INNER'
@@ -27,7 +32,14 @@ echo "== OK"
 INNER
 ro=(); [ "$prefix" != system ] && ro=(--ro "$prefix")
 gpu=(); for n in /dev/dri/renderD* /dev/nvidiactl /dev/nvidia0; do [ -e "$n" ] && gpu+=(--dev "$n"); done
-"$here/sandbox.sh" --rw "$repo" "${ro[@]}" "${gpu[@]}" --env NINJA_STATUS="[%f/%t] " -- bash "$repo/.plugin-build-inner.sh" "$repo" "$prefix" "$build" > "$log" 2>&1
-code=$?; rm -f "$repo/.plugin-build-inner.sh"
+if [ $trusted -eq 1 ]; then
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/plugin-build.XXXXXX"); mkdir -p -m 700 "$scratch/run"
+  env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="$scratch" TMPDIR="$scratch" XDG_RUNTIME_DIR="$scratch/run" LANG=C.UTF-8 TERM=dumb NINJA_STATUS="[%f/%t] " \
+    bash "$repo/.plugin-build-inner.sh" "$repo" "$prefix" "$build" > "$log" 2>&1
+  code=$?; rm -rf "$scratch"
+else
+  "$here/sandbox.sh" --rw "$repo" "${ro[@]}" "${gpu[@]}" --env NINJA_STATUS="[%f/%t] " -- bash "$repo/.plugin-build-inner.sh" "$repo" "$prefix" "$build" > "$log" 2>&1
+  code=$?
+fi; rm -f "$repo/.plugin-build-inner.sh"
 grep -E "^== |error:|FAILED|Failed|tests passed|Total Test time" "$log" | tail -n 25
 echo "log: $log"; exit $code
