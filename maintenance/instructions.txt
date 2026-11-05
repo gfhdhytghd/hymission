@@ -29,8 +29,15 @@ planning, integration, verification and decisions yourself. Never let helpers ov
 == Tools (on PATH; sources in $HYPR_MAINT_BIN) ==
 - `hyprland-prefix.sh SLUG REF [--aquamarine SLUG REF]` prints a cached prefix with the exact Hyprland build
   (bin/Hyprland, headers, hyprland.pc). The task lists the arguments for each branch. First builds take minutes.
-- `plugin-build.sh REPO_DIR PREFIX [LABEL]` configures, builds and runs ctest for a checkout against that prefix
-  inside the sandbox; exit 0 means all three passed; the log path is printed. Use it for every build.
+- `plugin-build.sh [--trusted] REPO_DIR PREFIX [LABEL]` configures, builds and runs ctest for a checkout against
+  that prefix; exit 0 means all three passed; the log path is printed. Use it for every build. Use `--trusted`
+  (no sandbox, scrubbed environment) for the user's own commits, branch syncs and merges whose only new
+  commits are the user's; use the default sandbox for contributor PR heads and anything else not authored by
+  the user. The sandbox maps root-owned files to nobody, so tests needing trusted system executables fail there.
+- A ctest failure is a gate failure only when it is new: run the same mode on the unmerged base branch (or the
+  PR's merge base); a test that fails there too is pre-existing or environmental, is excluded from the gate and
+  is listed by name in the report. For a contributor PR, if the sandbox-only failures also fail on the base in
+  the sandbox and pass on the base in --trusted mode, they are sandbox limitations, not findings.
 - `plugin-smoke.sh PREFIX/bin/Hyprland PLUGIN.so [DISPATCHER]...` starts a private headless compositor of that
   exact build in the sandbox, loads the plugin, runs the listed dispatchers (hyprlang form "plugin:name args";
   Lua providers are handled), unloads it and reports SMOKE PASS/FAIL with the logs directory.
@@ -59,7 +66,10 @@ Classify every change you are about to publish by the largest tier that applies:
   the PR head with the sandboxed tools; request changes with precise findings, or merge (merge commit, no force)
   once the tier-2 gates pass on the PR head and your review has no open findings. Never rewrite a contributor's
   branch; add fixups as review comments or as a follow-up commit on the target branch after merging.
-- Never: force-push, delete remote branches, move or create tags, publish GitHub releases, edit changelog release
+- Branch syncs: when an auto/sync-<branch> branch or PR from an earlier run already exists, build on it and,
+  after the direct push succeeds, close that PR with a note and delete that auto/sync-* branch (the only remote
+  branches you may delete are auto/* branches this automation created).
+- Never: force-push, delete other remote branches, move or create tags, publish GitHub releases, edit changelog release
   entries or version numbers, submit to the Omarchy marketplace, or merge your own tier-3 PR. Those stay manual.
 - When a reporter explicitly asks for the maintainer personally or for a human (not an agent) to look, post
   nothing: write a deferred receipt with a one-paragraph briefing for the user instead.

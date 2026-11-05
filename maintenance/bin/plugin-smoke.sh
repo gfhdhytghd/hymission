@@ -8,7 +8,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 hypr=$(readlink -f "$1"); so=$(readlink -f "$2"); shift 2
 libdir=$(dirname "$(dirname "$hypr")")/lib; [ -d "$libdir" ] || libdir=$(dirname "$hypr")
 work=$(mktemp -d "${TMPDIR:-/tmp}/plugin-smoke.XXXXXX")
-logs=${SMOKE_LOGS:-$work/logs}; mkdir -p "$logs"; echo "logs: $logs"
+# Logs stay outside $work (which is bound read-only) and survive the run as evidence.
+logs=${SMOKE_LOGS:-$(mktemp -d "${TMPDIR:-/tmp}/plugin-smoke-logs.XXXXXX")}; mkdir -p "$logs"; echo "logs: $logs"
 printf 'monitor = , 1280x720@60, auto, 1\nmisc {\n  disable_hyprland_logo = true\n}\ndebug {\n  enable_stdout_logs = true\n  disable_logs = false\n}\nxwayland {\n  enabled = false\n}\n' > "$work/smoke.conf"
 cp "$here/wayland-parent-shim.c" "$here/weston-test-seat.c" "$work/"
 cat > "$work/inner.sh" <<'INNER'
@@ -56,4 +57,4 @@ INNER
 gpu=(); for n in /dev/dri/renderD* /dev/nvidiactl /dev/nvidia0; do [ -e "$n" ] && gpu+=(--dev "$n"); done
 "$here/sandbox.sh" "${gpu[@]}" --rw "$logs" --env LOGS="$logs" --ro "$work" --ro "$(dirname "$hypr")" --ro "$libdir" --ro "$(dirname "$so")" -- \
   bash "$work/inner.sh" "$hypr" "$so" "$work/smoke.conf" "$@"
-code=$?; [ -n "${SMOKE_LOGS:-}" ] && rm -rf "$work"; exit $code
+code=$?; rm -rf "$work"; exit $code
