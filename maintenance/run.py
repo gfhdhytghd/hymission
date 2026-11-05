@@ -278,8 +278,9 @@ Hyprland target per branch (arguments for hyprland-prefix.sh, which prints the p
 {branch_targets(repo, checkout)}
 For each branch: merge {base} with a merge commit (no rebase, no squash), resolving conflicts so the branch keeps
 its own Hyprland-version adaptations and Omarchy specifics while taking every {base} change. Then run the tier-2
-gates for that branch (plugin-build.sh against the branch target, clang-format on files you had to edit by hand,
-plugin-smoke.sh for compositor plugins, a read-only Codex review when you resolved conflicts by hand). Push the
+gates for that branch (plugin-build.sh --trusted against the branch target, clang-format on files you had to edit
+by hand, plugin-smoke.sh for compositor plugins, a read-only Codex review when you resolved conflicts by hand).
+A test that also fails on the unmerged branch in the same mode is pre-existing: name it, do not count it. Push the
 branch only when its gates pass; a branch whose gates fail stays unpushed: preserve the merge on
 auto/sync-<branch>, open a PR against <branch> describing the failure, and continue with the other branches.
 Write {target}/receipt.json: {{"status":"completed","pushed":[{{"branch":"...","sha":"..."}}],"summary":"..."}} with
