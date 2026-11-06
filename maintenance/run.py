@@ -21,6 +21,17 @@ CONFIG = json.loads((ROOT / 'repos.json').read_text())
 OWNER = CONFIG['owner']
 LOGFILE = STATE / 'maintenance.log'
 MODE = '-'
+FEISHU_USER = 'ou_3db23cf05c03b4942c355797cc88e8f9'
+REPORT = {'done': [], 'attention': []}
+REPORT_NAME = '插件运维'
+RUN_STAMP = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+# Appended to every agent task: the receipt feeds the Feishu report, so it must be written for the user.
+RECEIPT_RULES = '''The receipt summary must be Chinese, user-facing, at most 300 characters, and describe actions and evidence.
+It is sent verbatim to the user's Feishu DM. Reasons must also be Chinese.
+Add optional "attention":"..." in Chinese only when the user personally must act: a tier-3 PR awaits their
+decision, an auto/* PR was opened, a contributor asks for the maintainer personally, or a manual step the
+script is not allowed to perform (release, tag, marketplace submission, merging its own tier-3 PR).
+Otherwise omit attention.'''
 # Nothing started from here may find the live compositor: the timer inherits the session's variables.
 SCRUB = ('WAYLAND_DISPLAY', 'DISPLAY', 'HYPRLAND_INSTANCE_SIGNATURE', 'SWAYSOCK', 'HYPRLAND_CMD', 'XDG_SESSION_ID', 'LD_PRELOAD')
 
@@ -37,6 +48,72 @@ def log(message):
                 output.write(f'{stamp} [{MODE}] {line}\n')
     except OSError:
         pass
+
+
+def feishu(text, urgent=False):
+    """Direct message to the user through lark-cli's bot identity. Best effort: never raises."""
+    try:
+        text = text[:2999] + '…' if len(text) > 3000 else text
+        if os.environ.get('HYPR_MAINT_FEISHU') == '0':
+            log(f'feishu: 仅记录（加急={urgent}）\n{text}')
+            return
+        key = f'{RUN_STAMP}-{MODE[:16]}-{"urgent" if urgent else "done"}'
+        result = subprocess.run(['lark-cli', 'im', '+messages-send', '--as', 'bot', '--user-id', FEISHU_USER,
+                                 '--text', text, '--idempotency-key', key],
+                                capture_output=True, text=True, timeout=60, cwd=STATE)
+        if result.returncode != 0:
+            raise RuntimeError(f'发送失败：{result.returncode} {result.stderr}')
+        payload = json.loads(result.stdout)
+        if payload.get('ok') is not True:
+            raise RuntimeError(f'发送失败：{result.stdout}')
+        message_id = payload['data']['message_id']
+        if not message_id:
+            raise RuntimeError('发送结果缺少 message_id')
+        if urgent:
+            result = subprocess.run(['lark-cli', 'im', 'messages', 'urgent_app', '--as', 'bot',
+                                     '--message-id', message_id, '--user-id-type', 'open_id',
+                                     '--data', json.dumps({'user_id_list': [FEISHU_USER]})],
+                                    capture_output=True, text=True, timeout=60, cwd=STATE)
+            if result.returncode != 0 or json.loads(result.stdout).get('ok') is not True:
+                raise RuntimeError(f'加急失败：{result.returncode} {result.stderr} {result.stdout}')
+    except Exception as error:
+        log(f'feishu: {type(error).__name__}: {error}')
+
+
+def report():
+    heading = f'[{REPORT_NAME} {MODE}]'
+    if REPORT['done']:
+        stamp = datetime.datetime.now().astimezone().strftime('%m-%d %H:%M %Z')
+        feishu(f'{heading} {stamp}\n已完成 {len(REPORT["done"])} 项：\n\n' + '\n\n'.join(REPORT['done']))
+    if REPORT['attention']:
+        feishu(f'{heading} 需要你处理 {len(REPORT["attention"])} 项：\n\n' + '\n\n'.join(REPORT['attention']), urgent=True)
+
+
+def report_attention(key, error, target=None):
+    text = f'{key}：{error}'
+    REPORT['attention'].append(text + (f'\n记录：{target}' if target else ''))
+
+
+def report_done(key, title, receipt, target):
+    text = f'{key} {title}\n{receipt.get("summary", "")}'
+    for push in receipt.get('pushed', []):
+        text += f'\n推送：{push["branch"]}@{push["sha"][:9]}'
+    REPORT['done'].append(text + f'\n记录：{target}')
+
+
+def agent(key, title, target, checkout, task):
+    try:
+        receipt = claude(target, checkout, task)
+        if receipt.get('attention'):
+            report_attention(f'{key} {title}', receipt['attention'], target)
+        if receipt.get('status') == 'deferred':
+            report_attention(f'{key} {title}', receipt.get('reason', '等待用户本人处理'), target)
+        elif receipt.get('status') != 'completed':
+            raise RuntimeError(receipt.get('reason') or '任务未完成，保留记录以便重试')
+        return receipt
+    except Exception as error:
+        report_attention(key, f'代理运行失败（{type(error).__name__}）：{error}', target)
+        raise
 
 
 def run(*args, cwd=None):
@@ -144,7 +221,7 @@ def claude(target, checkout, task):
                                              for d in result['permission_denials']))
     if result.get('is_error'):
         log(result.get('result', ''))
-        raise RuntimeError(f'Claude failed; inspect {target}')
+        raise RuntimeError(f'Claude 运行失败；记录：{target}')
     log(result.get('result', ''))
     receipt = json.loads((target / 'receipt.json').read_text())
     log(f'receipt {target.name}: {receipt}')
@@ -152,8 +229,6 @@ def claude(target, checkout, task):
         # Handled until new activity, but the user has to act (for example a reporter asked for the maintainer personally).
         notify('Plugin item needs you', receipt.get('reason', ''), 'critical')
         return receipt
-    if receipt.get('status') != 'completed':
-        raise RuntimeError(f'Incomplete task; preserved for retry: {target}')
     return receipt
 
 
@@ -198,7 +273,7 @@ def handle(repo, item, data):
     meta = CONFIG['repos'][repo]
     kind = 'pull request' if 'pull_request' in item else 'issue'
     smoke = ' '.join(f'"{d}"' for d in meta.get('smoke', []))
-    receipt = claude(target, checkout, f'''Handle {kind} https://github.com/{slug(repo)}/issues/{item["number"]} of {slug(repo)}.
+    receipt = agent(key, item['title'], target, checkout, f'''Handle {kind} https://github.com/{slug(repo)}/issues/{item["number"]} of {slug(repo)}.
 This checkout is a fresh clone of the repository with all remote branches; the run directory is {target}
 and the initial GitHub snapshot is in {target}/github-context.json. Re-read the item with gh before acting.
 Repository notes: {meta.get('notes', 'none')}. Compositor plugin: {'yes' if meta.get('plugin') else 'no'}.
@@ -207,7 +282,10 @@ Hyprland target per branch (arguments for hyprland-prefix.sh, which prints the p
 {branch_targets(repo, checkout)}
 Write {target}/receipt.json when done: {{"status":"completed","pushed":[{{"branch":"...","sha":"..."}}],"summary":"..."}}
 listing every branch you pushed with its new head; {{"status":"deferred","reason":"..."}} when the item must wait for the
-user personally (nothing posted); or {{"status":"blocked","reason":"..."}} after a transient failure (retried later).''')
+user personally (nothing posted); or {{"status":"blocked","reason":"..."}} after a transient failure (retried later).
+{RECEIPT_RULES}''')
+    if receipt.get('status') == 'completed':
+        report_done(key, item['title'], receipt, target)
     for push in receipt.get('pushed', []):
         try:
             log(update_local(repo, push['branch'], push['sha']))
@@ -272,7 +350,7 @@ def sync(check, only=None):
             continue
         smoke = ' '.join(f'"{d}"' for d in meta.get('smoke', []))
         try:
-            receipt = claude(target, checkout, f'''Branch sync for {slug(repo)}: merge origin/{base} into {", ".join(behind)}.
+            receipt = agent(repo, '分支同步', target, checkout, f'''Branch sync for {slug(repo)}: merge origin/{base} into {", ".join(behind)}.
 This checkout is a fresh clone with all remote branches; the run directory is {target}.
 Repository notes: {meta.get('notes', 'none')}. Compositor plugin: {'yes' if meta.get('plugin') else 'no'}.
 Smoke dispatchers for plugin-smoke.sh: {smoke or '(none: load/unload only)'}.
@@ -286,7 +364,10 @@ A test that also fails on the unmerged branch in the same mode is pre-existing: 
 branch only when its gates pass; a branch whose gates fail stays unpushed: preserve the merge on
 auto/sync-<branch>, open a PR against <branch> describing the failure, and continue with the other branches.
 Write {target}/receipt.json: {{"status":"completed","pushed":[{{"branch":"...","sha":"..."}}],"summary":"..."}} with
-every branch you pushed, or {{"status":"blocked","reason":"..."}} after a transient failure.''')
+every branch you pushed, or {{"status":"blocked","reason":"..."}} after a transient failure.
+{RECEIPT_RULES}''')
+            if receipt.get('status') == 'completed':
+                report_done(repo, '分支同步', receipt, target)
             for push in receipt.get('pushed', []):
                 log(update_local(repo, push['branch'], push['sha']))
         except Exception as error:
@@ -340,4 +421,8 @@ if __name__ == '__main__':
                 notifications(args.check)
         except Exception as error:
             log(f'FAILED: {type(error).__name__}: {error}')
+            if not REPORT['attention']:  # item failures are already listed
+                report_attention(MODE + ' 运行失败', str(error))
             raise
+        finally:
+            report()

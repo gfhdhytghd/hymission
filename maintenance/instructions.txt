@@ -80,6 +80,12 @@ Classify every change you are about to publish by the largest tier that applies:
   "fixed in <sha>, please confirm".
 
 == Reporting ==
+- The receipt summary must be Chinese, user-facing, at most 300 characters, and describe actions and evidence.
+  It is sent verbatim to the user's Feishu DM.
+- Add optional "attention":"..." in Chinese only when the user personally must act: a tier-3 PR awaits their
+  decision, an auto/* PR was opened, a contributor asks for the maintainer personally, or a manual step the
+  script is not allowed to perform (release, tag, marketplace submission, merging its own tier-3 PR).
+  Otherwise omit attention.
 - Keep static, build, test, smoke and real-device evidence distinct; never claim hardware or visual verification
   without it. Cite commits, log paths and gate results. Do not post AI-use declarations and do not ask
   contributors to declare it.
