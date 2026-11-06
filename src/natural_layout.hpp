@@ -104,9 +104,10 @@ inline bool sourcesOverlap(const Rect& a, const Rect& b) {
     return w > 1.0 && h > 1.0 && w * h > kOverlapShare * std::min(a.width * a.height, b.width * b.height);
 }
 
-// strict identity tie-break shared by every sort
-inline std::tuple<std::uint64_t, std::size_t> identity(const WindowInput& w) {
-    return {w.stableId.value_or(std::numeric_limits<std::uint64_t>::max()), w.index};
+// strict identity tie-break shared by every sort. Input order comes first: it is the
+// caller's order (workspace or recent use), while stableId is an object address.
+inline std::tuple<std::size_t, std::uint64_t> identity(const WindowInput& w) {
+    return {w.index, w.stableId.value_or(std::numeric_limits<std::uint64_t>::max())};
 }
 
 inline void finalizeUnit(Unit& u, const std::vector<WindowInput>& wins, const Spacing& sp) {

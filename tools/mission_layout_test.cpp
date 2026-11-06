@@ -279,6 +279,26 @@ bool natural2WorkspaceAndRowRegression(const MissionControlLayout& engine) {
                      "row slack must stay around a centered tight row instead of creating nonuniform internal gaps");
     }
     ok &= validNatural2Slots(result, floating, area, config.maxPreviewScale, config.columnSpacing, config.rowSpacing);
+
+    // Maximized windows on three workspaces share one source rectangle. Ties must
+    // follow the input order, not the stable IDs, which are window addresses.
+    {
+        const std::vector<WindowInput> same{
+            {.index = 0, .natural = {0, 0, 1600, 1000}, .label = "ws1", .stableId = 30, .groupId = 1},
+            {.index = 1, .natural = {0, 0, 1600, 1000}, .label = "ws2", .stableId = 10, .groupId = 2},
+            {.index = 2, .natural = {0, 0, 1600, 1000}, .label = "ws3", .stableId = 20, .groupId = 3},
+        };
+        LayoutContext sameHistory;
+        auto slots = engine.compute(same, area, config, sameHistory);
+        std::sort(slots.begin(), slots.end(), [](const WindowSlot& a, const WindowSlot& b) {
+            return std::tuple(std::lround(a.target.y), a.target.x) < std::tuple(std::lround(b.target.y), b.target.x);
+        });
+        bool ordered = slots.size() == 3;
+        for (std::size_t i = 0; ordered && i < slots.size(); ++i)
+            ordered = slots[i].index == i;
+        ok &= expect(ordered, "windows with identical source rectangles must keep input order in reading order");
+        ok &= validNatural2Slots(slots, same, area, config.maxPreviewScale, config.columnSpacing, config.rowSpacing);
+    }
     return ok;
 }
 
