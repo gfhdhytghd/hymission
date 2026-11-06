@@ -36,6 +36,7 @@ src = [
   'src/stage_edge_effect.cpp',
   'src/tiles_controller.cpp',
   'src/hook_broker.cpp',
+  'src/hook_aarch64.cpp',
   'src/tiles_logic.cpp',
 ]
 
@@ -43,6 +44,11 @@ glib_dep = dependency('glib-2.0')
 
 broker_test = executable('hymission-hook-broker-test', 'tools/hook_broker_test.cpp', include_directories: include_directories('src'), install: false)
 test('hymission-hook-broker-test', broker_test)
+
+aarch64_hook_test = executable('hymission-hook-aarch64-test',
+  ['tools/hook_aarch64_test.cpp', 'src/hook_aarch64.cpp'],
+  include_directories: include_directories('src'), install: false)
+test('hymission-hook-aarch64-test', aarch64_hook_test)
 
 tiles_logic_test = executable('hymission-tiles-logic-test',
   ['tools/tiles_logic_test.cpp', 'src/tiles_logic.cpp'],
