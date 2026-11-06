@@ -135,6 +135,19 @@ asm(R"(
     nop
     nop
     ret
+)" FN(hookIntra) R"(
+    cbz w0, 1f
+    add w0, w0, #1
+1:  add w0, w0, #2
+    add w0, w0, #3
+    add w0, w0, #4
+    ret
+)" FN(hookMrsX17) R"(
+    mrs x17, tpidr_el0
+    add w0, w0, #1
+    nop
+    nop
+    ret
 )" FN(hookBranchNotLast) R"(
     add w0, w0, #1
     b 1f
@@ -152,7 +165,7 @@ extern "C" {
 int hookPlain(int); int hookAdr(int); int hookAdrp(int); int hookLdrX(int); int hookLdrW(int); int hookLdrsw(int);
 int hookLdrD(int); int hookLdrQ(int); int hookPrfm(int); int hookBcond(int); int hookCbz(int); int hookTbz(int);
 int hookB(int); int hookBl(int); int hookBti(int); int hookPaciasp(int); int hookTooShort(int); int hookBranchNotLast(int);
-int hookX17(int);
+int hookX17(int); int hookIntra(int); int hookMrsX17(int);
 }
 
 Fn g_original = nullptr;
@@ -233,6 +246,12 @@ void branchRange() {
     const auto far = h::relocate(source, 4, reinterpret_cast<uint64_t>(source) + (1ULL << 40));
     std::memcpy(&word, far.data() + 16, 4);
     assert((word & 0xFF00001F) == 0x58000011);
+    // A far call must not use BLR, which BTI checks: ADR X30 ; LDR X17 ; RET X17.
+    const auto* call = reinterpret_cast<const uint32_t*>(hookBl);
+    const auto farCall = h::relocate(call, 4, reinterpret_cast<uint64_t>(call) + (1ULL << 40));
+    uint32_t words[3];
+    std::memcpy(words, farCall.data() + 4, sizeof words);
+    assert(words[0] == 0x1000007E && (words[1] & 0xFF00001F) == 0x58000011 && words[2] == 0xD65F0220);
 }
 
 // Runs a function from a page far from any trampoline, covering the X17 path end to end.
@@ -267,6 +286,9 @@ int main() {
     refuses(hookTooShort, 1, 8);
     refuses(hookBranchNotLast, 1, 2);
     refuses(hookX17, 1, 4);
+    refuses(hookIntra, 1, 11);
+    refuses(hookIntra, 0, 9);
+    refuses(hookMrsX17, 1, 2);
     landingPads();
     doubleHook();
     branchRange();
@@ -274,5 +296,8 @@ int main() {
     std::puts("ok");
 }
 #else
-int main() { std::puts("skipped: not AArch64"); }
+int main() {
+    std::puts("skipped: not AArch64");
+    return 77; // reported as skipped by CTest (SKIP_RETURN_CODE) and Meson
+}
 #endif

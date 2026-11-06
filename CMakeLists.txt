@@ -89,6 +89,7 @@ if(BUILD_TESTING)
   add_executable(hymission-hook-aarch64-test tools/hook_aarch64_test.cpp src/hook_aarch64.cpp)
   target_include_directories(hymission-hook-aarch64-test PRIVATE src)
   add_test(NAME hymission-hook-aarch64-test COMMAND hymission-hook-aarch64-test)
+  set_tests_properties(hymission-hook-aarch64-test PROPERTIES SKIP_RETURN_CODE 77)
   # Hook thunk types against the native members in the configured Hyprland headers.
   # The plugin's real compile flags are written at generate time, so the check
   # works with every CMake generator.

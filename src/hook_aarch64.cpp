@@ -1,5 +1,6 @@
 #include "hook_aarch64.hpp"
 #if defined(__aarch64__)
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -20,16 +21,20 @@
     pad moves to the trampoline: a PACIASP must run only on the path into the original function,
     otherwise LR would be signed twice and the hook's return would fail authentication.
 
-    Jumps out of the trampoline use B / BL within +-128 MiB and X17 otherwise: BLR X17 for calls,
-    whose target is a function entry, and RET X17 for jumps, because the resume address is in the
-    middle of a function where no landing pad exists and RET is not subject to BTI.
+    Jumps out of the trampoline use B / BL within +-128 MiB and X17 otherwise, always through
+    RET X17, which is not subject to BTI: the resume address is in the middle of a function, and a
+    local function that is only called directly may have no BTI c. A far call sets X30 with ADR
+    first: ADR X30, <next> ; LDR X17, =<target> ; RET X17.
 
     X17 must not be live across those jumps, so an entry whose displaced instructions name X17 is
     refused. At a function entry X17 holds nothing (see above), so only those instructions could
     make it live.
 
-    A later branch back into the displaced bytes cannot be detected, the same limit as on x86.
-    RET X17 would also trip a guarded control stack (GCS), which Hyprland does not enable.
+    A displaced branch whose target is inside the displaced bytes is refused. A later branch back
+    into them cannot be detected, the same limit as on x86. The patch is written with a plain copy
+    while other threads may run the code, and destroy() unmaps the trampoline without waiting for
+    calls in flight; Hyprland's CFunctionHook has the same limits on x86. RET X17 would also trip a
+    guarded control stack (GCS), which Hyprland does not enable.
 */
 namespace hymission::hooks::aarch64 {
 namespace {
@@ -77,7 +82,8 @@ bool writeCode(void* target, const void* code, size_t size) {
     const int protection = PROT_READ | PROT_EXEC | (isBtiGuarded(address) ? PROT_BTI : 0);
     if (mprotect(reinterpret_cast<void*>(start), length, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) return false;
     std::memcpy(target, code, size);
-    mprotect(reinterpret_cast<void*>(start), length, protection);
+    if (mprotect(reinterpret_cast<void*>(start), length, protection) != 0)
+        std::fprintf(stderr, "[hymission] hook: could not restore code page protection at %p\n", target);
     __builtin___clear_cache(static_cast<char*>(target), static_cast<char*>(target) + size);
     return true;
 }
@@ -105,8 +111,9 @@ struct Assembler {
             emit((link ? 0x94000000 : 0x14000000) | (((target - pc()) >> 2) & 0x03FFFFFF));
             return;
         }
+        if (link) emit(0x1000007E); // ADR X30, #12: return past the RET below
         emitLoad(LDR_X17_LITERAL, target);
-        emit(link ? 0xD63F0220 : 0xD65F0220); // BLR X17 / RET X17
+        emit(0xD65F0220); // RET X17
     }
     // <condition> +8 ; B over ; <jump to target>
     void emitConditionalJump(uint32_t branchToPlus8, uint64_t target) {
@@ -137,7 +144,8 @@ std::vector<uint32_t> entryPatch(uint32_t first, bool landingPad, void* destinat
 // Bits 4:0 hold the destination (or a stored register) of every non-branch instruction, and
 // bits 14:10 the second register of a load/store pair. Branches use them for offsets.
 bool mayWriteX17(uint32_t insn) {
-    if ((insn & 0x1C000000) == 0x14000000) return false; // branches, exceptions, system
+    if ((insn & 0xFFE00000) == 0xD5200000) return (insn & 0x1F) == 17; // MRS, SYSL
+    if ((insn & 0x1C000000) == 0x14000000) return false; // branches, exceptions, other system
     return (insn & 0x1F) == 17 || ((insn & 0x3A000000) == 0x28000000 && ((insn >> 10) & 0x1F) == 17);
 }
 
@@ -155,11 +163,14 @@ bool isPatched(const uint32_t* source) {
         PRFM <lit>                  -> NOP
         B / BL <label>              -> direct B / BL, or through X17
         B.cond / CBZ / CBNZ / TBZ / TBNZ <label> -> <same> +8 ; B over ; jump to <label>
-    An unconditional branch before the last displaced instruction means the function is shorter
-    than the patch and the bytes after it belong to something else, so that is refused.
+    Refused: a branch target inside the displaced bytes, which now hold the patch; an unconditional
+    branch before the last displaced instruction, which means the function is shorter than the
+    patch and the bytes after it belong to something else; a literal load into XZR.
 */
 std::vector<uint8_t> relocate(const uint32_t* source, size_t count, uint64_t address) {
     Assembler out{.base = address};
+    const auto begin = reinterpret_cast<uint64_t>(source), end = begin + count * 4;
+    const auto displaced = [&](uint64_t target) { return target >= begin && target < end; };
     for (size_t i = 0; i < count; ++i) {
         const uint32_t insn = source[i];
         const uint64_t pc = reinterpret_cast<uint64_t>(source) + i * 4;
@@ -181,6 +192,8 @@ std::vector<uint8_t> relocate(const uint32_t* source, size_t count, uint64_t add
                 out.emit(loads[opc] | (17 << 5) | rt);
             } else if (opc == 3) {
                 out.emit(NOP); // PRFM is a hint
+            } else if (rt == 31) {
+                return {}; // a load into XZR, rewritten it would address SP
             } else {
                 static constexpr uint32_t loads[] = {0xB9400000, 0xF9400000, 0xB9800000};
                 out.emitLoad(0x58000000 | rt, target);
@@ -188,12 +201,17 @@ std::vector<uint8_t> relocate(const uint32_t* source, size_t count, uint64_t add
             }
         } else if ((insn & 0x7C000000) == 0x14000000) { // B / BL
             const bool link = insn & 0x80000000;
-            if (!link && !last) return {};
-            out.emitJump(pc + signExtend(insn & 0x03FFFFFF, 26) * 4, link);
+            const uint64_t target = pc + signExtend(insn & 0x03FFFFFF, 26) * 4;
+            if ((!link && !last) || displaced(target)) return {};
+            out.emitJump(target, link);
         } else if ((insn & 0xFF000000) == 0x54000000 || (insn & 0x7E000000) == 0x34000000) { // B.cond, CBZ / CBNZ
-            out.emitConditionalJump((insn & ~(0x7FFFFu << 5)) | (2 << 5), pc + signExtend((insn >> 5) & 0x7FFFF, 19) * 4);
+            const uint64_t target = pc + signExtend((insn >> 5) & 0x7FFFF, 19) * 4;
+            if (displaced(target)) return {};
+            out.emitConditionalJump((insn & ~(0x7FFFFu << 5)) | (2 << 5), target);
         } else if ((insn & 0x7E000000) == 0x36000000) { // TBZ / TBNZ
-            out.emitConditionalJump((insn & ~(0x3FFFu << 5)) | (2 << 5), pc + signExtend((insn >> 5) & 0x3FFF, 14) * 4);
+            const uint64_t target = pc + signExtend((insn >> 5) & 0x3FFF, 14) * 4;
+            if (displaced(target)) return {};
+            out.emitConditionalJump((insn & ~(0x3FFFu << 5)) | (2 << 5), target);
         } else if ((insn & 0xFE000000) == 0xD6000000 && ((insn >> 21) & 7) != 1) { // BR, RET, ERET, not BLR
             if (!last) return {};
             out.emit(insn);
