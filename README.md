@@ -1205,3 +1205,25 @@ is available during the opening animation. The read-only command
 `hyprctl hymission-stage-region MONITOR` returns the same rectangle as JSON or
 `null`. `hymission-stage-state` exposes the explicit visible state and screens.
 These are read-only queries, with no compositor reload or geometry mutation.
+
+## AI-powered maintenance
+
+This repository uses AI-powered automated maintenance, shared with the maintainer's other
+Hyprland plugins and the [Hyprland fork](https://github.com/gfhdhytghd/Hyprland). An agent
+checks new issues, pull requests and comments every two hours (replies and reviews within
+about ten minutes), so your [issues](https://github.com/gfhdhytghd/hymission/issues) and
+[pull requests](https://github.com/gfhdhytghd/hymission/pulls) will usually be handled or
+receive a response within three hours. Human maintainers periodically review the project and
+its changes to ensure code quality.
+
+The agent may reply, review, request changes, fix reproducible bugs, merge contributor pull
+requests, and push to the long-lived branches (`master`, `hyprland-master`, `omarchy-
+plugin`, `omarchy-marketplace`) and keep them in sync. Before anything is merged or pushed,
+the change is built and tested in a sandbox against the exact Hyprland revision each branch
+targets, loaded into a private headless compositor, and reviewed independently. Larger
+changes (hooks or ABI, config semantics, Hyprland pin bumps, packaging) are opened as a pull
+request for the maintainer instead. Releases, tags and marketplace submissions stay manual.
+
+If you want a human to look at something, say so in the issue or pull request; the agent
+then steps back and briefs the maintainer. The pipeline is documented in
+[hymission/maintenance](https://github.com/gfhdhytghd/hymission/tree/master/maintenance).
