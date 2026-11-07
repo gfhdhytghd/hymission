@@ -340,6 +340,7 @@ int main() {
              0x528000B1u, // mov w17, #5
              0x9A810011u, // csel x17, x0, x1, eq
              0x9E660011u, // fmov x17, d0
+             0x1E18FC11u, // fcvtzs w17, s0, #1
              0x4E183C11u, // mov x17, v0.d[1]
              0x88117C01u, // stxr w17, w1, [x0]
              0x48307C02u, // casp x16, x17, x2, x3, [x0]
@@ -368,6 +369,7 @@ int main() {
              0x9E670011u, // fmov d17, x0
              0xFD400011u, // ldr d17, [x0]
              0x9E620220u, // scvtf d0, x17
+             0x1E03FE20u, // ucvtf s0, w17, #1
              0x4E040E20u, // dup v0.4s, w17
              0x4E181E20u, // mov v0.d[1], x17
              0x6E0C6420u, // mov v0.s[1], v1.s[3]

@@ -198,6 +198,7 @@ bool mayWriteX17(uint32_t insn) {
         if ((insn & 0xFFFFF01F) == 0xD503201F) return ((insn >> 8) & 0xF) == 1 || ((insn >> 8) & 0xF) == 8; // hints: PACIA1716 .. (CRm 1), PACIA171615 .. (CRm 8)
         return false;
     case 7: case 15: // SIMD and FP: a general register is written by FP -> integer conversions and SMOV / UMOV only
+        if ((insn & 0x7F200000) == 0x1E000000) return rd == 17 && ((insn >> 19) & 3) == 3; // FCVTZS / FCVTZU to fixed point
         if ((insn & 0x7F20FC00) == 0x1E200000) return rd == 17 && ((insn >> 16) & 7) != 2 && ((insn >> 16) & 7) != 3 && ((insn >> 16) & 7) != 7;
         if ((insn & 0xBFE08400) == 0x0E000400) return rd == 17 && (((insn >> 11) & 0xF) == 5 || ((insn >> 11) & 0xF) == 7);
         return false;
