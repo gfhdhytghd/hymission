@@ -1,24 +1,24 @@
 # Hyprland compatibility baseline
 
 - `hyprland-master`: official `hyprwm/Hyprland` `main` =
-  `7a5e469c780d9c54ffd62c8ef345ec55131c08d7` (`version.h` 0.57.0), aquamarine
-  `hyprwm` `163b138cfb22873de1e1bf253d57bf03154d1acd`, hyprutils `7e1f692`,
-  hyprland-protocols `cd1aba6`. The flake locks this revision.
+  `ab6141897d57e609e24c571a762c30c963e0885a` (`version.h` 0.57.0). The flake
+  pins and locks this revision.
 - `master`: official release `v0.57.0` = `0aa6745f` (aquamarine `52ea11f`); see
   that branch's copy of this record.
 - Fork: the project's `gfhdhytghd/Hyprland` v0.57.0 (`f6725e43`, aquamarine
   `4abfcab`) is a different commit with a different ABI. The same plugin source
   builds for it, so there is no `my-hyprland-master` branch; open one only when
   the fork needs plugin source changes the official tree does not.
-- Date: 2026-10-29.
-- Status: **PASS (compile and offline tests) on official `main` `7a5e469c` —
-  exact-header build and CTest without a compositor binary; hook audit against a
-  binary, Nix build and runtime checks not run for this revision.**
+- Date: 2026-11-07.
+- Status: **PASS (Release build, 20/20 CTest, hook audit against the binary,
+  headless smoke, Nix evaluation) on official `main` `ab614189`. No live
+  session.**
 
 ## API and ABI changes handled
 
 | Change in the baseline | Plugin adaptation |
 | --- | --- |
+| `Config::Actions::changeWorkspace(PHLWORKSPACE, bool noFocus)` and `changeWorkspace(const std::string&, bool noFocus)` (`f9f9157a6`, PR #16331) | Overview and tiles thunks forward `noFocus=true` directly to the original, bypassing their focus-change interception. Existing routing passes `false`. `changeWorkspaceOnCurrentMonitor` keeps its separate, unchanged type. Exact symbol strings and free-function ABI assertions use the new signatures. |
 | `Event::bus()->m_events.workspace.created` split into `createdEarly` (old emit point, end of `init()`) and `createdLate` (new `ready()`) | Stage and tiles listen to `createdEarly`, keeping the previous timing; tiles still claim a new workspace for the tile focused at creation. |
 | New workspaces must be marked `ready()` by their creator after setup; `CState::create()` does not | Every plugin creation goes through `createWorkspace()` / `createWorkspaceForKey()` (`src/workspace_key.hpp`), which marks it ready on the next event-loop turn through an owned `doLaterLock`; `PLUGIN_EXIT` makes pending ones ready and cancels the queued callbacks. |
 | `IHyprRenderer::renderLayer(..., popups, lockscreen, workspaceScene)` | Overview and tiles thunks take and forward `workspaceScene`; the two background/bottom-layer snapshot calls pass `false`. Pre-existing mismatch: upstream `a1c2428` already had this signature. |
@@ -29,7 +29,9 @@ Guards added so the next native signature change fails at build or load time:
 
 - `HYMISSION_NATIVE_HOOK_ABI` (`src/hook_abi.hpp`) compiles each changed thunk's
   member type against the native member (overview `renderLayer`, tiles
-  `renderLayer` and `moveWorkspaceToMonitor`).
+  `renderLayer` and `moveWorkspaceToMonitor`). The three changed free-function
+  workspace thunks use equivalent `static_assert` checks against the selected
+  `Config::Actions::changeWorkspace` overloads.
 - CTest `hymission-hook-abi-test` runs `tools/verify_dev_hooks.py --types-only`
   (49 thunk/call types). With `--hyprland <binary>` the script also audits 46
   name lookups and every exact tiles symbol (41) against the binary.
@@ -41,24 +43,34 @@ Guards added so the next native signature change fails at build or load time:
 
 ## Validation
 
-Exact headers: official `main` `7a5e469c`, aquamarine `163b138` (0.15.1),
-hyprutils 0.14.3, from an isolated prefix; never `/usr/include/hyprland` (no
-compiler dependency file names an `/usr/include/hyprland`, `aquamarine` or
-`hyprutils` header).
+Exact headers and binary: official `main`
+`ab6141897d57e609e24c571a762c30c963e0885a`, from
+`/home/wilf/.local/state/hyprland-plugins-maintenance/hyprland/ab6141897d57e609e24c571a762c30c963e0885a`.
+The generated hook compile flags select this prefix, not `/usr/include/hyprland`.
+Commands below run from the task worktree (`$REPO`); `$PREFIX` is this prefix.
 
-- `-Werror` Debug build of the plugin and every target: no warning.
-- CTest without a compositor binary: 15/15 passed, including
-  `hymission-hook-abi-test` (49 hook/call types against these headers). The
-  native preload probes need a matching binary and are not registered.
-- Nix: `flake.lock` pins `github:hyprwm/Hyprland` `main` `7a5e469c` with
-  Hyprland's own lock for its dependencies; `nix eval
-  .#packages.x86_64-linux.hymission.drvPath` with a local store resolves
-  `hymission-0.12.0`. `nix build` was not run.
+- `/home/wilf/.local/share/hyprland-plugins-maintenance/bin/plugin-build.sh --trusted "$REPO" "$PREFIX" nofocus`:
+  exit 0, Release build with no warnings, `100% tests passed out of 20`,
+  `== OK`. Log: `build-nofocus.log`. Includes `hymission-hook-abi-test`
+  running `--types-only` and native preload tests against the exact binary.
+- `python3 tools/verify_dev_hooks.py --build-dir build-nofocus --flags-file build-nofocus/hook-abi-flags.rsp --hyprland "$PREFIX/bin/Hyprland"`:
+  exit 0; `PASS: 49 upstream hook/call signature checks`,
+  `PASS: 46 lookups, 42 unique exported targets; each resolves exactly once`,
+  `PASS: 41 exact tiles symbols resolve exactly once`.
+- `/home/wilf/.local/share/hyprland-plugins-maintenance/bin/plugin-smoke.sh "$PREFIX/bin/Hyprland" "$REPO/build-nofocus/libhymission.so" hymission:toggle hymission:toggle`
+  (outside the Codex sandbox; nested bubblewrap cannot create the loopback
+  netlink socket): `load: ok`, two `dispatch hl.plugin.hymission.toggle: ok`,
+  `unload: ok`, `SMOKE PASS`.
+- Nix 2.35.4: `flake.nix` pins `github:hyprwm/Hyprland/ab6141897d57e609e24c571a762c30c963e0885a`;
+  `nix flake lock` with a local store (`--store`, experimental features
+  `nix-command flakes`) locked that revision with Hyprland's own inputs, and
+  `nix eval .#packages.x86_64-linux.hymission.drvPath` resolved
+  `hymission-0.12.1`. `nix build` was not run.
+- No `.clang-format` exists, so clang-format was skipped.
 
-Not verified for this revision: `verify_dev_hooks.py` name lookups and exact
-tiles symbols against a `7a5e469c` binary (none was built), any running
-compositor, and a live session. The official v0.57.0 release on `master` was
-checked with its binary and a nested compositor.
+Not verified for this revision: runtime focus retention with
+`hl.dsp.workspace.show`, a Debug `-Werror` build, `nix build`, and a live
+session.
 
 ## Historical initial failure (2026-10-11)
 

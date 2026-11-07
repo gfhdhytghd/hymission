@@ -19,10 +19,12 @@ namespace actionHooks {
 using Result = Config::Actions::ActionResult;
 using FullscreenFn = Result (*)(Fullscreen::eFullscreenMode, bool, std::optional<PHLWINDOW>);
 using FullscreenStateFn = Result (*)(Fullscreen::eFullscreenMode, Fullscreen::eFullscreenMode, bool, std::optional<PHLWINDOW>);
-using WorkspaceFn = Result (*)(const std::string&);
+using WorkspaceFn = Result (*)(const std::string&, bool);
+using WorkspaceOnMonitorFn = Result (*)(const std::string&);
 inline FullscreenFn fullscreenOriginal = nullptr;
 inline FullscreenStateFn fullscreenStateOriginal = nullptr;
-inline WorkspaceFn workspaceOriginal = nullptr, workspaceOnMonitorOriginal = nullptr;
+inline WorkspaceFn workspaceOriginal = nullptr;
+inline WorkspaceOnMonitorFn workspaceOnMonitorOriginal = nullptr;
 inline OverviewController* controller = nullptr;
 inline std::vector<hooks::Lease*> hooks;
 
@@ -43,9 +45,12 @@ inline Result fullscreenState(Fullscreen::eFullscreenMode internal, Fullscreen::
         return *queued;
     return fullscreenStateOriginal(internal, client, layoutAware, window);
 }
-inline Result workspace(const std::string& value) {
+inline Result workspace(const std::string& value, bool noFocus) {
+    if (noFocus)
+        return workspaceOriginal(value, true);
     return toAction(controller->changeWorkspaceDispatcherHook(value));
 }
+static_assert(std::is_same_v<decltype(&workspace), decltype(static_cast<WorkspaceFn>(&Config::Actions::changeWorkspace))>);
 inline Result workspaceOnMonitor(const std::string& value) {
     return toAction(controller->focusWorkspaceOnCurrentMonitorDispatcherHook(value));
 }
@@ -57,14 +62,15 @@ inline void remove(HANDLE handle) {
     controller = nullptr;
     fullscreenOriginal = nullptr;
     fullscreenStateOriginal = nullptr;
-    workspaceOriginal = workspaceOnMonitorOriginal = nullptr;
+    workspaceOriginal = nullptr;
+    workspaceOnMonitorOriginal = nullptr;
 }
 
 inline bool install(HANDLE handle, OverviewController* owner) {
     static_assert(std::is_same_v<FullscreenFn, decltype(&fullscreen)>);
     static_assert(std::is_same_v<FullscreenStateFn, decltype(&fullscreenState)>);
     static_assert(std::is_same_v<WorkspaceFn, decltype(&workspace)>);
-    static_assert(std::is_same_v<WorkspaceFn, decltype(&workspaceOnMonitor)>);
+    static_assert(std::is_same_v<WorkspaceOnMonitorFn, decltype(&workspaceOnMonitor)>);
     controller = owner;
     const auto attach = [&](const char* name, const char* signature, auto thunk, auto& original) {
         void* address=hooks::findSymbol(hooks::findFunctions(handle,name),signature);
@@ -81,7 +87,7 @@ inline bool install(HANDLE handle, OverviewController* owner) {
     };
     if (attach("fullscreenWindow", "Config::Actions::fullscreenWindow(Fullscreen::eFullscreenMode, bool, std::optional<Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow> >)", &fullscreen, fullscreenOriginal) &&
         attach("fullscreenWindow", "Config::Actions::fullscreenWindow(Fullscreen::eFullscreenMode, Fullscreen::eFullscreenMode, bool, std::optional<Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow> >)", &fullscreenState, fullscreenStateOriginal) &&
-        attach("changeWorkspace", "Config::Actions::changeWorkspace(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)", &workspace, workspaceOriginal) &&
+        attach("changeWorkspace", "Config::Actions::changeWorkspace(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, bool)", &workspace, workspaceOriginal) &&
         attach("changeWorkspaceOnCurrentMonitor", "Config::Actions::changeWorkspaceOnCurrentMonitor(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)", &workspaceOnMonitor, workspaceOnMonitorOriginal))
         return true;
     remove(handle);
@@ -91,7 +97,7 @@ inline bool install(HANDLE handle, OverviewController* owner) {
 // Preserve the plugin's existing string-based Lua adapter and post-close queue.
 inline std::function<SDispatchResult(std::string)> dispatcher(const std::string& name) {
     if (name == "workspace")
-        return [](std::string args) { return toDispatch(workspaceOriginal(args)); };
+        return [](std::string args) { return toDispatch(workspaceOriginal(args, false)); };
     if (name == "focusworkspaceoncurrentmonitor")
         return [](std::string args) { return toDispatch(workspaceOnMonitorOriginal(args)); };
     if (name == "fullscreenstate")

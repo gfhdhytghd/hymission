@@ -130,8 +130,8 @@ struct Member<R (*)(This, Args...), Class> {
     for cls in ['CHyprDropShadowDecoration', 'CHyprGroupBarDecoration']:
         generated += f'static_assert(std::is_member_function_pointer_v<decltype(static_cast<Member<Overview::BorderDrawFn, {cls}>::Type>(&{cls}::draw))>);\n'
     generated += 'static_assert(std::is_member_function_pointer_v<decltype(static_cast<Member<Overview::SurfaceBlurNeedsFn, CSurfacePassElement>::Type>(&CSurfacePassElement::needsPrecomputeBlur))>);\n'
-    for name, method in [('FullscreenFn', 'fullscreenWindow'), ('FullscreenStateFn', 'fullscreenWindow'), ('WorkspaceFn', 'changeWorkspace'), ('WorkspaceFn', 'changeWorkspaceOnCurrentMonitor')]:
-        generated += f'using Action{name} = {aa[name].replace("Result", "Config::Actions::ActionResult")};\n' if name != 'WorkspaceFn' or method == 'changeWorkspace' else ''
+    for name, method in [('FullscreenFn', 'fullscreenWindow'), ('FullscreenStateFn', 'fullscreenWindow'), ('WorkspaceFn', 'changeWorkspace'), ('WorkspaceOnMonitorFn', 'changeWorkspaceOnCurrentMonitor')]:
+        generated += f'using Action{name} = {aa[name].replace("Result", "Config::Actions::ActionResult")};\n'
         generated += f'static_assert(std::is_same_v<Action{name}, decltype(static_cast<Action{name}>(&Config::Actions::{method}))>);\n'
     generated += 'using GradientFn = CAnimatedDecorationGradient::SRenderState (CAnimatedDecorationGradient::*)() const;\nstatic_assert(std::is_same_v<GradientFn, decltype(&CAnimatedDecorationGradient::renderState)>);\n'
     source = build / 'hook-abi-check.cpp'

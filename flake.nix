@@ -1,6 +1,6 @@
 {
   description = "Hymission compatibility with Hyprland development HEAD";
-  inputs.hyprland.url = "github:hyprwm/Hyprland";
+  inputs.hyprland.url = "github:hyprwm/Hyprland/ab6141897d57e609e24c571a762c30c963e0885a";
   inputs.nixpkgs.follows = "hyprland/nixpkgs";
   outputs = { self, hyprland, nixpkgs, ... }:
     let
