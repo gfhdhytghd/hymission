@@ -11,7 +11,7 @@ namespace h = hymission::hooks;
 namespace {
 struct Native { void* source; void* bridge; bool attached = false; void* original=nullptr; };
 int allocations = 0;
-bool fail = false;
+bool fail = false, failDetach = false;
 int original(int n) { return n * 2; }
 h::Lease *a, *b;
 struct ActionError { std::string message; explicit ActionError(std::string m):message(std::move(m)) {} };
@@ -35,7 +35,7 @@ int second(int n) { return reinterpret_cast<int (*)(int)>(b->m_original)(n + 1) 
 namespace hymission::hooks {
 void* nativeCreate(void*, void* source, void* destination) { ++allocations; return new Native{source, destination}; }
 bool nativeAttach(void* p) { auto* n=static_cast<Native*>(p); n->original=fail?nullptr:n->source; return n->attached = !fail; }
-bool nativeDetach(void* p) { auto* n=static_cast<Native*>(p); n->attached=false; n->original=nullptr; return true; }
+bool nativeDetach(void* p) { if (failDetach) return false; auto* n=static_cast<Native*>(p); n->attached=false; n->original=nullptr; return true; }
 void* nativeOriginal(void* p) { return static_cast<Native*>(p)->original; }
 void nativeRemove(void*, void* p) { delete static_cast<Native*>(p); --allocations; }
 }
@@ -117,6 +117,20 @@ int main() {
     assert(cached(3)==0 && call(3)==0); // removed lease/group cannot be dereferenced
     assert(allocations == 0 && h::groups().empty());
     fail=false;
+    // A source whose bytes cannot be restored keeps its group, so the patched entry still reaches the original.
+    failDetach=true;
+    a=h::create(nullptr,reinterpret_cast<void*>(&original),h::target(&first));
+    assert(a && a->hook());
+    const auto stuck=reinterpret_cast<int (*)(int)>(a->group->bridge());
+    assert(stuck(3)==7);
+    assert(!a->unhook() && !a->enabled && stuck(3)==6);
+    h::remove(nullptr,a);
+    assert(allocations==1 && h::groups().size()==1 && stuck(3)==6);
+    failDetach=false;
+    a=h::create(nullptr,reinterpret_cast<void*>(&original),h::target(&first)); // the kept group is reused
+    assert(a && a->hook() && stuck(3)==7);
+    h::remove(nullptr,a);
+    assert(allocations==0 && h::groups().empty());
     auto* actionLease=h::create(nullptr,reinterpret_cast<void*>(&action),h::target(&actionHook));
     assert(actionLease && actionLease->hook());
     const auto actionCall=reinterpret_cast<decltype(&action)>(actionLease->group->bridge());

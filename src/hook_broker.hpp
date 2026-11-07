@@ -78,7 +78,8 @@ inline void remove(void*, Lease* lease) {
     std::erase(g->leases, lease);
     g->releaseContinuation(lease);
     delete lease;
-    if (g->leases.empty()) groups().erase(g->source);
+    // A group whose source could not be restored stays, so the source keeps reaching its original.
+    if (g->leases.empty() && !g->attached) groups().erase(g->source);
 }
 
 // Each source is patched once. Independent controller leases can be enabled,
