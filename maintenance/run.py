@@ -341,12 +341,15 @@ def triage(check, only=None):
     statefile = STATE / 'handled.json'
     handled = json.loads(statefile.read_text()) if statefile.exists() else {}
     errors, seen = [], 0
-    for repo in CONFIG['repos']:
+    for repo, meta in CONFIG['repos'].items():
         if only and repo not in only:
             continue
         for item in paginate(f'repos/{slug(repo)}/issues?state=open&per_page=100'):
             seen += 1
             key = f'{repo}#{item["number"]}'
+            if item['number'] in meta.get('ignore', []):
+                log(f'{key}: ignored')
+                continue
             try:
                 data = snapshot(repo, item)
                 if handled.get(key) == digest(data):

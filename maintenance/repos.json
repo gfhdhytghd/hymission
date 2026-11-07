@@ -46,6 +46,7 @@
   "repos": {
     "hymission": {
       "local": "/home/wilf/data/hyprland_plugins/hymission",
+      "ignore": [29],
       "plugin": true,
       "smoke": [
         "hymission:toggle",
