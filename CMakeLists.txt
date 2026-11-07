@@ -44,6 +44,7 @@ add_library(hymission SHARED
   src/stage_edge_effect.cpp
   src/tiles_controller.cpp
   src/hook_broker.cpp
+  src/hook_aarch64.cpp
   src/tiles_logic.cpp
 )
 
@@ -85,6 +86,9 @@ if(BUILD_TESTING)
   add_executable(hymission-hook-broker-test tools/hook_broker_test.cpp)
   target_include_directories(hymission-hook-broker-test PRIVATE src)
   add_test(NAME hymission-hook-broker-test COMMAND hymission-hook-broker-test)
+  add_executable(hymission-hook-aarch64-test tools/hook_aarch64_test.cpp src/hook_aarch64.cpp)
+  target_include_directories(hymission-hook-aarch64-test PRIVATE src)
+  add_test(NAME hymission-hook-aarch64-test COMMAND hymission-hook-aarch64-test)
   # Hook thunk types against the native members in the configured Hyprland headers.
   # The plugin's real compile flags are written at generate time, so the check
   # works with every CMake generator.

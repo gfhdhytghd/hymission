@@ -1,4 +1,15 @@
 #include "hook_broker.hpp"
+#if defined(__aarch64__)
+#include "hook_aarch64.hpp"
+namespace hymission::hooks {
+// Hyprland's CFunctionHook has no AArch64 implementation, so the plugin patches entries itself.
+void* nativeCreate(void*, void* source, void* destination) { return aarch64::create(source, destination); }
+bool nativeAttach(void* hook) { return aarch64::attach(static_cast<aarch64::Hook*>(hook)); }
+void nativeDetach(void* hook) { aarch64::detach(static_cast<aarch64::Hook*>(hook)); }
+void* nativeOriginal(void* hook) { return aarch64::original(static_cast<aarch64::Hook*>(hook)); }
+void nativeRemove(void*, void* hook) { aarch64::destroy(static_cast<aarch64::Hook*>(hook)); }
+}
+#else
 #include "hook_entry.hpp"
 #include <unordered_set>
 #include <hyprland/src/helpers/memory/Memory.hpp>
@@ -31,3 +42,4 @@ void nativeDetach(void* hook) { static_cast<CFunctionHook*>(hook)->unhook(); }
 void* nativeOriginal(void* hook) { return static_cast<CFunctionHook*>(hook)->m_original; }
 void nativeRemove(void* owner, void* hook) { HyprlandAPI::removeFunctionHook(owner, static_cast<CFunctionHook*>(hook)); }
 }
+#endif
