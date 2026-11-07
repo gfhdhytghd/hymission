@@ -142,28 +142,10 @@ asm(R"(
     add w0, w0, #3
     add w0, w0, #4
     ret
-)" FN(hookMrsX17) R"(
-    mrs x17, tpidr_el0
-    add w0, w0, #1
-    nop
-    nop
-    ret
-)" FN(hookStxrX17) R"(
-    mov w17, #5
-    add w0, w0, w17
-    nop
-    nop
-    ret
 )" FN(hookLiteralInPatch) R"(
     ldr w1, 1f
     mov w0, w1
 1:  nop
-    nop
-    ret
-)" FN(hookPacia1716) R"(
-    pacia1716
-    add w0, w0, #1
-    nop
     nop
     ret
 )" FN(hookBranchNotLast) R"(
@@ -183,8 +165,7 @@ extern "C" {
 int hookPlain(int); int hookAdr(int); int hookAdrp(int); int hookLdrX(int); int hookLdrW(int); int hookLdrsw(int);
 int hookLdrD(int); int hookLdrQ(int); int hookPrfm(int); int hookBcond(int); int hookCbz(int); int hookTbz(int);
 int hookB(int); int hookBl(int); int hookBti(int); int hookPaciasp(int); int hookTooShort(int); int hookBranchNotLast(int);
-int hookX17(int); int hookIntra(int); int hookMrsX17(int); int hookStxrX17(int); int hookLiteralInPatch(int);
-int hookPacia1716(int);
+int hookX17(int); int hookIntra(int); int hookLiteralInPatch(int);
 }
 
 Fn g_original = nullptr;
@@ -192,6 +173,11 @@ int g_runs = 0;
 int replacement(int x) {
     ++g_runs;
     return g_original(x) + 1000;
+}
+
+bool near(const void* a, const void* b) {
+    const auto delta = reinterpret_cast<intptr_t>(a) - reinterpret_cast<intptr_t>(b);
+    return delta > -(1LL << 27) && delta < (1LL << 27);
 }
 
 void check(Fn fn, const std::vector<int>& inputs) {
@@ -204,6 +190,7 @@ void check(Fn fn, const std::vector<int>& inputs) {
         assert(h::attach(hook));
         g_original = reinterpret_cast<Fn>(h::original(hook));
         assert(g_original);
+        assert(near(reinterpret_cast<const void*>(g_original), reinterpret_cast<const void*>(fn))); // direct branches
         for (size_t i = 0; i < inputs.size(); ++i) {
             g_runs = 0;
             assert(fn(inputs[i]) == expected[i] + 1000);
@@ -273,8 +260,8 @@ void branchRange() {
     assert(words[0] == 0x1000007E && (words[1] & 0xFF00001F) == 0x58000011 && words[2] == 0xD65F0220);
 }
 
-// Runs a function from a page far from any trampoline, covering the X17 path end to end.
-void farSource() {
+// A source on an anonymous page, away from the binary, gets a trampoline near it as well.
+void mappedSource() {
     const auto pageSize = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
     void* page = mmap(nullptr, pageSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     assert(page != MAP_FAILED);
@@ -285,7 +272,42 @@ void farSource() {
     munmap(page, pageSize);
 }
 
+// Runs relocated code from a page that is certainly more than 128 MiB from its source: the
+// resume jump, a call and a conditional branch all go through X17, and the X17 guard applies.
+void farTrampoline() {
+    const auto pageSize = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
+    const auto source = reinterpret_cast<uintptr_t>(hookPlain) & ~(pageSize - 1);
+    void* page = MAP_FAILED;
+    for (uintptr_t distance = 1ULL << 30; page == MAP_FAILED && distance < (1ULL << 40); distance *= 2) {
+        page = mmap(reinterpret_cast<void*>(source + distance), pageSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        if (page != MAP_FAILED && page != reinterpret_cast<void*>(source + distance)) { munmap(page, pageSize); page = MAP_FAILED; }
+    }
+    assert(page != MAP_FAILED && !near(page, reinterpret_cast<const void*>(hookPlain)));
+    const auto run = [&](Fn fn, int in) {
+        const auto code = h::relocate(reinterpret_cast<const uint32_t*>(fn), 4, reinterpret_cast<uint64_t>(page));
+        assert(!code.empty());
+        assert(mprotect(page, pageSize, PROT_READ | PROT_WRITE) == 0);
+        std::memcpy(page, code.data(), code.size());
+        __builtin___clear_cache(static_cast<char*>(page), static_cast<char*>(page) + code.size());
+        assert(mprotect(page, pageSize, PROT_READ | PROT_EXEC) == 0);
+        assert(reinterpret_cast<Fn>(page)(in) == fn(in));
+    };
+    run(hookPlain, 5);
+    run(hookBl, 5);  // ADR X30 ; LDR X17 ; RET X17 returns past the sequence
+    run(hookCbz, 0); // taken: the far jump after the skip
+    run(hookCbz, 5); // not taken: the B over the far jump
+    assert(h::relocate(reinterpret_cast<const uint32_t*>(hookX17), 4, reinterpret_cast<uint64_t>(page)).empty());
+    munmap(page, pageSize);
+}
+
+// One instruction followed by three NOPs, relocated next to itself and far away.
+bool accepted(uint32_t word, uint64_t distance) {
+    const uint32_t code[] = {word, 0xD503201Fu, 0xD503201Fu, 0xD503201Fu};
+    return !h::relocate(code, 4, reinterpret_cast<uint64_t>(code) + distance).empty();
+}
+
 int main() {
+    constexpr uint64_t NEAR = 4096, FAR = 1ULL << 40;
     check(hookPlain, {0, 5, -20});
     check(hookAdr, {0, 5});
     check(hookAdrp, {0, 5});
@@ -302,29 +324,63 @@ int main() {
     check(hookBl, {0, 5});
     check(hookBti, {0, 5});
     check(hookPaciasp, {0, 5});
+    check(hookX17, {0, 5}); // X17 is only reserved when a far jump clobbers it
     refuses(hookTooShort, 1, 8);
     refuses(hookBranchNotLast, 1, 2);
-    refuses(hookX17, 1, 4);
     refuses(hookIntra, 1, 11);
     refuses(hookIntra, 0, 9);
-    refuses(hookMrsX17, 1, 2);
-    refuses(hookStxrX17, 1, 6);
     refuses(hookLiteralInPatch, 1, 0xD503201F);
-    refuses(hookPacia1716, 1, 2);
-    // Registers outside bits 4:0 that are written: STXR status (20:16), CASP pairs, base writeback.
-    for (uint32_t word : {0x88117C01u, 0x48307C02u, 0xF8408620u}) {
-        const uint32_t code[] = {word, 0xD503201Fu, 0xD503201Fu, 0xD503201Fu};
-        assert(h::relocate(code, 4, reinterpret_cast<uint64_t>(code) + 4096).empty());
-    }
+    // Writers of X17 outside bits 4:0 or outside the data processing group: accepted next to the
+    // source, refused when the trampoline is far.
+    for (uint32_t word : {
+             0xD53BD051u, // mrs x17, tpidr_el0
+             0xD5280011u, // sysl x17, #0, c0, c0, #0
+             0xD5780010u, // mrrs x16, x17, midr_el1
+             0xD503211Fu, // pacia1716
+             0x528000B1u, // mov w17, #5
+             0x9A810011u, // csel x17, x0, x1, eq
+             0x9E660011u, // fmov x17, d0
+             0x4E183C11u, // mov x17, v0.d[1]
+             0x88117C01u, // stxr w17, w1, [x0]
+             0x48307C02u, // casp x16, x17, x2, x3, [x0]
+             0xC85FFC11u, // ldaxr x17, [x0]
+             0xF8408620u, // ldr x0, [x17], #8
+             0xF8008E20u, // str x0, [x17, #8]!
+             0xA9404401u, // ldp x1, x17, [x0]
+             0x4CDF7A20u, // ld1 {v0.4s}, [x17], #16
+             0xF8200411u, // ldraa x17, [x0]
+             0xD9400011u, // ldapur x17, [x0]
+             0xD9411811u, // ldiapp x17, x1, [x0]
+             0xF83FD010u, // ld64b x16, [x0]
+         })
+        assert(accepted(word, NEAR) && !accepted(word, FAR));
+    // Immediates and vector registers whose bits read 17, and X17 as a source: never refused.
+    for (uint32_t word : {
+             0xF9404420u, // ldr x0, [x1, #136]
+             0x3DC04400u, // ldr q0, [x0, #272]
+             0x91404420u, // add x0, x1, #0x11, lsl #12
+             0x52800220u, // mov w0, #17
+             0xFA510801u, // ccmp x0, #17, #1, eq
+             0x1E610411u, // fccmpe d0, d1, #1, eq
+             0xF8510420u, // ldr x0, [x1], #-240
+             0xD9510020u, // ldapur x0, [x1, #-240]
+             0xA9B97BFDu, // stp x29, x30, [sp, #-112]!
+             0x9E670011u, // fmov d17, x0
+             0xFD400011u, // ldr d17, [x0]
+             0x9E620220u, // scvtf d0, x17
+             0x4E040E20u, // dup v0.4s, w17
+             0x4E181E20u, // mov v0.d[1], x17
+             0x6E0C6420u, // mov v0.s[1], v1.s[3]
+             0x9B024420u, // madd x0, x1, x2, x17
+         })
+        assert(accepted(word, NEAR) && accepted(word, FAR));
     // FEAT_CMPBR compare-and-branch (CBGT, CBNE #imm) is not relocated.
-    for (uint32_t word : {0x740100C0u, 0xF5E080C0u}) {
-        const uint32_t code[] = {word, 0xD503201Fu, 0xD503201Fu, 0xD503201Fu};
-        assert(h::relocate(code, 4, reinterpret_cast<uint64_t>(code) + 4096).empty());
-    }
+    for (uint32_t word : {0x740100C0u, 0xF5E080C0u}) assert(!accepted(word, NEAR));
     landingPads();
     doubleHook();
     branchRange();
-    farSource();
+    mappedSource();
+    farTrampoline();
     std::puts("ok");
 }
 #else

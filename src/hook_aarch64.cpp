@@ -1,5 +1,6 @@
 #include "hook_aarch64.hpp"
 #if defined(__aarch64__)
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -21,14 +22,14 @@
     pad moves to the trampoline: a PACIASP must run only on the path into the original function,
     otherwise LR would be signed twice and the hook's return would fail authentication.
 
-    Jumps out of the trampoline use B / BL within +-128 MiB and X17 otherwise, always through
-    RET X17, which is not subject to BTI: the resume address is in the middle of a function, and a
-    local function that is only called directly may have no BTI c. A far call sets X30 with ADR
-    first: ADR X30, <next> ; LDR X17, =<target> ; RET X17.
-
-    X17 must not be live across those jumps, so an entry whose displaced instructions name X17 is
-    refused. At a function entry X17 holds nothing (see above), so only those instructions could
-    make it live.
+    The trampoline is mapped within +-128 MiB of its source when a free page exists there, so
+    jumps out of it are direct B / BL. A far trampoline jumps through X17, always with RET X17,
+    which is not subject to BTI: the resume address is in the middle of a function, and a local
+    function that is only called directly may have no BTI c. A far call sets X30 with ADR first:
+    ADR X30, <next> ; LDR X17, =<target> ; RET X17. X17 is dead at a call (a veneer may clobber it),
+    but a far jump must not clobber a live X17, so when one is emitted an entry whose displaced
+    instructions write X17 is refused. At a function entry X17 holds nothing (see above), so only
+    those instructions could make it live.
 
     A displaced branch whose target is inside the displaced bytes is refused. A later branch back
     into them cannot be detected, the same limit as on x86. The patch is written with a plain copy
@@ -52,6 +53,17 @@ int64_t signExtend(uint64_t value, unsigned bits) {
     return static_cast<int64_t>((value ^ sign) - sign);
 }
 
+// The "start-end" range of a /proc/self/maps or smaps header line.
+bool parseRange(const std::string& line, uintptr_t& start, uintptr_t& end) {
+    const auto dash = line.find('-'), space = line.find(' ');
+    if (dash == std::string::npos || space == std::string::npos || dash > space) return false;
+    try {
+        start = std::stoull(line.substr(0, dash), nullptr, 16);
+        end = std::stoull(line.substr(dash + 1, space - dash - 1), nullptr, 16);
+    } catch (const std::exception&) { return false; }
+    return true;
+}
+
 // mprotect() without PROT_BTI would silently drop a BTI guard from the mapping, so an
 // address whose mapping cannot be read is reported as unknown (-1) and not patched.
 int btiGuard(uintptr_t address) {
@@ -62,15 +74,38 @@ int btiGuard(uintptr_t address) {
             if (inRange) return line.contains(" bt") ? 1 : 0;
             continue;
         }
-        const auto dash = line.find('-'), space = line.find(' ');
-        if (dash == std::string::npos || space == std::string::npos || dash > space) continue;
-        try {
-            const auto start = std::stoull(line.substr(0, dash), nullptr, 16);
-            const auto end = std::stoull(line.substr(dash + 1, space - dash - 1), nullptr, 16);
-            inRange = address >= start && address < end;
-        } catch (const std::exception&) { inRange = false; }
+        uintptr_t start, end;
+        if (parseRange(line, start, end)) inRange = address >= start && address < end;
     }
     return -1;
+}
+
+// A writable page within +-128 MiB of source, from the first free gap there; anywhere when
+// the surroundings are full. nullptr when nothing can be mapped.
+void* mapTrampoline(uintptr_t source, size_t size) {
+    constexpr uintptr_t RANGE = 1ULL << 27;
+    const auto tryAt = [size](uintptr_t hint) -> void* {
+        void* page = mmap(reinterpret_cast<void*>(hint), size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        if (page == MAP_FAILED) return nullptr;
+        if (page == reinterpret_cast<void*>(hint)) return page;
+        munmap(page, size); // a kernel without MAP_FIXED_NOREPLACE took the hint as advice
+        return nullptr;
+    };
+    // Every address of the page and of the patch is then within RANGE of each other.
+    const uintptr_t low = ((source + size > RANGE ? source + size - RANGE : 0) + size - 1) & ~(size - 1), high = source + RANGE - size;
+    std::ifstream maps("/proc/self/maps");
+    uintptr_t gap = low;
+    for (std::string line; std::getline(maps, line) && gap <= high;) {
+        uintptr_t start, end;
+        if (!parseRange(line, start, end) || end <= gap) continue;
+        if (start >= gap + size)
+            if (void* page = tryAt(gap)) return page;
+        gap = std::max(gap, end);
+    }
+    if (gap <= high)
+        if (void* page = tryAt(gap)) return page;
+    void* page = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return page == MAP_FAILED ? nullptr : page;
 }
 
 // The page stays executable throughout: another thread may be running code on it.
@@ -96,15 +131,18 @@ struct Assembler {
     std::vector<uint32_t> code{};
     std::vector<uint64_t> literals{};
     std::vector<std::pair<size_t, size_t>> literalRefs{};
+    bool clobbersX17 = false; // a far jump leaves the trampoline with X17 overwritten
 
     uint64_t pc() const { return base + code.size() * 4; }
     void emit(uint32_t insn) { code.push_back(insn); }
-    // An LDR (literal) whose imm19 is filled in by finish().
-    void emitLoad(uint32_t opcode, uint64_t value) {
+    // An LDR (literal) of `size` bytes whose imm19 is filled in by finish().
+    void emitLoad(uint32_t opcode, const void* data, size_t size) {
         literalRefs.emplace_back(code.size(), literals.size());
-        literals.push_back(value);
+        literals.resize(literals.size() + (size + 7) / 8);
+        std::memcpy(&literals[literalRefs.back().second], data, size);
         emit(opcode);
     }
+    void emitLoad(uint32_t opcode, uint64_t value) { emitLoad(opcode, &value, sizeof value); }
     static bool inBranchRange(uint64_t from, uint64_t target) {
         const auto delta = static_cast<int64_t>(target - from);
         return delta >= -(1LL << 27) && delta < (1LL << 27);
@@ -115,6 +153,7 @@ struct Assembler {
             return;
         }
         if (link) emit(0x1000007E); // ADR X30, #12: return past the RET below
+        else clobbersX17 = true;
         emitLoad(LDR_X17_LITERAL, target);
         emit(0xD65F0220); // RET X17
     }
@@ -144,19 +183,46 @@ std::vector<uint32_t> entryPatch(uint32_t first, bool landingPad, void* destinat
     return patch;
 }
 
-// Conservative: outside the branch / system group, any register field (bits 4:0, 9:5, 14:10,
-// 20:16) that reads 17 counts, which also catches status registers (STXR), register pairs
-// (CASP, LDP) and base writeback. An immediate that happens to look like 17 only costs a refused
-// hook. In the branch / system group only MRS / SYSL and the *1716 PAC hints write X17.
+// Decodes the register fields each encoding class writes, so that an immediate whose bits read
+// 17 does not count. A register X17 only reads (a store's data, a base without writeback) is
+// still refused: cheaper than telling loads from stores, and dead at an entry anyway. Classes
+// that are not decoded (SVE, SME, memory tagging, LS64, RCPC3 pairs) are refused.
 bool mayWriteX17(uint32_t insn) {
-    if ((insn & 0xFFE00000) == 0xD5200000) return (insn & 0x1F) == 17; // MRS, SYSL
-    if ((insn & 0xFFFFFF1F) == 0xD503211F) return true;                 // PACIA1716 .. AUTIB1716
-    if ((insn & 0x1C000000) == 0x14000000) return false;                // branches, exceptions, other system
-    for (unsigned shift : {0u, 5u, 10u, 16u})
-        if (((insn >> shift) & 0x1F) == 17) return true;
-    // CASP names only the even register of each pair: X16 implies X17.
-    if ((insn & 0x3F000000) == 0x08000000 && ((insn & 0x1F) == 16 || ((insn >> 16) & 0x1F) == 16)) return true;
-    return false;
+    const uint32_t rd = insn & 0x1F, rn = (insn >> 5) & 0x1F, rt2 = (insn >> 10) & 0x1F, rs = (insn >> 16) & 0x1F;
+    const bool simd = insn & (1 << 26); // Rt / Rt2 are vector registers
+    switch ((insn >> 25) & 0xF) {
+    case 8: case 9: case 5: case 13: // data processing (immediate, register): Rd
+        return rd == 17;
+    case 10: case 11: // branches, exceptions, system
+        if ((insn & 0xFFA00000) == 0xD5200000) return rd == 17 || (rd == 16 && insn & (1 << 22)); // MRS, SYSL; MRRS, SYSP write a pair
+        if ((insn & 0xFFFFF01F) == 0xD503201F) return ((insn >> 8) & 0xF) == 1 || ((insn >> 8) & 0xF) == 8; // hints: PACIA1716 .. (CRm 1), PACIA171615 .. (CRm 8)
+        return false;
+    case 7: case 15: // SIMD and FP: a general register is written by FP -> integer conversions and SMOV / UMOV only
+        if ((insn & 0x7F20FC00) == 0x1E200000) return rd == 17 && ((insn >> 16) & 7) != 2 && ((insn >> 16) & 7) != 3 && ((insn >> 16) & 7) != 7;
+        if ((insn & 0xBFE08400) == 0x0E000400) return rd == 17 && (((insn >> 11) & 0xF) == 5 || ((insn >> 11) & 0xF) == 7);
+        return false;
+    case 4: case 6: case 12: case 14: // loads and stores
+        switch ((insn >> 27) & 7) {
+        case 1: // exclusive, CAS: status and pairs; SIMD structures: post-index writeback
+            if (simd) return insn & (1 << 23) && rn == 17;
+            return rd == 17 || rt2 == 17 || rs == 17 || (rs == 16 && (insn & 0xBFA00000) == 0x08200000); // CASP names the even register
+        case 3: // literal; LDAPUR family (bit 21 and bits 11:10 clear); others (tags, LDIAPP, RCW) refused
+            if (!(insn & (1 << 24)) || !(insn & 0x00200C00)) return !simd && rd == 17;
+            return true;
+        case 5: // pairs: Rt, Rt2, the base on pre / post-index
+            return (!simd && (rd == 17 || rt2 == 17)) || (insn & (1 << 23) && rn == 17);
+        case 7: // register: Rt; the base on pre / post-index (bit 10); atomics also Rs, LS64 refused
+            if (insn & (1 << 24)) return !simd && rd == 17; // unsigned offset: bits 21:10 are the immediate
+            if ((insn & 0x00200C00) == 0x00200000) { // atomic memory operations
+                const uint32_t opc = (insn >> 12) & 7;
+                if (insn & (1 << 15) && opc != 0 && opc != 4) return true; // LS64 writes up to eight registers
+                return rd == 17 || rs == 17;
+            }
+            return (!simd && rd == 17) || (insn & (1 << 10) && rn == 17);
+        default: return true;
+        }
+    default: return true; // reserved, SVE, SME
+    }
 }
 
 // Moved literals would be executed as code, so never relocate over another hook's patch.
@@ -169,13 +235,14 @@ bool isPatched(const uint32_t* source) {
     Rewritten instructions, everything else is copied verbatim:
         ADR / ADRP Xd, <label>      -> LDR Xd, =<address>
         LDR Wt / Xt / LDRSW <lit>   -> LDR Xt, =<address> ; LDR Wt / Xt / LDRSW Xt, [Xt]
-        LDR St / Dt / Qt <lit>      -> LDR X17, =<address> ; LDR St / Dt / Qt, [X17]
+        LDR St / Dt / Qt <lit>      -> LDR St / Dt / Qt, <copy of the constant in the trampoline>
         PRFM <lit>                  -> NOP
         B / BL <label>              -> direct B / BL, or through X17
         B.cond / CBZ / CBNZ / TBZ / TBNZ <label> -> <same> +8 ; B over ; jump to <label>
     Refused: a branch target inside the displaced bytes, which now hold the patch; an unconditional
     branch before the last displaced instruction, which means the function is shorter than the
-    patch and the bytes after it belong to something else; a literal load into XZR.
+    patch and the bytes after it belong to something else; a literal load into XZR; an instruction
+    that writes X17 when a far jump clobbers it.
 */
 std::vector<uint8_t> relocate(const uint32_t* source, size_t count, uint64_t address) {
     Assembler out{.base = address};
@@ -185,7 +252,6 @@ std::vector<uint8_t> relocate(const uint32_t* source, size_t count, uint64_t add
         const uint32_t insn = source[i];
         const uint64_t pc = reinterpret_cast<uint64_t>(source) + i * 4;
         const bool last = i + 1 == count;
-        if (mayWriteX17(insn)) return {};
         if ((insn & 0x7E000000) == 0x74000000) return {}; // FEAT_CMPBR compare and branch: not relocated
         if ((insn & 0x9F000000) == 0x10000000) { // ADR
             const uint64_t imm = ((insn >> 29) & 3) | (((insn >> 5) & 0x7FFFF) << 2);
@@ -199,11 +265,9 @@ std::vector<uint8_t> relocate(const uint32_t* source, size_t count, uint64_t add
             const uint64_t target = pc + signExtend((insn >> 5) & 0x7FFFF, 19) * 4;
             const uint32_t opc = insn >> 30, rt = insn & 0x1F;
             if (target < end && target + 16 > begin) return {}; // would read the patch, not the original bytes
-            if (insn & (1 << 26)) { // SIMD&FP
+            if (insn & (1 << 26)) { // SIMD&FP: a constant pool entry, copied into the trampoline's pool
                 if (opc == 3) return {}; // unallocated
-                static constexpr uint32_t loads[] = {0xBD400000, 0xFD400000, 0x3DC00000};
-                out.emitLoad(LDR_X17_LITERAL, target);
-                out.emit(loads[opc] | (17 << 5) | rt);
+                out.emitLoad(insn & ~(0x7FFFFu << 5), reinterpret_cast<const void*>(target), 4u << opc);
             } else if (opc == 3) {
                 out.emit(NOP); // PRFM is a hint
             } else if (rt == 31) {
@@ -234,6 +298,7 @@ std::vector<uint8_t> relocate(const uint32_t* source, size_t count, uint64_t add
         }
     }
     out.emitJump(reinterpret_cast<uint64_t>(source) + count * 4, false);
+    if (out.clobbersX17 && std::any_of(source, source + count, mayWriteX17)) return {};
     return out.finish();
 }
 
@@ -257,8 +322,8 @@ bool attach(Hook* hook) {
     const size_t words = landingPad ? 5 : 4;
     if (!hook->trampoline) {
         const auto pageSize = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
-        void* page = mmap(nullptr, pageSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (page == MAP_FAILED) return false;
+        void* page = mapTrampoline(reinterpret_cast<uintptr_t>(source), pageSize);
+        if (!page) return false;
         const auto code = relocate(source, words, reinterpret_cast<uint64_t>(page));
         if (code.empty() || code.size() > pageSize) { munmap(page, pageSize); return false; }
         std::memcpy(page, code.data(), code.size());
