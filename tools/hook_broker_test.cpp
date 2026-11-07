@@ -35,7 +35,7 @@ int second(int n) { return reinterpret_cast<int (*)(int)>(b->m_original)(n + 1) 
 namespace hymission::hooks {
 void* nativeCreate(void*, void* source, void* destination) { ++allocations; return new Native{source, destination}; }
 bool nativeAttach(void* p) { auto* n=static_cast<Native*>(p); n->original=fail?nullptr:n->source; return n->attached = !fail; }
-void nativeDetach(void* p) { auto* n=static_cast<Native*>(p); n->attached=false; n->original=nullptr; }
+bool nativeDetach(void* p) { auto* n=static_cast<Native*>(p); n->attached=false; n->original=nullptr; return true; }
 void* nativeOriginal(void* p) { return static_cast<Native*>(p)->original; }
 void nativeRemove(void*, void* p) { delete static_cast<Native*>(p); --allocations; }
 }

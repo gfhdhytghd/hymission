@@ -10,7 +10,8 @@ struct Hook;
 Hook* create(void* source, void* destination);
 // False when the entry cannot be patched safely; the source is left untouched.
 bool attach(Hook* hook);
-void detach(Hook* hook);
+// False when the original bytes could not be restored; the hook then stays attached.
+bool detach(Hook* hook);
 // The callable original while attached, otherwise nullptr.
 void* original(const Hook* hook);
 void destroy(Hook* hook);

@@ -15,7 +15,7 @@ namespace hymission::hooks {
 // These five operations are the only dependency on Hyprland's patching API.
 void* nativeCreate(void* owner, void* source, void* destination);
 bool nativeAttach(void* hook);
-void nativeDetach(void* hook);
+bool nativeDetach(void* hook);
 void* nativeOriginal(void* hook);
 void nativeRemove(void* owner, void* hook);
 struct Group;
@@ -64,7 +64,8 @@ inline bool Lease::hook() {
 inline bool Lease::unhook() {
     enabled = false;
     if (group->attached && std::ranges::none_of(group->leases, [](auto* l) { return l->enabled; })) {
-        nativeDetach(group->native);
+        // A source that could not be restored still enters the broker: keep routing it to the original.
+        if (!nativeDetach(group->native)) return false;
         group->attached = false;
         for (auto* lease:group->leases) lease->m_original=nullptr;
     }

@@ -148,6 +148,24 @@ asm(R"(
     nop
     nop
     ret
+)" FN(hookStxrX17) R"(
+    mov w17, #5
+    add w0, w0, w17
+    nop
+    nop
+    ret
+)" FN(hookLiteralInPatch) R"(
+    ldr w1, 1f
+    mov w0, w1
+1:  nop
+    nop
+    ret
+)" FN(hookPacia1716) R"(
+    pacia1716
+    add w0, w0, #1
+    nop
+    nop
+    ret
 )" FN(hookBranchNotLast) R"(
     add w0, w0, #1
     b 1f
@@ -165,7 +183,8 @@ extern "C" {
 int hookPlain(int); int hookAdr(int); int hookAdrp(int); int hookLdrX(int); int hookLdrW(int); int hookLdrsw(int);
 int hookLdrD(int); int hookLdrQ(int); int hookPrfm(int); int hookBcond(int); int hookCbz(int); int hookTbz(int);
 int hookB(int); int hookBl(int); int hookBti(int); int hookPaciasp(int); int hookTooShort(int); int hookBranchNotLast(int);
-int hookX17(int); int hookIntra(int); int hookMrsX17(int);
+int hookX17(int); int hookIntra(int); int hookMrsX17(int); int hookStxrX17(int); int hookLiteralInPatch(int);
+int hookPacia1716(int);
 }
 
 Fn g_original = nullptr;
@@ -289,6 +308,19 @@ int main() {
     refuses(hookIntra, 1, 11);
     refuses(hookIntra, 0, 9);
     refuses(hookMrsX17, 1, 2);
+    refuses(hookStxrX17, 1, 6);
+    refuses(hookLiteralInPatch, 1, 0xD503201F);
+    refuses(hookPacia1716, 1, 2);
+    // Registers outside bits 4:0 that are written: STXR status (20:16), CASP pairs, base writeback.
+    for (uint32_t word : {0x88117C01u, 0x48307C02u, 0xF8408620u}) {
+        const uint32_t code[] = {word, 0xD503201Fu, 0xD503201Fu, 0xD503201Fu};
+        assert(h::relocate(code, 4, reinterpret_cast<uint64_t>(code) + 4096).empty());
+    }
+    // FEAT_CMPBR compare-and-branch (CBGT, CBNE #imm) is not relocated.
+    for (uint32_t word : {0x740100C0u, 0xF5E080C0u}) {
+        const uint32_t code[] = {word, 0xD503201Fu, 0xD503201Fu, 0xD503201Fu};
+        assert(h::relocate(code, 4, reinterpret_cast<uint64_t>(code) + 4096).empty());
+    }
     landingPads();
     doubleHook();
     branchRange();

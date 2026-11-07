@@ -52,13 +52,14 @@ int64_t signExtend(uint64_t value, unsigned bits) {
     return static_cast<int64_t>((value ^ sign) - sign);
 }
 
-// mprotect() without PROT_BTI would silently drop a BTI guard from the mapping.
-bool isBtiGuarded(uintptr_t address) {
+// mprotect() without PROT_BTI would silently drop a BTI guard from the mapping, so an
+// address whose mapping cannot be read is reported as unknown (-1) and not patched.
+int btiGuard(uintptr_t address) {
     std::ifstream smaps("/proc/self/smaps");
     bool inRange = false;
     for (std::string line; std::getline(smaps, line);) {
         if (line.starts_with("VmFlags:")) {
-            if (inRange) return line.contains(" bt");
+            if (inRange) return line.contains(" bt") ? 1 : 0;
             continue;
         }
         const auto dash = line.find('-'), space = line.find(' ');
@@ -69,7 +70,7 @@ bool isBtiGuarded(uintptr_t address) {
             inRange = address >= start && address < end;
         } catch (const std::exception&) { inRange = false; }
     }
-    return false;
+    return -1;
 }
 
 // The page stays executable throughout: another thread may be running code on it.
@@ -79,7 +80,9 @@ bool writeCode(void* target, const void* code, size_t size) {
     const auto address = reinterpret_cast<uintptr_t>(target);
     const auto start = address & ~(pageSize - 1);
     const auto length = ((address + size + pageSize - 1) & ~(pageSize - 1)) - start;
-    const int protection = PROT_READ | PROT_EXEC | (isBtiGuarded(address) ? PROT_BTI : 0);
+    const int guard = btiGuard(address);
+    if (guard < 0) return false;
+    const int protection = PROT_READ | PROT_EXEC | (guard ? PROT_BTI : 0);
     if (mprotect(reinterpret_cast<void*>(start), length, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) return false;
     std::memcpy(target, code, size);
     if (mprotect(reinterpret_cast<void*>(start), length, protection) != 0)
@@ -141,12 +144,19 @@ std::vector<uint32_t> entryPatch(uint32_t first, bool landingPad, void* destinat
     return patch;
 }
 
-// Bits 4:0 hold the destination (or a stored register) of every non-branch instruction, and
-// bits 14:10 the second register of a load/store pair. Branches use them for offsets.
+// Conservative: outside the branch / system group, any register field (bits 4:0, 9:5, 14:10,
+// 20:16) that reads 17 counts, which also catches status registers (STXR), register pairs
+// (CASP, LDP) and base writeback. An immediate that happens to look like 17 only costs a refused
+// hook. In the branch / system group only MRS / SYSL and the *1716 PAC hints write X17.
 bool mayWriteX17(uint32_t insn) {
     if ((insn & 0xFFE00000) == 0xD5200000) return (insn & 0x1F) == 17; // MRS, SYSL
-    if ((insn & 0x1C000000) == 0x14000000) return false; // branches, exceptions, other system
-    return (insn & 0x1F) == 17 || ((insn & 0x3A000000) == 0x28000000 && ((insn >> 10) & 0x1F) == 17);
+    if ((insn & 0xFFFFFF1F) == 0xD503211F) return true;                 // PACIA1716 .. AUTIB1716
+    if ((insn & 0x1C000000) == 0x14000000) return false;                // branches, exceptions, other system
+    for (unsigned shift : {0u, 5u, 10u, 16u})
+        if (((insn >> shift) & 0x1F) == 17) return true;
+    // CASP names only the even register of each pair: X16 implies X17.
+    if ((insn & 0x3F000000) == 0x08000000 && ((insn & 0x1F) == 16 || ((insn >> 16) & 0x1F) == 16)) return true;
+    return false;
 }
 
 // Moved literals would be executed as code, so never relocate over another hook's patch.
@@ -176,15 +186,19 @@ std::vector<uint8_t> relocate(const uint32_t* source, size_t count, uint64_t add
         const uint64_t pc = reinterpret_cast<uint64_t>(source) + i * 4;
         const bool last = i + 1 == count;
         if (mayWriteX17(insn)) return {};
+        if ((insn & 0x7E000000) == 0x74000000) return {}; // FEAT_CMPBR compare and branch: not relocated
         if ((insn & 0x9F000000) == 0x10000000) { // ADR
             const uint64_t imm = ((insn >> 29) & 3) | (((insn >> 5) & 0x7FFFF) << 2);
-            out.emitLoad(0x58000000 | (insn & 0x1F), pc + signExtend(imm, 21));
+            const uint64_t target = pc + signExtend(imm, 21);
+            if (displaced(target)) return {}; // an address into bytes that now hold the patch
+            out.emitLoad(0x58000000 | (insn & 0x1F), target);
         } else if ((insn & 0x9F000000) == 0x90000000) { // ADRP
             const uint64_t imm = ((insn >> 29) & 3) | (((insn >> 5) & 0x7FFFF) << 2);
             out.emitLoad(0x58000000 | (insn & 0x1F), (pc & ~0xFFFULL) + (signExtend(imm, 21) << 12));
         } else if ((insn & 0x3B000000) == 0x18000000) { // LDR, LDRSW, PRFM (literal)
             const uint64_t target = pc + signExtend((insn >> 5) & 0x7FFFF, 19) * 4;
             const uint32_t opc = insn >> 30, rt = insn & 0x1F;
+            if (target < end && target + 16 > begin) return {}; // would read the patch, not the original bytes
             if (insn & (1 << 26)) { // SIMD&FP
                 if (opc == 3) return {}; // unallocated
                 static constexpr uint32_t loads[] = {0xBD400000, 0xFD400000, 0x3DC00000};
@@ -261,9 +275,9 @@ bool attach(Hook* hook) {
     return true;
 }
 
-void detach(Hook* hook) {
-    if (!hook->attached) return;
-    if (writeCode(hook->source, hook->saved, hook->words * 4)) hook->attached = false;
+bool detach(Hook* hook) {
+    if (hook->attached && writeCode(hook->source, hook->saved, hook->words * 4)) hook->attached = false;
+    return !hook->attached;
 }
 
 void* original(const Hook* hook) { return hook->attached ? hook->trampoline : nullptr; }
