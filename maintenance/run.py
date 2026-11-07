@@ -31,9 +31,14 @@ It is sent verbatim to the user's Feishu DM. Reasons must also be Chinese.
 Add optional "attention":"..." in Chinese only when the user personally must act: a tier-3 PR awaits their
 decision, an auto/* PR was opened, a contributor asks for the maintainer personally, or a manual step the
 script is not allowed to perform (release, tag, marketplace submission, merging its own tier-3 PR).
-Otherwise omit attention.'''
+Otherwise omit attention.
+Set "idle": true when you posted, pushed, merged and closed nothing (for example no new activity since your last reply); such runs are not reported to the user.'''
 # Nothing started from here may find the live compositor: the timer inherits the session's variables.
 SCRUB = ('WAYLAND_DISPLAY', 'DISPLAY', 'HYPRLAND_INSTANCE_SIGNATURE', 'SWAYSOCK', 'HYPRLAND_CMD', 'XDG_SESSION_ID', 'LD_PRELOAD')
+
+
+class Transient(Exception):
+    """Temporary service failure; leave work unhandled for the next timer."""
 
 
 def log(message):
@@ -95,6 +100,9 @@ def report_attention(key, error, target=None):
 
 
 def report_done(key, title, receipt, target):
+    if receipt.get('idle'):
+        log(f'idle: {key}')
+        return
     text = f'{key} {title}\n{receipt.get("summary", "")}'
     for push in receipt.get('pushed', []):
         text += f'\n推送：{push["branch"]}@{push["sha"][:9]}'
@@ -111,6 +119,8 @@ def agent(key, title, target, checkout, task):
         elif receipt.get('status') != 'completed':
             raise RuntimeError(receipt.get('reason') or '任务未完成，保留记录以便重试')
         return receipt
+    except Transient:
+        raise
     except Exception as error:
         report_attention(key, f'代理运行失败（{type(error).__name__}）：{error}', target)
         raise
@@ -120,13 +130,26 @@ def run(*args, cwd=None):
     return subprocess.check_output(args, cwd=cwd, text=True, stderr=None).strip()
 
 
-def api(endpoint):
-    return json.loads(run('gh', 'api', endpoint))
+def api(endpoint, *options):
+    command = ('gh', 'api', *options, endpoint)
+    try:
+        output = run(*command)
+    except subprocess.CalledProcessError as error:
+        raise Transient(f'{" ".join(command)}: {error}') from error
+    return json.loads(output) if output else None
 
 
 def paginate(endpoint):
-    pages = json.loads(run('gh', 'api', '--paginate', '--slurp', endpoint))
+    pages = api(endpoint, '--paginate', '--slurp')
     return [item for page in pages for item in page]
+
+
+def pick(value, *fields):
+    return {field: (value or {}).get(field) for field in fields}
+
+
+def comment_snapshot(comment, *fields):
+    return dict(pick(comment, 'id', 'body', *fields), user=pick(comment.get('user'), 'login'))
 
 
 def slug(repo):
@@ -136,12 +159,20 @@ def slug(repo):
 def snapshot(repo, item):
     number = item['number']
     path = f'repos/{slug(repo)}'
-    result = {'issue': api(f'{path}/issues/{number}'),
-              'comments': paginate(f'{path}/issues/{number}/comments?per_page=100')}
+    issue = api(f'{path}/issues/{number}')
+    result = {'issue': dict(pick(issue, 'number', 'title', 'body', 'state', 'state_reason', 'locked'),
+                            labels=None if issue.get('labels') is None else [pick(label, 'name') for label in issue['labels']],
+                            assignees=None if issue.get('assignees') is None else [pick(user, 'login') for user in issue['assignees']],
+                            milestone=pick(issue.get('milestone'), 'title')),
+              'comments': [comment_snapshot(comment) for comment in paginate(f'{path}/issues/{number}/comments?per_page=100')]}
     if 'pull_request' in item:
-        result['pull'] = api(f'{path}/pulls/{number}')
-        for kind in ('reviews', 'comments'):
-            result[kind + '_pr'] = paginate(f'{path}/pulls/{number}/{kind}?per_page=100')
+        pull = api(f'{path}/pulls/{number}')
+        result['pull'] = dict(pick(pull, 'draft', 'state', 'merged', 'merge_commit_sha'),
+                              head=pick(pull.get('head'), 'sha'), base=pick(pull.get('base'), 'ref'))
+        result['reviews_pr'] = [comment_snapshot(review, 'state', 'commit_id')
+                                for review in paginate(f'{path}/pulls/{number}/reviews?per_page=100')]
+        result['comments_pr'] = [comment_snapshot(comment, 'path', 'line', 'commit_id')
+                                 for comment in paginate(f'{path}/pulls/{number}/comments?per_page=100')]
     return result
 
 
@@ -209,16 +240,28 @@ def claude(target, checkout, task):
     env['HYPR_MAINT_BIN'] = str(ROOT / 'bin')
     env['HYPR_MAINT_RUN'] = str(target)
     with (target / 'claude.json').open('w') as output:
-        subprocess.run(['claude', '-p', '--model', 'opus', '--output-format', 'json',
+        process = subprocess.run(['claude', '-p', '--model', 'opus', '--output-format', 'json',
                         '--permission-mode', 'acceptEdits', '--permission-prompts', 'none',
                         '--allowedTools', 'Bash,Read,Write,Edit,Glob,Grep,Agent', '--', prompt],
-                       cwd=checkout, env=env, stdout=output, check=True, timeout=18000)
-    result = json.loads((target / 'claude.json').read_text())
+                       cwd=checkout, env=env, stdout=output, stderr=subprocess.PIPE, text=True, check=False, timeout=18000)
+    failure = f'Claude exit={process.returncode}; stderr tail: {(process.stderr or "")[-1000:]}; 记录：{target}'
+    try:
+        result = json.loads((target / 'claude.json').read_text())
+        if not isinstance(result, dict):
+            raise ValueError('Claude JSON is not an object')
+    except (OSError, ValueError) as error:
+        raise Transient(f'{failure}; invalid claude.json: {error}') from error
+    status = result.get('api_error_status')
+    message = str(result.get('result') or '')
+    if (process.returncode != 0 or result.get('api_error') or status == 429
+            or (isinstance(status, int) and status >= 500)
+            or 'usage_limit' in message.lower() or 'weekly limit' in message.lower()):
+        raise Transient(f'{failure}; api_error={result.get("api_error")} status={status}; {message}')
     log(f"agent run {target.name}: cost=${result.get('total_cost_usd') or 0:.2f} turns={result.get('num_turns')} error={result.get('is_error')}")
     if result.get('permission_denials'):
         # A denied call is a warning, not a failure: the receipt below is the authority on whether the item is handled.
-        log('denied tool calls: ' + '; '.join(d.get('tool_input', {}).get('command', d.get('tool_name', '?'))[:120]
-                                             for d in result['permission_denials']))
+        log('denied tool calls: ' + '; '.join(d.get('tool_input', {}).get('command', d.get('tool_name', '?'))
+                                             for d in result['permission_denials']).replace('\n', ' ')[:120])
     if result.get('is_error'):
         log(result.get('result', ''))
         raise RuntimeError(f'Claude 运行失败；记录：{target}')
@@ -304,19 +347,21 @@ def triage(check, only=None):
         for item in paginate(f'repos/{slug(repo)}/issues?state=open&per_page=100'):
             seen += 1
             key = f'{repo}#{item["number"]}'
-            data = snapshot(repo, item)
-            if handled.get(key) == digest(data):
-                continue
-            log(f'Needs handling: {key} {item["title"]}')
-            if check:
-                continue
             try:
+                data = snapshot(repo, item)
+                if handled.get(key) == digest(data):
+                    continue
+                log(f'Needs handling: {key} {item["title"]}')
+                if check:
+                    continue
                 handle(repo, item, data)
                 handled[key] = digest(snapshot(repo, item))
                 notify(f'{key} handled', item['title'])
                 temp = statefile.with_suffix('.tmp')
                 temp.write_text(json.dumps(handled, indent=2))
                 temp.replace(statefile)
+            except Transient as error:
+                log(f'{key}: transient: {error}')
             except Exception as error:
                 errors.append(f'{key}: {error}')
                 log(errors[-1])
@@ -370,6 +415,8 @@ every branch you pushed, or {{"status":"blocked","reason":"..."}} after a transi
                 report_done(repo, '分支同步', receipt, target)
             for push in receipt.get('pushed', []):
                 log(update_local(repo, push['branch'], push['sha']))
+        except Transient as error:
+            log(f'{repo}: transient: {error}')
         except Exception as error:
             errors.append(f'{repo} sync: {error}')
             log(errors[-1])
@@ -395,7 +442,7 @@ def notifications(check):
         triage(False, only=set(active))
     finally:
         for thread in threads:
-            run('gh', 'api', '--method', 'PATCH', f"notifications/threads/{thread['id']}")
+            api(f"notifications/threads/{thread['id']}", '--method', 'PATCH')
 
 
 if __name__ == '__main__':
@@ -419,6 +466,8 @@ if __name__ == '__main__':
                 sync(args.check, set(args.repo) if args.repo else None)
             else:
                 notifications(args.check)
+        except Transient as error:
+            log(f'TRANSIENT: {error}')
         except Exception as error:
             log(f'FAILED: {type(error).__name__}: {error}')
             if not REPORT['attention']:  # item failures are already listed

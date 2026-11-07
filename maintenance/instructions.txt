@@ -80,6 +80,7 @@ Classify every change you are about to publish by the largest tier that applies:
   "fixed in <sha>, please confirm".
 
 == Reporting ==
+- Set "idle": true when you posted, pushed, merged and closed nothing (for example no new activity since your last reply); such runs are not reported to the user.
 - The receipt summary must be Chinese, user-facing, at most 300 characters, and describe actions and evidence.
   It is sent verbatim to the user's Feishu DM.
 - Add optional "attention":"..." in Chinese only when the user personally must act: a tier-3 PR awaits their
