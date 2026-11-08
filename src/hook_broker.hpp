@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <functional>
 #include <expected>
 #include <string>
@@ -79,6 +80,9 @@ inline void remove(void*, Lease* lease) {
     g->releaseContinuation(lease);
     delete lease;
     // A group whose source could not be restored stays, so the source keeps reaching its original.
+    // Unloading the plugin still unmaps that bridge, so say so before the crash it would cause.
+    if (g->leases.empty() && g->attached)
+        std::fprintf(stderr, "[hymission] hook: could not restore the original entry at %p; unloading the plugin will crash\n", g->source);
     if (g->leases.empty() && !g->attached) groups().erase(g->source);
 }
 

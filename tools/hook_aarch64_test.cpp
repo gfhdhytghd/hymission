@@ -376,6 +376,24 @@ int main() {
              0x9B024420u, // madd x0, x1, x2, x17
          })
         assert(accepted(word, NEAR) && accepted(word, FAR));
+    // A SIMD literal is copied at hook time, so one in writable memory is refused.
+    {
+        uint32_t code[32] = {0x5C000200u, 0xD503201Fu, 0xD503201Fu, 0xD503201Fu}; // ldr d0, +64 (on the stack)
+        assert(h::relocate(code, 4, reinterpret_cast<uint64_t>(code) + 4096).empty());
+    }
+    // ... also when only the end of a 16-byte literal reaches a writable page.
+    {
+        const auto pageSize = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
+        auto* pages = static_cast<uint8_t*>(mmap(nullptr, 2 * pageSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+        assert(pages != MAP_FAILED);
+        auto* code = reinterpret_cast<uint32_t*>(pages);
+        const uint32_t offset = static_cast<uint32_t>(pageSize - 8) / 4; // literal at page end - 8, 16 bytes long
+        code[0] = 0x9C000000u | (offset << 5); // ldr q0, <literal>
+        code[1] = code[2] = code[3] = 0xD503201Fu;
+        assert(mprotect(pages, pageSize, PROT_READ) == 0);
+        assert(h::relocate(code, 4, reinterpret_cast<uint64_t>(code) + 4096).empty());
+        munmap(pages, 2 * pageSize);
+    }
     // FEAT_CMPBR compare-and-branch (CBGT, CBNE #imm) is not relocated.
     for (uint32_t word : {0x740100C0u, 0xF5E080C0u}) assert(!accepted(word, NEAR));
     landingPads();

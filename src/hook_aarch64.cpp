@@ -66,6 +66,18 @@ bool parseRange(const std::string& line, uintptr_t& start, uintptr_t& end) {
 
 // mprotect() without PROT_BTI would silently drop a BTI guard from the mapping, so an
 // address whose mapping cannot be read is reported as unknown (-1) and not patched.
+// 1 when the mapping holding the address is writable, 0 when not, -1 when it cannot be read.
+int writableMapping(uintptr_t address) {
+    std::ifstream maps("/proc/self/maps");
+    for (std::string line; std::getline(maps, line);) {
+        uintptr_t start, end;
+        const auto perms = line.find(' ');
+        if (parseRange(line, start, end) && address >= start && address < end && perms + 2 < line.size())
+            return line[perms + 2] == 'w' ? 1 : 0;
+    }
+    return -1;
+}
+
 int btiGuard(uintptr_t address) {
     std::ifstream smaps("/proc/self/smaps");
     bool inRange = false;
@@ -116,7 +128,8 @@ bool writeCode(void* target, const void* code, size_t size) {
     const auto start = address & ~(pageSize - 1);
     const auto length = ((address + size + pageSize - 1) & ~(pageSize - 1)) - start;
     const int guard = btiGuard(address);
-    if (guard < 0) return false;
+    // A patch across two mappings must not drop BTI from either of them.
+    if (guard < 0 || btiGuard(address + size - 1) != guard) return false;
     const int protection = PROT_READ | PROT_EXEC | (guard ? PROT_BTI : 0);
     if (mprotect(reinterpret_cast<void*>(start), length, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) return false;
     std::memcpy(target, code, size);
@@ -268,6 +281,8 @@ std::vector<uint8_t> relocate(const uint32_t* source, size_t count, uint64_t add
             if (target < end && target + 16 > begin) return {}; // would read the patch, not the original bytes
             if (insn & (1 << 26)) { // SIMD&FP: a constant pool entry, copied into the trampoline's pool
                 if (opc == 3) return {}; // unallocated
+                // The copy is taken now, so it is only safe for constants: refuse writable data.
+                if (writableMapping(target) != 0 || writableMapping(target + (4u << opc) - 1) != 0) return {};
                 out.emitLoad(insn & ~(0x7FFFFu << 5), reinterpret_cast<const void*>(target), 4u << opc);
             } else if (opc == 3) {
                 out.emit(NOP); // PRFM is a hint
