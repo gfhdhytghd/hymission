@@ -1712,7 +1712,7 @@ size_t StageController::Impl::referenceCardCount(const PHLMONITOR& monitor,const
 
 std::vector<StageController::Impl::Card> StageController::Impl::cardsForWorkspace(const PHLMONITOR& monitor, const PHLWORKSPACE& activeWorkspace, WorkspaceKey pendingActive) const {
     const auto workspaces = State::workspaceState()->workspacesCopy();
-    const bool showEmpty = setting("stage_show_empty", 1) != 0;
+    const bool showEmpty = setting("stage_show_empty", 0) != 0;
     std::vector<Card> targets;
     for (const auto& workspace : workspaces) {
         if ((workspace->type() == Workspace::eWorkspaceType::SPECIAL) || workspace->m_monitor != monitor)

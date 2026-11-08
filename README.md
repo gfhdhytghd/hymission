@@ -790,7 +790,7 @@ hl.config({
             stage_window_decorations = 0,
             stage_scrolling_desktop_edge_width = 32,
             stage_scrolling_preview_edge_width = 16, -- 0 keeps hard clipping
-            stage_show_empty = 1,
+            stage_show_empty = 0,
             stage_show_active = 0,
             stage_empty_slots = 0,
             stage_backdrop = 0,
@@ -845,7 +845,7 @@ dispatcher is `hymission:stage_toggle`; Lua also supports `dispatch("stage_toggl
 | `stage_desktop_gap` | `-1` | No additional gap beyond native spacing; nonnegative values add explicit spacing before the desktop. |
 | `stage_transition_ms` | `300` | Workspace window flights; `0` disables. Shared timeline, symmetric ease-in-out translation and ease-out scale. Incoming desktop stays above departing windows. Respects `animations:enabled`. |
 | `stage_smartisan_mode` | `0` | Swap sidebar and desktop sides on every ordinary workspace switch. The sidebar exits its current edge and enters from the opposite edge; the selected workspace expands while the old desktop shrinks into its matching card. Each monitor alternates independently. |
-| `stage_show_empty` | `1` | Keep inactive empty workspaces as transparent empty slots; `0` hides them. Slots remain clickable and accept drops without a hover outline. No synthetic workspaces or plus card. |
+| `stage_show_empty` | `0` | Hide inactive empty workspaces; `1` keeps them as transparent empty slots. Slots remain clickable and accept drops without a hover outline. No synthetic workspaces or plus card. |
 | `stage_show_active` | `0` | Keep the active workspace in the sidebar instead of swapping it out for the previously active one; every workspace stays listed, including empty ones. The active card keeps live previews and is outlined with a soft glow in the `focus_selected_color` when `stage_active_glow` is `1`. Clicking the active card is a no-op. |
 | `stage_empty_slots` | `0` | Always list numbered workspace slots `1..N` on each monitor, synthesizing empty cards for workspaces that do not exist yet (Hyprland destroys empty workspaces on switch). Slots are clickable and accept window drops; using one creates the workspace. Ids owned by other monitors are skipped. `0` keeps the existing behavior of listing only real workspaces. |
 | `stage_backdrop` | `0` | When enabled (`1`), draw every card over the desktop region of the monitor's background and bottom layer surfaces (wallpaper and background-layer dashboards), so previews match what the desktop shows; `0` (default) keeps cards transparent. Refreshes every two seconds while visible. |
