@@ -1727,23 +1727,37 @@ std::vector<StageController::Impl::Card> StageController::Impl::cardsForWorkspac
             continue;
         targets.emplace_back(Card{.workspace = workspace});
     }
+    // Synthetic slots. `stage_empty_slots = N` always lists ids 1..N (and up
+    // to the highest listed card). `stage_show_empty = 1` additionally keeps
+    // the numbering contiguous: a missing id below the highest numbered
+    // workspace of this sidebar is listed as a slot, but ids owned by any
+    // existing workspace (the hidden active one, other tiles, other
+    // monitors) are never synthesized there.
+    const auto ownedElsewhere = [&](WorkspaceKey id, bool anyMonitor) {
+        return std::ranges::any_of(workspaces, [&](const auto& workspace) {
+            return workspace && !(workspace->type() == Workspace::eWorkspaceType::SPECIAL) && workspaceKey(workspace) == id &&
+                (anyMonitor || workspace->m_monitor != monitor);
+        });
+    };
+    WorkspaceKey slotCeiling = 0, gapCeiling = 0;
     if (const long emptySlots = setting("stage_empty_slots", 0); emptySlots > 0) {
-        WorkspaceKey highest = 0;
-        for (const auto& card : targets) {
-            if (card.workspace.lock() && cardID(card) > highest)
-                highest = cardID(card);
+        slotCeiling = static_cast<WorkspaceKey>(emptySlots);
+        for (const auto& card : targets)
+            if (card.workspace.lock()) slotCeiling = std::max(slotCeiling, cardID(card));
+    }
+    if (showEmpty) {
+        for (const auto& workspace : workspaces) {
+            if (!workspace || workspace->type() == Workspace::eWorkspaceType::SPECIAL || workspace->m_monitor != monitor) continue;
+            if (auto* tiles=TilesController::get();tiles && tiles->available() && tiles->preferredTile(workspace,monitor)!=tiles->preferredTile(activeWorkspace,monitor)) continue;
+            gapCeiling = std::max(gapCeiling, workspaceKey(workspace));
         }
-        const WorkspaceKey last = std::max<WorkspaceKey>(highest, static_cast<WorkspaceKey>(emptySlots));
-        for (WorkspaceKey id = 1; id <= last; ++id) {
-            if (std::ranges::any_of(targets, [&](const Card& card) { return cardID(card) == id; }))
-                continue;
-            // Never synthesize a slot for an id owned by another monitor.
-            if (std::ranges::any_of(workspaces, [&](const auto& workspace) {
-                    return workspace && !(workspace->type() == Workspace::eWorkspaceType::SPECIAL) && workspaceKey(workspace) == id && workspace->m_monitor != monitor;
-                }))
-                continue;
-            targets.emplace_back(Card{.syntheticId = id});
-        }
+    }
+    for (WorkspaceKey id = 1; id <= std::max(slotCeiling, gapCeiling); ++id) {
+        if (std::ranges::any_of(targets, [&](const Card& card) { return cardID(card) == id; }))
+            continue;
+        if (ownedElsewhere(id, id > slotCeiling))
+            continue;
+        targets.emplace_back(Card{.syntheticId = id});
     }
     std::ranges::sort(targets, [](const Card& a, const Card& b) {
         const auto ida = cardID(a), idb = cardID(b);
