@@ -38,7 +38,7 @@ template<class F> double measure(F fn) {
 namespace hymission::hooks {
 void* nativeCreate(void*,void* source,void* target) { return new Native{source,target}; }
 bool nativeAttach(void*) { return true; }
-void nativeDetach(void*) {}
+bool nativeDetach(void*) { return true; }
 void* nativeOriginal(void* p) { return static_cast<Native*>(p)->source; }
 void nativeRemove(void*,void* p) { delete static_cast<Native*>(p); }
 }
