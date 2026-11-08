@@ -452,7 +452,7 @@ static void registerConfigValues() {
     INT_CONF("stage_desktop_gap", -1);
     INT_CONF("stage_transition_ms", 300);
     INT_CONF("stage_smartisan_mode", 0);
-    INT_CONF("stage_show_empty", 1);
+    INT_CONF("stage_show_empty", 0);
     INT_CONF("stage_show_active", 0);
     INT_CONF("stage_empty_slots", 0);
     INT_CONF("stage_backdrop", 0);
