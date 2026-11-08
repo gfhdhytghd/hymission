@@ -40,17 +40,20 @@ vergte() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
 
 src=$work/Hyprland; echo "== cloning $slug $sha"; clone "$slug" "$sha" "$src"
 cm=$src/CMakeLists.txt
+# A *_MINIMUM_VERSION can lag the API Hyprland uses (v0.57.1 calls aquamarine's setMaxBpc, absent from v0.15.0),
+# so a dependency that must be built takes the revision flake.lock pins, falling back to the minimum's tag.
+flake_rev() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["nodes"][sys.argv[2]]["locked"]["rev"])' "$src/flake.lock" "$1" 2>/dev/null || echo "$2"; }
 need() { { grep -oE "$1_MINIMUM_VERSION [0-9.]+" "$cm" || true; } | head -1 | awk '{print $2}'; }
 for pair in hyprutils:HYPRUTILS hyprlang:HYPRLANG hyprcursor:HYPRCURSOR hyprgraphics:HYPRGRAPHICS hyprwire:HYPRWIRE; do
   pkg=${pair%%:*}; min=$(need "${pair#*:}"); [ -n "$min" ] || continue
   have=$(pkg-config --modversion "$pkg" 2>/dev/null || echo 0)
   vergte "$have" "$min" && { echo "$pkg: system $have satisfies >= $min"; continue; }
-  build_dep "$pkg" "hyprwm/$pkg" "v$min"; done
+  build_dep "$pkg" "hyprwm/$pkg" "$(flake_rev "$pkg" "v$min")"; done
 min=$({ grep -oE "hyprland-protocols>=[0-9.]+" "$cm" || true; } | head -1 | cut -d= -f2); have=$(pkg-config --modversion hyprland-protocols 2>/dev/null || echo 0)
-if [ -n "$min" ] && ! vergte "$have" "$min"; then build_dep hyprland-protocols hyprwm/hyprland-protocols "v$min"; fi
+if [ -n "$min" ] && ! vergte "$have" "$min"; then build_dep hyprland-protocols hyprwm/hyprland-protocols "$(flake_rev hyprland-protocols "v$min")"; fi
 min=$(need AQUAMARINE); have=$(pkg-config --modversion aquamarine 2>/dev/null || echo 0)
 if [ -n "$aq_ref" ]; then build_dep aquamarine "$aq_slug" "$aq_ref"
-elif [ -n "$min" ] && ! vergte "$have" "$min"; then build_dep aquamarine hyprwm/aquamarine "v$min"; fi
+elif [ -n "$min" ] && ! vergte "$have" "$min"; then build_dep aquamarine hyprwm/aquamarine "$(flake_rev aquamarine "v$min")"; fi
 
 echo "== building Hyprland"
 cmake -S "$src" -B "$src/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix"
