@@ -40,9 +40,9 @@ https://github.com/user-attachments/assets/7d711730-72f6-4165-94fa-af38bae37385
 
 ## Hyprland compatibility
 
-`master` follows the latest official Hyprland release: **v0.57.0** =
-`hyprwm/Hyprland` [`0aa6745f`](https://github.com/hyprwm/Hyprland/releases/tag/v0.57.0),
-with aquamarine `52ea11f`. `hyprland-master` tracks official `hyprwm/Hyprland`
+`master` follows the latest official Hyprland release: **v0.57.2** =
+`hyprwm/Hyprland` [`11cbc6c5`](https://github.com/hyprwm/Hyprland/releases/tag/v0.57.2),
+with locked aquamarine `52ea11f`. `hyprland-master` tracks official `hyprwm/Hyprland`
 `main`. A `my-hyprland-master` branch exists only while the project's fork
 `gfhdhytghd/Hyprland` needs plugin source changes that the official tree does
 not; currently the same source builds for both.

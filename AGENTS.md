@@ -13,7 +13,7 @@
 
 ## Hyprland Development Branch
 
-- `master` follows the latest official Hyprland release, `hyprwm/Hyprland` v0.57.0 = `0aa6745f705f2c4b0a5004eb019ef76e5bbdb426` (aquamarine `hyprwm` `52ea11f`).
+- `master` follows the latest official Hyprland release, `hyprwm/Hyprland` v0.57.2 = `11cbc6c577b84ffb1edf4df3fc5b6128c3ae6947` (locked aquamarine `hyprwm` `52ea11f`).
 - `hyprland-master` targets official `hyprwm/Hyprland` Git `main` (development HEAD); keep development API adaptations there. Do not substitute a stable release or the locally installed compositor as compatibility evidence.
 - `my-hyprland-master` is opened only when the project's fork `gfhdhytghd/Hyprland` needs plugin changes the official tree does not; it holds the fork-specific version. Same-named fork and official tags are different commits (fork v0.57.0 is `f6725e43`) and their headers or binaries are not ABI evidence for each other; neither is `/usr/include/hyprland`.
 - Omarchy branches (`omarchy-plugin`, `omarchy-marketplace`) stay Omarchy-specific; merge new `master` into them and validate against their target Hyprland version. Do not propagate branch-specific API changes to them without that validation.
