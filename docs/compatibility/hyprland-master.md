@@ -1,6 +1,27 @@
 # Hyprland compatibility baseline
 
-- `master`: official `hyprwm/Hyprland` release `v0.57.0` =
+## Current release baseline (2026-11-11)
+
+- `master`: official `hyprwm/Hyprland` release `v0.57.2` =
+  `11cbc6c577b84ffb1edf4df3fc5b6128c3ae6947`.
+- `flake.lock` updates only the `hyprland` node; all dependency nodes retain
+  their previous pins, including aquamarine `52ea11f`. The exact-header checks
+  below use the supplied release prefix, not a Nix-built compositor.
+- Release build against that prefix: passed. CTest: 20 passed, 1 skipped
+  (`hymission-hook-aarch64-test` requires AArch64; this host is x86_64).
+- `verify_dev_hooks.py` against the exact release binary: 49 signature checks,
+  46 lookups (42 unique targets), and 41 exact tiles symbols passed.
+- Private nested release compositor: load, two `hymission:toggle` dispatches,
+  unload, and compositor survival passed (`plugin-smoke.sh`).
+- The `hymission` shared-library target also builds against the supplied
+  official v0.57.0 prefix (`BUILD_TESTING=OFF`); no v0.57.0 runtime checks were run.
+- No plugin API/ABI source adaptation was required for this release.
+- Nix prefetch verified `sha256-kzhNQmKtX7lH69fQTNYZckZgV35ZK3rs25/2W7FGlbQ=`
+  for the release. A full Nix build and live-session acceptance were not run.
+
+## Historical release baseline (2026-10-29)
+
+- Tested release: official `hyprwm/Hyprland` release `v0.57.0` =
   `0aa6745f705f2c4b0a5004eb019ef76e5bbdb426`, aquamarine `hyprwm`
   `52ea11f06dd492f34b3cc0b39a9c805beecafcff`, hyprutils `0d13d5a` (0.14.3),
   hyprland-protocols `044a434`. The flake pins this tag.
