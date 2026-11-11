@@ -516,11 +516,6 @@ std::string getConfigString(HANDLE handle, const char* name, std::string fallbac
     if (*value.type == typeid(Config::STRING))
         return **reinterpret_cast<Config::STRING* const*>(value.dataptr);
 
-    if (*value.type == typeid(Hyprlang::STRING)) {
-        const auto* data = reinterpret_cast<Hyprlang::STRING const*>(value.dataptr);
-        return data && *data ? std::string(*data) : fallback;
-    }
-
     return fallback;
 }
 
@@ -816,7 +811,7 @@ double swipeDistanceForDirection(const ITrackpadGesture::STrackpadGestureUpdate&
 }
 
 bool shouldWrapWorkspaceIds(const WorkspaceKey targetId, const WorkspaceKey currentId) {
-    static auto PWORKSPACEWRAPAROUND = CConfigValue<Hyprlang::INT>("animations:workspace_wraparound");
+    static auto PWORKSPACEWRAPAROUND = CConfigValue<Config::INTEGER>("animations:workspace_wraparound");
 
     if (!*PWORKSPACEWRAPAROUND)
         return false;
@@ -7561,7 +7556,7 @@ SDispatchResult OverviewController::startOverviewWorkspaceTransitionForDispatche
             return {.id = previous.id, .name = previous.name.empty() ? std::to_string(previous.id) : previous.name};
         };
 
-        static auto PBACKANDFORTH = CConfigValue<Hyprlang::INT>("binds:workspace_back_and_forth");
+        static auto PBACKANDFORTH = CConfigValue<Config::INTEGER>("binds:workspace_back_and_forth");
         const bool explicitPrevious = args.contains("previous");
         const auto resolved = resolveWorkspaceToChange(args);
         if (resolved.id == WORKSPACE_INVALID)
