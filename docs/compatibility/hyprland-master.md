@@ -3,7 +3,7 @@
 - `hyprland-master`: official `hyprwm/Hyprland` `main` =
   `ab6141897d57e609e24c571a762c30c963e0885a` (`version.h` 0.57.0). The flake
   pins and locks this revision.
-- `master`: official release `v0.57.0` = `0aa6745f` (aquamarine `52ea11f`); see
+- `master`: official release `v0.57.2` = `11cbc6c5` (aquamarine `52ea11f`); see
   that branch's copy of this record.
 - Fork: the project's `gfhdhytghd/Hyprland` v0.57.0 (`f6725e43`, aquamarine
   `4abfcab`) is a different commit with a different ABI. The same plugin source
