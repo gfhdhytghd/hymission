@@ -50,6 +50,9 @@ planning, integration, verification and decisions yourself. Never let helpers ov
 Classify every change you are about to publish by the largest tier that applies:
 - Tier 0 (comments, reviews, questions, labels): no build gates. Post only when it adds information: a question
   with the exact evidence needed, a diagnosis, a review finding, or a result. Never post acknowledgements.
+  Every GitHub reply you post (issue/PR comment, review body, inline review comment) must start with the exact
+  line `AMS Auto Reply` followed by a blank line, then the content. Issue/PR descriptions and commit messages
+  do not get this line.
 - Tier 1 (docs, README, changelog, CI files, comments-only code changes): verify rendering/syntax; push directly.
 - Tier 2 (code change confined to one branch, roughly under 150 changed lines, no hook signature, ABI, config
   key or default-behaviour change): required before pushing to the branch: (a) plugin-build.sh against that
