@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <utility>
+#include <vector>
 
 int main() {
     using namespace hymission;
@@ -21,20 +23,37 @@ int main() {
     }
     if (retries != 188 || !wait.expired(start + 1500ms) || wait.expired(start + 1499ms))
         return EXIT_FAILURE;
-    if (searchKeyAction(false, true) != SearchKeyAction::Stop ||
-        searchKeyAction(false, false) != SearchKeyAction::Buffer ||
-        searchKeyAction(true, true) != SearchKeyAction::Forward ||
-        searchKeyAction(true, false) != SearchKeyAction::Forward)
+    if (searchKeyAction(false, true, false) != SearchKeyAction::Stop ||
+        searchKeyAction(false, false, false) != SearchKeyAction::Buffer ||
+        searchKeyAction(false, false, true) != SearchKeyAction::Pass ||
+        searchKeyAction(false, true, true) != SearchKeyAction::Stop ||
+        searchKeyAction(true, true, true) != SearchKeyAction::Forward ||
+        searchKeyAction(true, false, true) != SearchKeyAction::Forward)
+        return EXIT_FAILURE;
+    std::vector<std::pair<unsigned, bool>> pending;
+    const auto unpairedRelease = [&](unsigned keycode, bool pressed) {
+        return !pressed && !hasBufferedSearchPress(pending, [=](const auto& key) { return key.first == keycode; },
+                                                  [](const auto& key) { return key.second; });
+    };
+    if (!unpairedRelease(1, false) || searchKeyAction(false, false, unpairedRelease(1, true)) != SearchKeyAction::Buffer)
+        return EXIT_FAILURE;
+    pending.push_back({1, true});
+    pending.push_back({2, false}); // Ignore a more recent event for another key.
+    if (unpairedRelease(1, false) || !unpairedRelease(3, false) ||
+        searchKeyAction(false, false, unpairedRelease(1, false)) != SearchKeyAction::Buffer)
+        return EXIT_FAILURE;
+    pending.push_back({1, false});
+    if (!unpairedRelease(1, false))
         return EXIT_FAILURE;
     // Exercise the production routing bridge. An unavailable helper stops
     // first, then the SAME key reaches overview; only overview decides whether
     // the event is consumed. Neither a focused nor a buffered key takes that path.
-    const auto checkRoute = [](bool focused, bool escapePressed, bool overviewHandles) {
+    const auto checkRoute = [](bool focused, bool escapePressed, bool overviewHandles, bool unpairedRelease = false) {
         bool searchActive = true;
         unsigned buffered = 1;
         bool cancelled = false;
         std::string calls;
-        const auto route = routeSearchKey(searchKeyAction(focused, escapePressed), [&] {
+        const auto route = routeSearchKey(searchKeyAction(focused, escapePressed, unpairedRelease), [&] {
             searchActive = false;
             buffered = 0;
             calls += 'S';
@@ -44,8 +63,10 @@ int main() {
             calls += 'B';
         });
         if (route == SearchKeyRoute::Overview) {
-            if (searchActive || buffered != 0)
+            if (!unpairedRelease && (searchActive || buffered != 0))
                 return false;
+            if (unpairedRelease && !escapePressed)
+                return searchActive && buffered == 1 && calls.empty() && !cancelled;
             calls += 'O';
             if (overviewHandles)
                 cancelled = true;
@@ -57,7 +78,8 @@ int main() {
         return route == SearchKeyRoute::Overview && !searchActive && calls == "SO" && cancelled == overviewHandles;
     };
     if (!checkRoute(false, true, true) || !checkRoute(false, true, false) ||
-        !checkRoute(false, false, true) || !checkRoute(true, true, true) || !checkRoute(true, false, true))
+        !checkRoute(false, false, true) || !checkRoute(true, true, true) || !checkRoute(true, false, true) ||
+        !checkRoute(false, false, false, true) || !checkRoute(true, false, false, true))
         return EXIT_FAILURE;
 
     wait.reset(); // successful focus or stop cancels the old deadline
@@ -70,5 +92,5 @@ int main() {
     wait.begin(start + 20s); // reopening must not inherit an expired attempt
     if (wait.expired(start + 20s))
         return EXIT_FAILURE;
-    std::cout << "PASS: search Escape resumes overview cancellation, bounded 8ms retries, focus loss and restart deadlines\n";
+    std::cout << "PASS: search key pairing and routing, Escape cancellation, bounded focus retries and restart deadlines\n";
 }
