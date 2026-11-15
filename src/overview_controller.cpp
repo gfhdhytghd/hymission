@@ -3576,8 +3576,12 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
         // ensureSearchInputFocus may stop an expired search. Let this event
         // continue through normal overview handling in that case.
         if (m_searchActive) {
+            // Core press records must see releases whose presses were not buffered.
+            const bool unpairedRelease = event.state == WL_KEYBOARD_KEY_STATE_RELEASED && !hasBufferedSearchPress(
+                m_searchPendingKeys, [&](const auto& key) { return key.event.keycode == event.keycode; },
+                [](const auto& key) { return key.event.state == WL_KEYBOARD_KEY_STATE_PRESSED; });
             const auto route = routeSearchKey(
-                searchKeyAction(focused, event.state == WL_KEYBOARD_KEY_STATE_PRESSED && keysym == XKB_KEY_Escape),
+                searchKeyAction(focused, event.state == WL_KEYBOARD_KEY_STATE_PRESSED && keysym == XKB_KEY_Escape, unpairedRelease),
                 [this] {
                     stopSearchInput();
                     rebuildVisibleState({}, true);
