@@ -5,14 +5,25 @@
 
 namespace hymission {
 
-enum class SearchKeyAction { Forward, Buffer, Stop };
+enum class SearchKeyAction { Forward, Buffer, Stop, Pass };
 enum class SearchKeyRoute { Helper, Overview };
 
+template <typename Range, typename MatchesKey, typename IsPressed>
+inline bool hasBufferedSearchPress(const Range& keys, MatchesKey matchesKey, IsPressed isPressed) {
+    for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
+        if (matchesKey(*it))
+            return isPressed(*it);
+    }
+    return false;
+}
+
 // Escape must remain a way out while a spawned helper is not yet usable.
-inline SearchKeyAction searchKeyAction(bool focused, bool escapePressed) {
+inline SearchKeyAction searchKeyAction(bool focused, bool escapePressed, bool unpairedRelease) {
     if (focused)
         return SearchKeyAction::Forward;
-    return escapePressed ? SearchKeyAction::Stop : SearchKeyAction::Buffer;
+    if (escapePressed)
+        return SearchKeyAction::Stop;
+    return unpairedRelease ? SearchKeyAction::Pass : SearchKeyAction::Buffer;
 }
 
 // Stopping an unavailable helper must resume overview handling of this same
@@ -28,6 +39,8 @@ template <typename StopSearch, typename BufferKey>
             return SearchKeyRoute::Helper;
         case SearchKeyAction::Forward:
             return SearchKeyRoute::Helper;
+        case SearchKeyAction::Pass:
+            return SearchKeyRoute::Overview;
     }
     return SearchKeyRoute::Overview;
 }
