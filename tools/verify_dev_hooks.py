@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # Method types are checked using the actual aliases compiled into the plugin.
 OVERVIEW = {
+    'ScrollFocusFn': ('Layout::Tiled::CScrollingAlgorithm', 'focusOnInput'),
     'SurfaceGetTexBoxFn': ('CSurfacePassElement', 'getTexBox'),
     'SurfaceBoundingBoxFn': ('CSurfacePassElement', 'boundingBox'),
     'SurfaceOpaqueRegionFn': ('CSurfacePassElement', 'opaqueRegion'),
@@ -78,7 +79,7 @@ def main():
     overview = (ROOT / 'src/overview_controller.cpp').read_text()
     stage = (ROOT / 'src/stage_controller.cpp').read_text()
     action = (ROOT / 'src/action_hooks.hpp').read_text()
-    oa = aliases((ROOT / 'src/overview_controller.hpp').read_text())
+    oa = aliases((ROOT / 'src/overview_controller.hpp').read_text()) | aliases(overview)
     sa = aliases(stage)
     aa = aliases(action)
     generated = r'''
@@ -153,7 +154,7 @@ struct Member<R (*)(This, Args...), Class> {
     demangled = subprocess.check_output(['c++filt'], input='\n'.join(raw), text=True).splitlines()
     symbols = list(zip(raw, demangled))
     audit = []
-    pattern = r'(?:find|findFunction|hookFunction|attach)\("([^"\n]+)",\s*(?:"([^"\n]+)"|std::vector<std::string>\{([^}]+)\})'
+    pattern = r'(?:find|findFunction|hookFunction|attach)\(\s*"([^"\n]+)",\s*(?:"([^"\n]+)"|std::vector<std::string>\{([^}]+)\})'
     for filename, source_text in [('stage_controller.cpp', stage), ('overview_controller.cpp', overview), ('action_hooks.hpp', action)]:
         for match in re.finditer(pattern, source_text):
             needles = [match[2]] if match[2] else re.findall(r'"([^"]+)"', match[3])

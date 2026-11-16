@@ -2337,6 +2337,17 @@ void hkScrollMoveGestureEnd(void* gestureThisptr, const ITrackpadGesture::STrack
     g_controller->scrollMoveGestureEndHook(gestureThisptr, e);
 }
 
+using ScrollFocusFn = void (*)(Layout::Tiled::CScrollingAlgorithm*, SP<Layout::ITarget>, Layout::Tiled::CScrollingAlgorithm::eInputMode);
+ScrollFocusFn scrollFocusOriginal = nullptr;
+
+void hkScrollFocus(Layout::Tiled::CScrollingAlgorithm* algorithm, SP<Layout::ITarget> target, Layout::Tiled::CScrollingAlgorithm::eInputMode input) {
+    if (g_controller &&
+        g_controller->suppressScrollGestureHardFitForAlgorithm(algorithm, input == Layout::Tiled::CScrollingAlgorithm::INPUT_MODE_HARD))
+        return;
+    if (scrollFocusOriginal)
+        scrollFocusOriginal(algorithm, std::move(target), input);
+}
+
 } // namespace
 
 OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
@@ -5585,6 +5596,8 @@ GestureAxis OverviewController::gestureAxisForDirection(eTrackpadGestureDirectio
 PHLWORKSPACE OverviewController::scrollGestureWorkspace() const {
     // Keep the Stage target pinned for the entire gesture. If it disappears,
     // do not accidentally redirect the remaining deltas to the active desktop.
+    if (m_scrollGestureSession.active)
+        return m_scrollGestureSession.workspace.lock();
     return m_scrollGestureSession.stageTarget ? m_scrollGestureSession.stageWorkspace.lock() : activeLayoutWorkspace();
 }
 
@@ -6654,6 +6667,15 @@ void OverviewController::endTrackpadGesture(bool cancelled) {
     settleGestureAnimation(!gesture.opening || commit, gesture.openness);
 }
 
+bool OverviewController::suppressScrollGestureHardFitForAlgorithm(void* algorithm, bool hardInput) const {
+    // Recalculate(UNKNOWN) hard-fits the focused column even with follow_focus=0.
+    // Match the algorithm, not the focused target: a recalc can use a target from
+    // another workspace. Stage canvas gestures write this same native offset.
+    const auto workspace = m_scrollGestureSession.workspace.lock();
+    return !sessionLocked() && suppressScrollGestureHardFit(m_scrollGestureSession.active, m_scrollGestureSession.route == ScrollGestureRoute::Layout,
+                                                            workspace && scrollingAlgorithmForWorkspace(workspace) == algorithm, hardInput);
+}
+
 bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction, const IPointer::SSwipeUpdateEvent& event, float deltaScale) {
     if (sessionLocked())
         return false;
@@ -6734,9 +6756,12 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
         .direction = direction,
         .deltaScale = deltaScale,
         .skipNextUpdate = true,
-        .restoreScrollingFollowFocus = !stageWorkspace && !scrollingFollowFocusWasOverridden && m_scrollingFollowFocusOverridden,
+        .restoreScrollingFollowFocus =
+            scrollGestureOwnsFollowFocusRestore(stageWorkspace.has_value(), scrollingFollowFocusWasOverridden, m_scrollingFollowFocusOverridden,
+                                                m_restoreScrollingFollowFocusAfterScrollMouseMove),
         .stageTarget = stageWorkspace.has_value(),
         .stageWorkspace = stageWorkspace ? *stageWorkspace : PHLWORKSPACE{},
+        .workspace = workspace,
     };
 
     if (debugLogsEnabled()) {
@@ -6746,6 +6771,10 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
             << " suppressScrollingFollowFocus=" << (m_scrollGestureSession.restoreScrollingFollowFocus ? 1 : 0);
         debugLog(out.str());
     }
+
+    // Transfer the deferred restore to this session across libinput restarts.
+    if (m_scrollGestureSession.restoreScrollingFollowFocus)
+        m_restoreScrollingFollowFocusAfterScrollMouseMove = false;
 
     if (!scrollActiveLayoutByGestureDelta(event, direction, deltaScale)) {
         if (m_scrollGestureSession.restoreScrollingFollowFocus)
@@ -7743,6 +7772,10 @@ void OverviewController::releaseAllHooks() {
     m_scrollMoveGestureBeginOriginal=nullptr;
     m_scrollMoveGestureUpdateOriginal=nullptr;
     m_scrollMoveGestureEndOriginal=nullptr;
+    if (m_scrollFocusFunctionHook)
+        hooks::remove(m_handle, m_scrollFocusFunctionHook);
+    m_scrollFocusFunctionHook = nullptr;
+    scrollFocusOriginal = nullptr;
     decorationGradientOriginal=nullptr;
 }
 
@@ -7779,6 +7812,8 @@ bool OverviewController::installHooks() {
     static_assert(std::is_same_v<ScrollMoveGestureBeginFn, decltype(&hkScrollMoveGestureBegin)>);
     static_assert(std::is_same_v<ScrollMoveGestureUpdateFn, decltype(&hkScrollMoveGestureUpdate)>);
     static_assert(std::is_same_v<ScrollMoveGestureEndFn, decltype(&hkScrollMoveGestureEnd)>);
+    static_assert(std::is_same_v<ScrollFocusFn, decltype(&hkScrollFocus)>);
+    HYMISSION_NATIVE_HOOK_ABI(ScrollFocusFn, Layout::Tiled::CScrollingAlgorithm, Layout::Tiled::CScrollingAlgorithm, focusOnInput);
     static_assert(std::is_same_v<BorderDrawFn, decltype(&hkShadowDraw)>);
     static_assert(std::is_same_v<BorderDrawFn, decltype(&hkGroupBarDraw)>);
     static_assert(std::is_same_v<SurfaceBlurNeedsFn, decltype(&hkSurfaceNeedsPrecomputeBlur)>);
@@ -7911,6 +7946,14 @@ bool OverviewController::installHooks() {
     (void)hookFunction("begin", "CScrollMoveTrackpadGesture::begin(ITrackpadGesture::STrackpadGestureBegin const&)", m_scrollMoveGestureBeginFunctionHook, hooks::target(&hkScrollMoveGestureBegin));
     (void)hookFunction("update", "CScrollMoveTrackpadGesture::update(ITrackpadGesture::STrackpadGestureUpdate const&)", m_scrollMoveGestureUpdateFunctionHook, hooks::target(&hkScrollMoveGestureUpdate));
     (void)hookFunction("end", "CScrollMoveTrackpadGesture::end(ITrackpadGesture::STrackpadGestureEnd const&)", m_scrollMoveGestureEndFunctionHook, hooks::target(&hkScrollMoveGestureEnd));
+
+    (void)hookFunction(
+        "focusOnInput",
+        "Layout::Tiled::CScrollingAlgorithm::focusOnInput(Hyprutils::Memory::CSharedPointer<Layout::ITarget>, Layout::Tiled::CScrollingAlgorithm::eInputMode)",
+        m_scrollFocusFunctionHook, hooks::target(&hkScrollFocus));
+    activateOptionalHook(m_scrollFocusFunctionHook, scrollFocusOriginal, "layout scroll hard-fit guard");
+    if (!scrollFocusOriginal && Log::logger)
+        LOG(Log::WARN, "[hymission] layout scroll hard-fit guard disabled: focusOnInput hook unavailable");
 
     m_shouldRenderWindowOriginal = nullptr;
     m_effectiveAlphaOriginal = nullptr;
