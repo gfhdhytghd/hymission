@@ -49,6 +49,29 @@ bool expectReservation(const WorkspaceStripReservation& actual, const WorkspaceS
 int main() {
     using namespace hymission;
 
+    for (unsigned mask = 0; mask < 16; ++mask) {
+        if (!expect(suppressScrollGestureHardFit(mask & 1, mask & 2, mask & 4, mask & 8) == (mask == 15),
+                    "hard fit guard only suppresses active matching layout HARD input"))
+            return EXIT_FAILURE;
+    }
+    // First swipe takes ownership; each immediate restart inherits it until
+    // the final end schedules restoration on the next mouse move.
+    bool deferred = false;
+    bool overridden = false;
+    for (int restart = 0; restart < 3; ++restart) {
+        const bool previouslyOverridden = overridden;
+        overridden = true;
+        const bool owns = scrollGestureOwnsFollowFocusRestore(false, previouslyOverridden, overridden, deferred);
+        deferred = false;
+        if (!expect(owns, "restarted swipe retains deferred follow_focus restore ownership"))
+            return EXIT_FAILURE;
+        deferred = owns;
+    }
+    if (!expect(deferred && !scrollGestureOwnsFollowFocusRestore(false, true, true, false) &&
+                    !scrollGestureOwnsFollowFocusRestore(true, true, true, true) && !scrollGestureOwnsFollowFocusRestore(false, false, false, false),
+                "restore excludes overview-owned overrides, Stage and failed overrides"))
+        return EXIT_FAILURE;
+
     // Quickshell reserves 58px but keeps an 820px layer for popups. The
     // visible bar center must stay fixed under scaling, leaving the full
     // +/-128px strip translation intact instead of cancelling it on a 6K screen.

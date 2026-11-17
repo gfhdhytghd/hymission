@@ -11,6 +11,15 @@
 
 namespace hymission {
 
+// Pure policy shared by the native hook and offline regression tests.
+constexpr bool suppressScrollGestureHardFit(bool active, bool layoutRoute, bool sameAlgorithm, bool hardInput) {
+    return active && layoutRoute && sameAlgorithm && hardInput;
+}
+
+constexpr bool scrollGestureOwnsFollowFocusRestore(bool stageTarget, bool previouslyOverridden, bool overridden, bool deferredRestore) {
+    return !stageTarget && overridden && (!previouslyOverridden || deferredRestore);
+}
+
 [[nodiscard]] float animationMovePercent(std::string style);
 
 // The teardown handoff must not inherit native workspace-animation visibility.
