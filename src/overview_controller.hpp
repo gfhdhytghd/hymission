@@ -115,6 +115,7 @@ class OverviewController {
                                                      const IPointer::SSwipeUpdateEvent& event, float deltaScale);
     void                          updateScrollGesture(const IPointer::SSwipeUpdateEvent& event);
     void                          endScrollGesture(bool cancelled);
+    [[nodiscard]] bool suppressScrollGestureHardFitForAlgorithm(void* algorithm, bool hardInput) const;
     void                          refreshAfterOfficialScrollMove(const char* source);
 
     void renderStage(eRenderStage stage);
@@ -434,6 +435,7 @@ class OverviewController {
         bool                      restoreScrollingFollowFocus = false;
         bool                      stageTarget = false;
         PHLWORKSPACEREF            stageWorkspace;
+        PHLWORKSPACEREF workspace;
     };
 
     struct WorkspaceNameBackup {
@@ -961,6 +963,7 @@ class OverviewController {
     hooks::Lease*            m_unifiedWorkspaceSwipeEndFunctionHook = nullptr;
     hooks::Lease*            m_scrollMoveGestureBeginFunctionHook = nullptr;
     hooks::Lease*            m_scrollMoveGestureUpdateFunctionHook = nullptr;
+    hooks::Lease* m_scrollFocusFunctionHook = nullptr;
     hooks::Lease*            m_scrollMoveGestureEndFunctionHook = nullptr;
     SurfaceGetTexBoxFn        m_surfaceTexBoxOriginal = nullptr;
     SurfaceBoundingBoxFn      m_surfaceBoundingBoxOriginal = nullptr;
