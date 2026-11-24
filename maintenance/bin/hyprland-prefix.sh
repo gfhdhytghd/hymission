@@ -16,13 +16,31 @@ resolve() { # resolve SLUG REF -> commit sha (tags are peeled)
   if [ -z "$out" ] && [[ $2 =~ ^[0-9a-f]{7,40}$ ]]; then out=$2; fi
   [ -n "$out" ] || { echo "cannot resolve $1 $2" >&2; exit 1; }; echo "$out"; }
 sha=$(resolve "$slug" "$ref")
-key=$sha; [ -n "$aq_ref" ] && key="$sha-aq$(resolve "$aq_slug" "$aq_ref" | cut -c1-12)"
+key=$sha
+if [ -n "$aq_ref" ]; then
+  aq_sha=$(resolve "$aq_slug" "$aq_ref")
+  key="$sha-aq${aq_sha:0:12}"
+fi
+mkdir -p "$STATE"
 dir=$STATE/$key
+# Keep the lock file across runs. Unlinking it would let callers lock different inodes for the same prefix.
+exec {prefix_lock}>"$dir.lock"
+flock "$prefix_lock"
 if [ -f "$dir/.ok" ]; then echo "$dir"; exit 0; fi
-mkdir -p "$STATE"; work=$(mktemp -d "$STATE/build.XXXXXX"); log=$work/build.log
+work=$(mktemp -d "$STATE/build.XXXXXX"); log=$work/build.log
 # On failure keep the log next to the cache so the caller can quote it; the partial build itself is discarded.
-trap 'code=$?; if [ $code -ne 0 ]; then cp "$log" "$STATE/failed-$key.log" 2>/dev/null; echo "hyprland-prefix.sh failed (exit $code); log: $STATE/failed-$key.log" >&3; rm -rf "$dir"; fi; rm -rf "$work"' EXIT
-exec 3>&1; exec >"$log" 2>&1
+cleanup() {
+  local code=$?
+  if [ "$code" -ne 0 ]; then
+    cp "$log" "$STATE/failed-$key.log" 2>/dev/null || true
+    echo "hyprland-prefix.sh failed (exit $code); log: $STATE/failed-$key.log" >&3
+    rm -rf "$dir"
+  fi
+  rm -rf "$work"
+}
+exec 3>&1
+trap cleanup EXIT
+exec >"$log" 2>&1
 rm -rf "$dir"; prefix=$dir; mkdir -p "$prefix"
 export PKG_CONFIG_PATH=$prefix/lib/pkgconfig:$prefix/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}
 export LD_LIBRARY_PATH=$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
@@ -52,7 +70,7 @@ for pair in hyprutils:HYPRUTILS hyprlang:HYPRLANG hyprcursor:HYPRCURSOR hyprgrap
 min=$({ grep -oE "hyprland-protocols>=[0-9.]+" "$cm" || true; } | head -1 | cut -d= -f2); have=$(pkg-config --modversion hyprland-protocols 2>/dev/null || echo 0)
 if [ -n "$min" ] && ! vergte "$have" "$min"; then build_dep hyprland-protocols hyprwm/hyprland-protocols "$(flake_rev hyprland-protocols "v$min")"; fi
 min=$(need AQUAMARINE); have=$(pkg-config --modversion aquamarine 2>/dev/null || echo 0)
-if [ -n "$aq_ref" ]; then build_dep aquamarine "$aq_slug" "$aq_ref"
+if [ -n "$aq_ref" ]; then build_dep aquamarine "$aq_slug" "$aq_sha"
 elif [ -n "$min" ] && ! vergte "$have" "$min"; then build_dep aquamarine hyprwm/aquamarine "$(flake_rev aquamarine "v$min")"; fi
 
 echo "== building Hyprland"

@@ -30,7 +30,8 @@ planning, integration, verification and decisions yourself. Never let helpers ov
 - `hyprland-prefix.sh SLUG REF [--aquamarine SLUG REF]` prints a cached prefix with the exact Hyprland build
   (bin/Hyprland, headers, hyprland.pc). The task lists the arguments for each branch. First builds take minutes.
 - `plugin-build.sh [--trusted] REPO_DIR PREFIX [LABEL]` configures, builds and runs ctest for a checkout against
-  that prefix; exit 0 means all three passed; the log path is printed. Use it for every build. Use `--trusted`
+  that prefix; exit 0 means configure, build and ctest passed; skipped tests are listed in the output. The build and log paths
+  are printed. Use it for every build. Use `--trusted`
   (no sandbox, scrubbed environment) for the user's own commits, branch syncs and merges whose only new
   commits are the user's; use the default sandbox for contributor PR heads and anything else not authored by
   the user. The sandbox maps root-owned files to nobody, so tests needing trusted system executables fail there.
@@ -38,6 +39,8 @@ planning, integration, verification and decisions yourself. Never let helpers ov
   PR's merge base); a test that fails there too is pre-existing or environmental, is excluded from the gate and
   is listed by name in the report. For a contributor PR, if the sandbox-only failures also fail on the base in
   the sandbox and pass on the base in --trusted mode, they are sandbox limitations, not findings.
+  Treat a skipped test the same way: list the test as skipped, and accept a skip only if that test also skips
+  on the base in the same mode. A plugin without a test suite passes on configure and build alone.
 - `plugin-smoke.sh PREFIX/bin/Hyprland PLUGIN.so [DISPATCHER]...` starts a private headless compositor of that
   exact build in the sandbox, loads the plugin, runs the listed dispatchers (hyprlang form "plugin:name args";
   Lua providers are handled), unloads it and reports SMOKE PASS/FAIL with the logs directory.

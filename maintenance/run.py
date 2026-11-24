@@ -12,8 +12,12 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
+import re
+import shutil
+import signal
+import time
 import subprocess
+from pathlib import Path
 
 ROOT = Path('/home/wilf/.local/share/hyprland-plugins-maintenance')
 STATE = Path('/home/wilf/.local/state/hyprland-plugins-maintenance')
@@ -23,6 +27,10 @@ LOGFILE = STATE / 'maintenance.log'
 MODE = '-'
 FEISHU_USER = 'ou_3db23cf05c03b4942c355797cc88e8f9'
 REPORT = {'done': [], 'attention': []}
+GITHUB_FAILURES = set()
+GITHUB_OK = False
+RETRY_DELAYS = (3600, 14400)
+COMMENT_LISTS = ('comments', 'reviews_pr', 'comments_pr')
 REPORT_NAME = '插件运维'
 RUN_STAMP = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
 # Appended to every agent task: the receipt feeds the Feishu report, so it must be written for the user.
@@ -38,7 +46,15 @@ SCRUB = ('WAYLAND_DISPLAY', 'DISPLAY', 'HYPRLAND_INSTANCE_SIGNATURE', 'SWAYSOCK'
 
 
 class Transient(Exception):
-    """Temporary service failure; leave work unhandled for the next timer."""
+    """Temporary service failure."""
+
+
+class PreparationFailure(Transient):
+    """The agent could not start because a required service was unavailable."""
+
+
+class ItemFailures(Exception):
+    """One or more item failures have already been logged and reported when new."""
 
 
 def log(message):
@@ -57,11 +73,12 @@ def log(message):
 
 def feishu(text, urgent=False):
     """Direct message to the user through lark-cli's bot identity. Best effort: never raises."""
+    delivered = False
     try:
         text = text[:2999] + '…' if len(text) > 3000 else text
         if os.environ.get('HYPR_MAINT_FEISHU') == '0':
             log(f'feishu: 仅记录（加急={urgent}）\n{text}')
-            return
+            return True
         key = f'{RUN_STAMP}-{MODE[:16]}-{"urgent" if urgent else "done"}'
         result = subprocess.run(['lark-cli', 'im', '+messages-send', '--as', 'bot', '--user-id', FEISHU_USER,
                                  '--text', text, '--idempotency-key', key],
@@ -74,6 +91,7 @@ def feishu(text, urgent=False):
         message_id = payload['data']['message_id']
         if not message_id:
             raise RuntimeError('发送结果缺少 message_id')
+        delivered = True
         if urgent:
             result = subprocess.run(['lark-cli', 'im', 'messages', 'urgent_app', '--as', 'bot',
                                      '--message-id', message_id, '--user-id-type', 'open_id',
@@ -81,8 +99,10 @@ def feishu(text, urgent=False):
                                     capture_output=True, text=True, timeout=60, cwd=STATE)
             if result.returncode != 0 or json.loads(result.stdout).get('ok') is not True:
                 raise RuntimeError(f'加急失败：{result.returncode} {result.stderr} {result.stdout}')
+        return True
     except Exception as error:
         log(f'feishu: {type(error).__name__}: {error}')
+        return delivered
 
 
 def report():
@@ -91,57 +111,118 @@ def report():
         stamp = datetime.datetime.now().astimezone().strftime('%m-%d %H:%M %Z')
         feishu(f'{heading} {stamp}\n已完成 {len(REPORT["done"])} 项：\n\n' + '\n\n'.join(REPORT['done']))
     if REPORT['attention']:
-        feishu(f'{heading} 需要你处理 {len(REPORT["attention"])} 项：\n\n' + '\n\n'.join(REPORT['attention']), urgent=True)
+        return feishu(f'{heading} 需要你处理 {len(REPORT["attention"])} 项：\n\n' + '\n\n'.join(REPORT['attention']), urgent=True)
+    return True
+
+
+def brief(text):
+    text = str(text)
+    return text[:299] + '…' if len(text) > 300 else text
 
 
 def report_attention(key, error, target=None):
-    text = f'{key}：{error}'
-    REPORT['attention'].append(text + (f'\n记录：{target}' if target else ''))
+    REPORT['attention'].append(brief(f'{key}：{error}') + (f'\n记录：{target}' if target else ''))
 
 
 def report_done(key, title, receipt, target):
     if receipt.get('idle'):
         log(f'idle: {key}')
         return
-    text = f'{key} {title}\n{receipt.get("summary", "")}'
+    text = f'{key} {title}\n{brief(receipt.get("summary", ""))}'
     for push in receipt.get('pushed', []):
         text += f'\n推送：{push["branch"]}@{push["sha"][:9]}'
     REPORT['done'].append(text + f'\n记录：{target}')
 
 
 def agent(key, title, target, checkout, task):
-    try:
-        receipt = claude(target, checkout, task)
-        if receipt.get('attention'):
-            report_attention(f'{key} {title}', receipt['attention'], target)
-        if receipt.get('status') == 'deferred':
-            report_attention(f'{key} {title}', receipt.get('reason', '等待用户本人处理'), target)
-        elif receipt.get('status') != 'completed':
-            raise RuntimeError(receipt.get('reason') or '任务未完成，保留记录以便重试')
-        return receipt
-    except Transient:
-        raise
-    except Exception as error:
-        report_attention(key, f'代理运行失败（{type(error).__name__}）：{error}', target)
-        raise
+    receipt = claude(target, checkout, task)
+    status = receipt.get('status')
+    if status == 'blocked':
+        raise Transient(receipt.get('reason') or '代理暂时无法完成任务')
+    if status not in ('completed', 'deferred'):
+        raise RuntimeError(receipt.get('reason') or '任务未完成，收据状态无效')
+    if receipt.get('attention'):
+        report_attention(f'{key} {title}', receipt['attention'], target)
+    if status == 'deferred':
+        reason = receipt.get('reason', '等待用户本人处理')
+        report_attention(f'{key} {title}', reason, target)
+        notify('Plugin item needs you', reason, 'critical')
+    return receipt
+
+
+def read_state(path):
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def write_state(path, value):
+    temp = path.with_suffix('.tmp')
+    temp.write_text(json.dumps(value, indent=2))
+    temp.replace(path)
+
+
+def ready(record):
+    return record.get('attempts', 0) <= len(RETRY_DELAYS) and time.time() >= record.get('retry_at', 0)
+
+
+def record_failure(record, fingerprint, key, error, target=None, *, retry=True):
+    attempts = record.get('attempts', 0) + 1
+    transient = isinstance(error, Transient)
+    alerted = record.get('alerted', False)
+    log(f'{key}: {"transient" if transient else "failed"} (attempt {attempts}): {error}')
+    if not transient and not alerted:
+        reason = '本轮未完成' if retry else '本轮未完成，等待默认分支更新'
+        report_attention(key, f'{reason}（{type(error).__name__}）。请查看运维日志。', target)
+        alerted = True
+    if not retry:
+        attempts = len(RETRY_DELAYS) + 1
+    delay = RETRY_DELAYS[attempts - 1] if attempts <= len(RETRY_DELAYS) else 0
+    return {'fingerprint': fingerprint, 'attempts': attempts, 'retry_at': time.time() + delay,
+            'alerted': alerted, 'last_error': brief(error)}
 
 
 def run(*args, cwd=None):
     return subprocess.check_output(args, cwd=cwd, text=True, stderr=None).strip()
 
 
+def github_failure(message):
+    if re.search(r'http 401\b|bad credentials|authentication required|gh auth login|gh_token environment variable',
+                 message, re.IGNORECASE):
+        return 'auth'
+    if re.search(r'http 429\b|rate limit|abuse detection', message, re.IGNORECASE):
+        return 'limit'
+    return None
+
+
 def api(endpoint, *options):
-    command = ('gh', 'api', *options, endpoint)
-    try:
-        output = run(*command)
-    except subprocess.CalledProcessError as error:
-        raise Transient(f'{" ".join(command)}: {error}') from error
-    return json.loads(output) if output else None
+    global GITHUB_OK
+    result = subprocess.run(('gh', 'api', *options, endpoint), capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        failure = github_failure(result.stderr)
+        if failure:
+            GITHUB_FAILURES.add(failure)
+        detail = failure or f'exit {result.returncode}'
+        raise PreparationFailure(f'gh api {endpoint}: {detail}')
+    GITHUB_OK = True
+    return json.loads(result.stdout) if result.stdout.strip() else None
+
+
+def github_health_update():
+    if not GITHUB_FAILURES and not GITHUB_OK:
+        return
+    path = STATE / 'github-health.json'
+    previous = set(read_state(path).get('failures', []))
+    messages = {'auth': 'GitHub 认证失败。请检查运维使用的 gh 登录。',
+                'limit': 'GitHub API 触发限流，运维会在后续周期重试。'}
+    for failure in sorted(GITHUB_FAILURES - previous):
+        report_attention('插件运维', messages[failure])
+    if GITHUB_FAILURES != previous:
+        return path, {'failures': sorted(GITHUB_FAILURES)}
+    return None
 
 
 def paginate(endpoint):
     pages = api(endpoint, '--paginate', '--slurp')
-    return [item for page in pages for item in page]
+    return [item for page in (pages or []) for item in page]
 
 
 def pick(value, *fields):
@@ -177,19 +258,56 @@ def snapshot(repo, item):
 
 
 def notify(summary, body='', urgency='normal'):
-    subprocess.run(['notify-send', '--app-name=Hyprland plugins', f'--urgency={urgency}', summary, body[:500]],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    try:
+        subprocess.run(['notify-send', '--app-name=Hyprland plugins', f'--urgency={urgency}', '--', summary, body[:500]],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    except OSError as error:
+        log(f'Desktop notification unavailable: {error}')
 
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def automation_comment(comment):
+    body = comment.get('body') or ''
+    return comment['user']['login'] == OWNER and body.startswith(('AMS Auto Reply\n\n', 'AMS Auto Reply\r\n\r\n'))
+
+
+def retry_fingerprint(data):
+    return digest({key: [entry for entry in value if not automation_comment(entry)] if key in COMMENT_LISTS else value
+                   for key, value in data.items()})
+
+
+def handled_snapshot(before, after):
+    """Keep the agent's starting snapshot, plus new replies authored by the automation."""
+    acknowledged = dict(before)
+    for field in COMMENT_LISTS:
+        if field not in before:
+            continue
+        entries = before[field]
+        known = {entry['id'] for entry in entries}
+        acknowledged[field] = entries + [entry for entry in after.get(field, [])
+                                         if entry['id'] not in known and automation_comment(entry)]
+    return acknowledged
+
+
 def latest_release():
     return api('repos/hyprwm/Hyprland/releases/latest')['tag_name']
 
 
-def branch_targets(repo, checkout):
+def flake_pin(content):
+    try:
+        node = json.loads(content)['nodes']['hyprland']
+        pin = node.get('original', {}).get('ref') or node.get('locked', {}).get('rev')
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        return None
+    if isinstance(pin, str) and re.fullmatch(r'[A-Za-z0-9._/][A-Za-z0-9._/-]*', pin):
+        return pin
+    return None
+
+
+def branch_targets(checkout):
     """Hyprland revision each branch of this repository must build against, as hyprland-prefix.sh arguments."""
     rows = []
     release = None
@@ -202,13 +320,13 @@ def branch_targets(repo, checkout):
             rows.append(f'{branch}: no configured target; treat as a topic branch of the branch it forked from')
             continue
         hypr_slug, hypr_ref = target['hyprland']
-        lock = subprocess.run(['git', 'show', f'origin/{branch}:flake.lock'], cwd=checkout, capture_output=True, text=True)
-        pinned = None
-        if lock.returncode == 0:
-            node = json.loads(lock.stdout)['nodes'].get('hyprland', {})
-            pinned = (node.get('original', {}).get('ref') or node.get('locked', {}).get('rev'))
+        lock = subprocess.run(['git', 'show', f'origin/{branch}:flake.lock'], cwd=checkout, capture_output=True, text=True, errors='replace')
+        pinned = flake_pin(lock.stdout) if lock.returncode == 0 else None
+        if hypr_ref == 'flake-lock' and not pinned:
+            rows.append(f'{branch}: no usable Hyprland pin in flake.lock; verify the target from its README or history')
+            continue
         if hypr_ref == 'flake-lock':
-            hypr_ref = pinned or 'v?.?.? (no flake.lock on this branch: read its README)'
+            hypr_ref = pinned
         elif hypr_ref == 'latest-release':
             release = release or latest_release()
             hypr_ref = pinned or release
@@ -226,7 +344,15 @@ def workspace(label, repo):
     target.mkdir(parents=True)
     checkout = target / 'repo'
     local = Path(CONFIG['repos'][repo]['local'])
-    run('git', 'clone', '--quiet', '--reference-if-able', str(local), '--dissociate', f'https://github.com/{slug(repo)}.git', str(checkout))
+    try:
+        run('git', 'clone', '--quiet', '--reference-if-able', str(local), '--dissociate', f'https://github.com/{slug(repo)}.git', str(checkout))
+    except subprocess.CalledProcessError as error:
+        shutil.rmtree(target, ignore_errors=True)
+        raise PreparationFailure(f'{repo}: git clone failed (exit {error.returncode})') from error
+    info = checkout / '.git/info'
+    info.mkdir(exist_ok=True)
+    with (info / 'exclude').open('a') as exclude:
+        exclude.write('\n# Generated by plugin-build.sh\n/build-*/\n/build-*.log\n')
     run('git', 'config', 'user.name', OWNER, cwd=checkout)
     run('git', 'config', 'user.email', '3391146750@qq.com', cwd=checkout)
     return target, checkout
@@ -240,11 +366,20 @@ def claude(target, checkout, task):
     env['HYPR_MAINT_BIN'] = str(ROOT / 'bin')
     env['HYPR_MAINT_RUN'] = str(target)
     with (target / 'claude.json').open('w') as output:
-        process = subprocess.run(['claude', '-p', '--model', 'opus', '--output-format', 'json',
-                        '--permission-mode', 'acceptEdits', '--permission-prompts', 'none',
-                        '--allowedTools', 'Bash,Read,Write,Edit,Glob,Grep,Agent', '--', prompt],
-                       cwd=checkout, env=env, stdout=output, stderr=subprocess.PIPE, text=True, check=False, timeout=18000)
-    failure = f'Claude exit={process.returncode}; stderr tail: {(process.stderr or "")[-1000:]}; 记录：{target}'
+        with subprocess.Popen(['claude', '-p', '--model', 'opus', '--output-format', 'json',
+                               '--permission-mode', 'acceptEdits', '--permission-prompts', 'none',
+                               '--allowedTools', 'Bash,Read,Write,Edit,Glob,Grep,Agent', '--', prompt],
+                              cwd=checkout, env=env, stdout=output, stderr=subprocess.PIPE, text=True,
+                              start_new_session=True) as process:
+            try:
+                _, stderr = process.communicate(timeout=18000)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                raise
+    failure = f'Claude exit={process.returncode}; stderr tail: {(stderr or "")[-1000:]}; 记录：{target}'
     try:
         result = json.loads((target / 'claude.json').read_text())
         if not isinstance(result, dict):
@@ -268,15 +403,18 @@ def claude(target, checkout, task):
     log(result.get('result', ''))
     receipt = json.loads((target / 'receipt.json').read_text())
     log(f'receipt {target.name}: {receipt}')
-    if receipt.get('status') == 'deferred':
-        # Handled until new activity, but the user has to act (for example a reporter asked for the maintainer personally).
-        notify('Plugin item needs you', receipt.get('reason', ''), 'critical')
-        return receipt
     return receipt
 
 
 def update_local(repo, branch, published):
     """Fast-forward the user's local branch (wherever it is checked out) to what the agent pushed; never discard work."""
+    if not isinstance(branch, str) or not branch or branch.startswith('-'):
+        raise ValueError('invalid receipt branch')
+    ref = f'refs/heads/{branch}'
+    if subprocess.run(['git', 'check-ref-format', ref], capture_output=True).returncode != 0:
+        raise ValueError('invalid receipt branch')
+    if not isinstance(published, str) or not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', published):
+        raise ValueError('invalid receipt commit SHA')
     local = Path(CONFIG['repos'][repo]['local'])
     if not (local / '.git').exists():
         return f'{repo}/{branch}: no local checkout'
@@ -284,10 +422,14 @@ def update_local(repo, branch, published):
                    if run('git', 'remote', 'get-url', name, cwd=local).rstrip('/').removesuffix('.git').lower().endswith(slug(repo).lower())), None)
     if not remote:
         return f'{repo}/{branch}: no remote for {slug(repo)}'
-    run('git', 'fetch', '--quiet', remote, branch, cwd=local)
-    if subprocess.run(['git', 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}'], cwd=local, capture_output=True).returncode != 0:
+    run('git', 'fetch', '--quiet', '--', remote, ref, cwd=local)
+    # A later remote push may advance the tip. The receipt must still name a commit on that branch.
+    fetched = run('git', 'rev-parse', '--verify', 'FETCH_HEAD^{commit}', cwd=local)
+    if subprocess.run(['git', 'merge-base', '--is-ancestor', published, fetched], cwd=local).returncode != 0:
+        raise ValueError(f'{repo}/{branch}: receipt commit is not on the fetched branch')
+    if subprocess.run(['git', 'rev-parse', '--verify', '--quiet', ref], cwd=local, capture_output=True).returncode != 0:
         return f'{repo}/{branch}: no local branch'
-    current = run('git', 'rev-parse', f'refs/heads/{branch}', cwd=local)
+    current = run('git', 'rev-parse', ref, cwd=local)
     if current == published:
         return f'{repo}/{branch}: local already at {published[:9]}'
     if subprocess.run(['git', 'merge-base', '--is-ancestor', current, published], cwd=local).returncode != 0:
@@ -301,7 +443,7 @@ def update_local(repo, branch, published):
             if candidate.is_dir():  # a deleted worktree still lists the branch until it is pruned
                 worktree = candidate
     if worktree is None:
-        run('git', 'update-ref', f'refs/heads/{branch}', published, current, cwd=local)
+        run('git', 'update-ref', ref, published, current, cwd=local)
         return f'{repo}/{branch}: fast-forwarded {current[:9]}..{published[:9]}'
     if run('git', 'status', '--porcelain', '--untracked-files=no', cwd=worktree):
         return f'{repo}/{branch}: checked out in {worktree} with uncommitted changes; left untouched'
@@ -309,9 +451,26 @@ def update_local(repo, branch, published):
     return f'{repo}/{branch}: fast-forwarded {current[:9]}..{published[:9]} in {worktree}'
 
 
-def handle(repo, item, data):
+def finish_receipt(repo, key, title, receipt, target):
+    pushes = receipt.get('pushed', [])
+    if not isinstance(pushes, list):
+        log(f'{key}: invalid pushed list')
+        pushes = []
+    reported = []
+    for push in pushes:
+        try:
+            if not isinstance(push['branch'], str) or not isinstance(push['sha'], str):
+                raise ValueError('invalid receipt push')
+            reported.append(push)
+            log(update_local(repo, push['branch'], push['sha']))
+        except (subprocess.CalledProcessError, OSError, KeyError, TypeError, ValueError) as error:
+            log(f'{key}: local update failed: {error}')
+    if receipt['status'] == 'completed':
+        report_done(key, title, dict(receipt, pushed=reported), target)
+
+
+def handle(repo, item, data, target, checkout):
     key = f'{repo}#{item["number"]}'
-    target, checkout = workspace(f'{repo}-{item["number"]}', repo)
     (target / 'github-context.json').write_text(json.dumps(data, indent=2))
     meta = CONFIG['repos'][repo]
     kind = 'pull request' if 'pull_request' in item else 'issue'
@@ -322,56 +481,88 @@ and the initial GitHub snapshot is in {target}/github-context.json. Re-read the 
 Repository notes: {meta.get('notes', 'none')}. Compositor plugin: {'yes' if meta.get('plugin') else 'no'}.
 Smoke dispatchers for plugin-smoke.sh: {smoke or '(none: load/unload only)'}.
 Hyprland target per branch (arguments for hyprland-prefix.sh, which prints the prefix directory):
-{branch_targets(repo, checkout)}
+{branch_targets(checkout)}
 Write {target}/receipt.json when done: {{"status":"completed","pushed":[{{"branch":"...","sha":"..."}}],"summary":"..."}}
 listing every branch you pushed with its new head; {{"status":"deferred","reason":"..."}} when the item must wait for the
 user personally (nothing posted); or {{"status":"blocked","reason":"..."}} after a transient failure (retried later).
 {RECEIPT_RULES}''')
-    if receipt.get('status') == 'completed':
-        report_done(key, item['title'], receipt, target)
-    for push in receipt.get('pushed', []):
-        try:
-            log(update_local(repo, push['branch'], push['sha']))
-        except (subprocess.CalledProcessError, KeyError) as error:
-            log(f'{key}: local update failed: {error}')
-    return key
+    finish_receipt(repo, key, item['title'], receipt, target)
 
 
 def triage(check, only=None):
     statefile = STATE / 'handled.json'
-    handled = json.loads(statefile.read_text()) if statefile.exists() else {}
-    errors, seen = [], 0
+    retryfile = STATE / 'triage-retries.json'
+    handled, failures = read_state(statefile), read_state(retryfile)
+    acknowledged, errors = set(), []
+    seen = 0
     for repo, meta in CONFIG['repos'].items():
         if only and repo not in only:
             continue
-        for item in paginate(f'repos/{slug(repo)}/issues?state=open&per_page=100'):
+        try:
+            items = paginate(f'repos/{slug(repo)}/issues?state=open&per_page=100')
+        except Transient as error:
+            log(f'{repo}: transient: {error}')
+            continue
+        for item in items:
             seen += 1
-            key = f'{repo}#{item["number"]}'
-            if item['number'] in meta.get('ignore', []):
+            number = item['number']
+            key = f'{repo}#{number}'
+            if number in meta.get('ignore', []):
                 log(f'{key}: ignored')
                 continue
             try:
                 data = snapshot(repo, item)
-                if handled.get(key) == digest(data):
-                    continue
-                log(f'Needs handling: {key} {item["title"]}')
-                if check:
-                    continue
-                handle(repo, item, data)
-                handled[key] = digest(snapshot(repo, item))
-                notify(f'{key} handled', item['title'])
-                temp = statefile.with_suffix('.tmp')
-                temp.write_text(json.dumps(handled, indent=2))
-                temp.replace(statefile)
             except Transient as error:
                 log(f'{key}: transient: {error}')
+                continue
+            before = digest(data)
+            if handled.get(key) == before:
+                acknowledged.add((repo, number))
+                continue
+            fingerprint = retry_fingerprint(data)
+            retry = failures.get(key, {})
+            if retry.get('fingerprint') != fingerprint:
+                retry = {}
+            if not ready(retry):
+                log(f'{key}: retry deferred (attempts={retry["attempts"]})')
+                continue
+            log(f'Needs handling: {key} {item["title"]}')
+            if check:
+                continue
+            target = None
+            try:
+                target, checkout = workspace(f'{repo}-{number}', repo)
+                handle(repo, item, data, target, checkout)
+            except PreparationFailure as error:
+                log(f'{key}: preparation unavailable: {error}')
+                continue
             except Exception as error:
-                errors.append(f'{key}: {error}')
-                log(errors[-1])
+                failures[key] = record_failure(retry, fingerprint, key, error, target)
+                write_state(retryfile, failures)
+                if not isinstance(error, Transient):
+                    errors.append(key)
+                continue
+
+            # Persist the successful run even if the follow-up request or desktop notification fails.
+            handled[key] = before
+            write_state(statefile, handled)
+            if key in failures:
+                del failures[key]
+                write_state(retryfile, failures)
+            try:
+                after = snapshot(repo, item)
+            except Transient as error:
+                log(f'{key}: post-run snapshot unavailable: {error}')
+            else:
+                handled[key] = digest(handled_snapshot(data, after))
+                write_state(statefile, handled)
+                if handled[key] == digest(after):
+                    acknowledged.add((repo, number))
+            notify(f'{key} handled', item['title'])
     log(f'Checked {seen} open issues/PRs across {len(only or CONFIG["repos"])} repositories.')
     if errors:
-        notify('Plugin triage needs attention', '; '.join(errors), 'critical')
-        raise RuntimeError('; '.join(errors))
+        raise ItemFailures(f'Triage failed: {", ".join(errors)}')
+    return acknowledged
 
 
 def default_branch(repo, checkout):
@@ -380,72 +571,105 @@ def default_branch(repo, checkout):
 
 def sync(check, only=None):
     """Merge each repository's default branch into its long-lived sibling branches (repos.json sync_into)."""
+    statefile = STATE / 'sync-attempts.json'
+    attempts = read_state(statefile)
     errors = []
     for repo, meta in CONFIG['repos'].items():
         if (only and repo not in only) or not meta.get('sync_into'):
             continue
-        target, checkout = workspace(f'{repo}-sync', repo)
-        base = default_branch(repo, checkout)
-        behind = [branch for branch in meta['sync_into']
-                  if subprocess.run(['git', 'rev-parse', '--verify', '--quiet', f'origin/{branch}'], cwd=checkout, capture_output=True).returncode == 0
-                  and subprocess.run(['git', 'merge-base', '--is-ancestor', f'origin/{base}', f'origin/{branch}'], cwd=checkout).returncode != 0]
-        if not behind:
-            log(f'{repo}: {base} already merged into {", ".join(meta["sync_into"])}')
-            subprocess.run(['rm', '-rf', str(target)])
-            continue
-        log(f'{repo}: {base} not yet merged into {", ".join(behind)}')
-        if check:
-            continue
-        smoke = ' '.join(f'"{d}"' for d in meta.get('smoke', []))
+        target = None
+        pending = {}
         try:
-            receipt = agent(repo, '分支同步', target, checkout, f'''Branch sync for {slug(repo)}: merge origin/{base} into {", ".join(behind)}.
+            target, checkout = workspace(f'{repo}-sync', repo)
+            base = default_branch(repo, checkout)
+            base_sha = run('git', 'rev-parse', f'origin/{base}', cwd=checkout)
+            for branch in meta['sync_into']:
+                ref = f'origin/{branch}'
+                if subprocess.run(['git', 'rev-parse', '--verify', '--quiet', ref], cwd=checkout,
+                                  capture_output=True).returncode != 0:
+                    continue
+                if subprocess.run(['git', 'merge-base', '--is-ancestor', base_sha, ref], cwd=checkout).returncode == 0:
+                    continue
+                retry = attempts.get(f'{repo}/{branch}', {})
+                if retry.get('fingerprint') != base_sha:
+                    retry = {}
+                if ready(retry):
+                    pending[branch] = retry
+                else:
+                    log(f'{repo}/{branch}: sync deferred at {base_sha[:9]} (attempts={retry["attempts"]})')
+            if pending:
+                log(f'{repo}: {base} not yet merged into {", ".join(pending)}')
+            if not pending or check:
+                shutil.rmtree(target)
+                continue
+            smoke = ' '.join(f'"{d}"' for d in meta.get('smoke', []))
+            receipt = agent(repo, '分支同步', target, checkout, f'''Branch sync for {slug(repo)}: merge origin/{base} into {", ".join(pending)}.
 This checkout is a fresh clone with all remote branches; the run directory is {target}.
 Repository notes: {meta.get('notes', 'none')}. Compositor plugin: {'yes' if meta.get('plugin') else 'no'}.
 Smoke dispatchers for plugin-smoke.sh: {smoke or '(none: load/unload only)'}.
 Hyprland target per branch (arguments for hyprland-prefix.sh, which prints the prefix directory):
-{branch_targets(repo, checkout)}
+{branch_targets(checkout)}
 For each branch: merge {base} with a merge commit (no rebase, no squash), resolving conflicts so the branch keeps
 its own Hyprland-version adaptations and Omarchy specifics while taking every {base} change. Then run the tier-2
 gates for that branch (plugin-build.sh --trusted against the branch target, clang-format on files you had to edit
 by hand, plugin-smoke.sh for compositor plugins, a read-only Codex review when you resolved conflicts by hand).
-A test that also fails on the unmerged branch in the same mode is pre-existing: name it, do not count it. Push the
+A failure or skip with the same outcome for the same test on the unmerged branch in the same mode is
+pre-existing: name it. A missing suite does not pass the gate. Push the
 branch only when its gates pass; a branch whose gates fail stays unpushed: preserve the merge on
 auto/sync-<branch>, open a PR against <branch> describing the failure, and continue with the other branches.
 Write {target}/receipt.json: {{"status":"completed","pushed":[{{"branch":"...","sha":"..."}}],"summary":"..."}} with
 every branch you pushed, or {{"status":"blocked","reason":"..."}} after a transient failure.
 {RECEIPT_RULES}''')
-            if receipt.get('status') == 'completed':
-                report_done(repo, '分支同步', receipt, target)
-            for push in receipt.get('pushed', []):
-                log(update_local(repo, push['branch'], push['sha']))
-        except Transient as error:
-            log(f'{repo}: transient: {error}')
+            for branch in pending:
+                attempts[f'{repo}/{branch}'] = {'fingerprint': base_sha, 'attempts': len(RETRY_DELAYS) + 1}
+            write_state(statefile, attempts)
+            finish_receipt(repo, repo, '分支同步', receipt, target)
+        except PreparationFailure as error:
+            log(f'{repo} sync: preparation unavailable: {error}')
         except Exception as error:
-            errors.append(f'{repo} sync: {error}')
-            log(errors[-1])
+            transient = isinstance(error, Transient)
+            if pending:
+                for branch, retry in pending.items():
+                    key = f'{repo}/{branch}'
+                    attempts[key] = record_failure(retry, base_sha, key, error, target, retry=transient)
+                write_state(statefile, attempts)
+            else:
+                log(f'{repo} sync: {error}')
+                if not transient:
+                    report_attention(repo, '分支同步准备失败。请查看运维日志。', target)
+            if not transient:
+                errors.append(repo)
     if errors:
-        notify('Plugin branch sync needs attention', '; '.join(errors), 'critical')
-        raise RuntimeError('; '.join(errors))
+        raise ItemFailures(f'Sync failed: {", ".join(errors)}')
 
 
 def notifications(check):
     """Run triage for a repository as soon as GitHub reports activity there, instead of waiting for the timer."""
-    active, threads = [], []
+    active, threads = set(), []
     for repo in CONFIG['repos']:
-        found = paginate(f'repos/{slug(repo)}/notifications?all=false&per_page=50')
+        try:
+            found = paginate(f'repos/{slug(repo)}/notifications?all=false&per_page=50')
+        except Transient as error:
+            log(f'{repo}: transient: {error}')
+            continue
         if found:
-            active.append(repo)
-            threads += found
-            for thread in found:
-                log(f"  {repo}: {thread['reason']}: {thread['subject']['type']} {thread['subject']['title']}")
+            active.add(repo)
+            threads.extend((repo, thread) for thread in found)
     log(f'{len(threads)} unread notification(s) in {len(active)} repositories.')
     if not threads or check:
         return
-    try:
-        triage(False, only=set(active))
-    finally:
-        for thread in threads:
-            api(f"notifications/threads/{thread['id']}", '--method', 'PATCH')
+    acknowledged = triage(False, only=active)
+    for repo, thread in threads:
+        subject = thread['subject']
+        if subject['type'] not in ('Issue', 'PullRequest'):
+            continue
+        match = re.fullmatch(rf'https://api.github.com/repos/{re.escape(slug(repo))}/(?:issues|pulls)/(\d+)',
+                             subject.get('url') or '', re.IGNORECASE)
+        if match and (repo, int(match[1])) in acknowledged:
+            try:
+                api(f"notifications/threads/{thread['id']}", '--method', 'PATCH')
+            except Transient as error:
+                log(f'{repo}: transient: {error}')
 
 
 if __name__ == '__main__':
@@ -473,8 +697,15 @@ if __name__ == '__main__':
             log(f'TRANSIENT: {error}')
         except Exception as error:
             log(f'FAILED: {type(error).__name__}: {error}')
-            if not REPORT['attention']:  # item failures are already listed
-                report_attention(MODE + ' 运行失败', str(error))
+            if not REPORT['attention'] and not isinstance(error, ItemFailures):
+                report_attention(MODE + ' 运行失败', f'请查看运维日志（{type(error).__name__}）。')
             raise
         finally:
-            report()
+            update = None
+            try:
+                if not args.check:
+                    update = github_health_update()
+            finally:
+                delivered = report()
+            if update and delivered:
+                write_state(*update)

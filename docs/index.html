@@ -178,6 +178,7 @@
   <nav class="toc" aria-labelledby="toc-title">
     <h2 id="toc-title">Versions</h2>
     <ol>
+      <li><a href="#unreleased">Unreleased <span>next</span></a></li>
       <li><a href="#v0-12-1-v0-57-0">0.12.1 <span>2026-11-02</span></a></li>
       <li><a href="#v0-12-0-v0-57-0">0.12.0 <span>2026-10-29</span></a></li>
       <li><a href="#v0-11-0-v0-56-2">0.11.0 <span>2026-10-11</span></a></li>
@@ -207,6 +208,40 @@
   </nav>
   <main id="changelog" tabindex="-1">
     <ol class="timeline" aria-label="Releases, newest first">
+      <li>
+        <article class="entry unreleased" id="unreleased" aria-labelledby="unreleased-title">
+          <div class="entry-head">
+            <h2 id="unreleased-title"><a href="#unreleased">Unreleased</a></h2>
+            <div class="meta"><span class="badge pending">Not yet released</span><span>Since v0.12.1-v0.57.0</span></div>
+          </div>
+          <p class="summary">Adds AArch64 support on Hyprland 0.57.2 and improves Stage, window switching, and overview input.</p>
+          <h3>Compatibility</h3>
+          <ul>
+            <li>The stable build targets official Hyprland v0.57.2. Build against the headers that match the compositor you run.</li>
+            <li>Hymission can now install the native compositor hooks it needs on AArch64 (<a href="https://github.com/gfhdhytghd/hymission/issues/55">#55</a>).</li>
+            <li>Omarchy rebuilds the cached plugin when a linked Hyprland library changes its shared-library name, even if the Hyprland revision stays the same (<a href="https://github.com/gfhdhytghd/hymission/issues/52">#52</a>).</li>
+            <li>Meson builds use compiler settings that let the module unload cleanly when supported.</li>
+          </ul>
+          <h3>Stage and workspace strip</h3>
+          <ul>
+            <li>Stage hides empty inactive workspaces by default. Set <code>stage_show_empty = 1</code> to show empty cards and fill gaps in workspace numbering without duplicating workspaces owned by another monitor or tile.</li>
+            <li>When Stage pushes a horizontal scrolling layout aside, the full layout remains reachable by scrolling and columns keep their width.</li>
+            <li>The workspace strip highlights the destination workspace as soon as a transition ends (<a href="https://github.com/gfhdhytghd/hymission/issues/50">#50</a>).</li>
+            <li>Blurred windows clipped at the Stage edge no longer leave stale pixels during partial redraws.</li>
+            <li>Stage honors its configured startup state after the first config reload and refreshes only visible previews on its periodic timer.</li>
+          </ul>
+          <h3>Overview and input fixes</h3>
+          <ul>
+            <li>Window switching keeps most-recently-used order even when the overview grid uses workspace order, including when switching starts during the close animation (<a href="https://github.com/gfhdhytghd/hymission/issues/53">#53</a>).</li>
+            <li>Focus and hover outlines follow the corners of window previews, including square fullscreen previews. A thickness of zero hides the outline (<a href="https://github.com/gfhdhytghd/hymission/issues/51">#51</a>).</li>
+            <li>A layout swipe no longer snaps back to the focused scrolling column during a layout recalculation.</li>
+            <li>Releasing a key or mouse button held before opening the overview reaches Hyprland, so a modifier or drag cannot remain stuck (<a href="https://github.com/gfhdhytghd/hymission/issues/57">#57</a>).</li>
+            <li>Disconnecting the last monitor in the overview closes it cleanly. Switching a special workspace refreshes the visible windows, and windows with unavailable geometry no longer cause repeated retries.</li>
+            <li>The overview resumes drawing if a capture client leaves a raw-render request open. If Hyprland was replaced on disk while still running, a failed symbol lookup skips the affected preview instead of crashing the compositor.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/hymission/compare/v0.12.1-v0.57.0...master">Compare v0.12.1-v0.57.0…master</a></div>
+        </article>
+      </li>
       <li>
         <article class="entry" id="v0-12-1-v0-57-0" aria-labelledby="v0-12-1-v0-57-0-title">
           <div class="entry-head">
