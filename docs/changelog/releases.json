@@ -4,6 +4,45 @@
   "site_url": "https://gfhdhytghd.github.io/hymission/",
   "releases": [
     {
+      "tag": "v0.13.0-v0.57.2",
+      "version": "0.13.0",
+      "hyprland": "0.57.2",
+      "published_at": "2026-11-24T15:18:31Z",
+      "headline": "Adds AArch64 support on Hyprland 0.57.2 and improves Stage, window switching, and overview input.",
+      "sections": [
+        {
+          "title": "Compatibility",
+          "items": [
+            "The stable build targets official Hyprland v0.57.2. Build against the headers that match the compositor you run.",
+            "Hymission can now install the native compositor hooks it needs on AArch64 (#55).",
+            "Omarchy rebuilds the cached plugin when a linked Hyprland library changes its shared-library name, even if the Hyprland revision stays the same (#52).",
+            "Meson builds use compiler settings that let the module unload cleanly when supported."
+          ]
+        },
+        {
+          "title": "Stage and workspace strip",
+          "items": [
+            "Stage hides empty inactive workspaces by default. Set `stage_show_empty = 1` to show empty cards and fill gaps in workspace numbering without duplicating workspaces owned by another monitor or tile.",
+            "When Stage pushes a horizontal scrolling layout aside, the full layout remains reachable by scrolling and columns keep their width.",
+            "The workspace strip highlights the destination workspace as soon as a transition ends (#50).",
+            "Blurred windows clipped at the Stage edge no longer leave stale pixels during partial redraws.",
+            "Stage honors its configured startup state after the first config reload and refreshes only visible previews on its periodic timer."
+          ]
+        },
+        {
+          "title": "Overview and input fixes",
+          "items": [
+            "Window switching keeps most-recently-used order even when the overview grid uses workspace order, including when switching starts during the close animation (#53).",
+            "Focus and hover outlines follow the corners of window previews, including square fullscreen previews. A thickness of zero hides the outline (#51).",
+            "A layout swipe no longer snaps back to the focused scrolling column during a layout recalculation.",
+            "Releasing a key or mouse button held before opening the overview reaches Hyprland, so a modifier or drag cannot remain stuck (#57).",
+            "Disconnecting the last monitor in the overview closes it cleanly. Switching a special workspace refreshes the visible windows, and windows with unavailable geometry no longer cause repeated retries.",
+            "The overview resumes drawing if a capture client leaves a raw-render request open. If Hyprland was replaced on disk while still running, a failed symbol lookup skips the affected preview instead of crashing the compositor."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.12.1-v0.57.0",
       "version": "0.12.1",
       "hyprland": "0.57.0",
@@ -606,41 +645,5 @@
         }
       ]
     }
-  ],
-  "unreleased": {
-    "since": "v0.12.1-v0.57.0",
-    "summary": "Adds AArch64 support on Hyprland 0.57.2 and improves Stage, window switching, and overview input.",
-    "sections": [
-      {
-        "title": "Compatibility",
-        "items": [
-          "The stable build targets official Hyprland v0.57.2. Build against the headers that match the compositor you run.",
-          "Hymission can now install the native compositor hooks it needs on AArch64 (#55).",
-          "Omarchy rebuilds the cached plugin when a linked Hyprland library changes its shared-library name, even if the Hyprland revision stays the same (#52).",
-          "Meson builds use compiler settings that let the module unload cleanly when supported."
-        ]
-      },
-      {
-        "title": "Stage and workspace strip",
-        "items": [
-          "Stage hides empty inactive workspaces by default. Set `stage_show_empty = 1` to show empty cards and fill gaps in workspace numbering without duplicating workspaces owned by another monitor or tile.",
-          "When Stage pushes a horizontal scrolling layout aside, the full layout remains reachable by scrolling and columns keep their width.",
-          "The workspace strip highlights the destination workspace as soon as a transition ends (#50).",
-          "Blurred windows clipped at the Stage edge no longer leave stale pixels during partial redraws.",
-          "Stage honors its configured startup state after the first config reload and refreshes only visible previews on its periodic timer."
-        ]
-      },
-      {
-        "title": "Overview and input fixes",
-        "items": [
-          "Window switching keeps most-recently-used order even when the overview grid uses workspace order, including when switching starts during the close animation (#53).",
-          "Focus and hover outlines follow the corners of window previews, including square fullscreen previews. A thickness of zero hides the outline (#51).",
-          "A layout swipe no longer snaps back to the focused scrolling column during a layout recalculation.",
-          "Releasing a key or mouse button held before opening the overview reaches Hyprland, so a modifier or drag cannot remain stuck (#57).",
-          "Disconnecting the last monitor in the overview closes it cleanly. Switching a special workspace refreshes the visible windows, and windows with unavailable geometry no longer cause repeated retries.",
-          "The overview resumes drawing if a capture client leaves a raw-render request open. If Hyprland was replaced on disk while still running, a failed symbol lookup skips the affected preview instead of crashing the compositor."
-        ]
-      }
-    ]
-  }
+  ]
 }
