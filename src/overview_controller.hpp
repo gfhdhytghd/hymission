@@ -21,6 +21,7 @@ struct SEventLoopDoLaterLock;
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <sys/types.h>
 
@@ -168,6 +169,7 @@ class OverviewController {
     void                       scrollMoveGestureEndHook(void* gestureThisptr, const ITrackpadGesture::STrackpadGestureEnd& e);
   private:
     [[nodiscard]] bool nativeWindowRenderActive() const;
+    void clearRawWindowRender();
 
     friend class OverviewOverlayPassElement;
 
@@ -1071,11 +1073,13 @@ class OverviewController {
     std::size_t              m_stripSnapshotRenderDepth = 0;
     std::size_t              m_externalRawWindowRenderDepth = 0;
     std::string              m_externalRawWindowRenderToken;
+    SP<CEventLoopTimer>      m_externalRawWindowRenderTimer;
     std::string              m_externalCaptureInputToken;
     std::chrono::steady_clock::time_point m_externalCaptureInputSuppressUntil = {};
     bool                     m_stripSnapshotsDirty = false;
     bool                     m_stripSnapshotRefreshScheduled = false;
     bool                     m_primaryButtonPressed = false;
+    std::unordered_set<uint32_t> m_consumedMouseButtons;
     bool                     m_closeButtonPressLatched = false; // swallow release after close-button click
     bool                     m_groupLabelPressLatched = false;
     bool                     m_closeCursorOverride = false;     // forcing the "pointer" cursor while hover
@@ -1129,6 +1133,7 @@ class OverviewController {
     CHyprSignalListener       m_windowActiveListener;
     CHyprSignalListener       m_windowMoveWorkspaceListener;
     CHyprSignalListener       m_workspaceActiveListener;
+    CHyprSignalListener       m_specialWorkspaceActiveListener;
     CHyprSignalListener       m_monitorRemovedListener;
     CHyprSignalListener       m_monitorFocusedListener;
     CHyprSignalListener       m_configReloadedListener;

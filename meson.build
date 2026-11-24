@@ -56,6 +56,7 @@ tiles_logic_test = executable('hymission-tiles-logic-test',
 test('hymission-tiles-logic-test', tiles_logic_test)
 
 shared_module(meson.project_name(), src,
+  cpp_args: cpp_compiler.get_supported_arguments('-fno-gnu-unique'),
   dependencies: [
     dependency('hyprland'),
     dependency('lua'),
