@@ -16,6 +16,7 @@
 #include <optional>
 #include <limits>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -460,6 +461,7 @@ struct StageController::Impl {
     std::unique_ptr<IdleTask> deferred;
     SP<CEventLoopTimer> refreshTimer;
     SP<CEventLoopTimer> motionTimer;
+    std::optional<bool> startupVisibility;
     std::optional<bool> runtimeVisible;
     double visibility = 1;
     double visibilityFrom = 1;
@@ -573,7 +575,8 @@ struct StageController::Impl {
                       const std::vector<std::pair<PHLWINDOWREF, CBox>>& origins, PHLWORKSPACE visualActive = nullptr, bool stopNative = true);
     bool flying(const Screen& screen, const PHLWINDOW& window) const;
     double flightProgress(const Screen& screen) const;
-    void refreshPreviews();
+    bool requestedVisibility() const;
+    void refreshPreviews(bool refreshVisible = false);
     void ensureBackground(Screen& screen, const PHLMONITOR& monitor);
     void updatePreviewLiveness();
     bool updatePreviews(Screen& screen, Card& card);
@@ -1485,7 +1488,18 @@ void StageController::Impl::releaseHooks() {
 
 void StageController::Impl::initialize() {
     auto& events = Event::bus()->m_events;
-    listeners.emplace_back(events.config.reloaded.listen([this] { edgeHookAttempt.reset(); reconfigure = true; request(); }));
+    listeners.emplace_back(events.config.reloaded.listen([this] {
+        // Direct plugin loads queue an initial sync before the config reload.
+        // Only the first completed reload supplies the startup default.
+        if (!startupVisibility) {
+            startupVisibility = setting("stage_enabled", 0) != 0;
+            if (!runtimeVisible && !visibilityGesture)
+                visibility = visibilityFrom = visibilityTarget = *startupVisibility ? 1 : 0;
+        }
+        edgeHookAttempt.reset();
+        reconfigure = true;
+        request();
+    }));
     listeners.emplace_back(events.config.props_refreshed.listen([this](bool) { request(); }));
     listeners.emplace_back(events.monitor.layoutChanged.listen([this] { request(); }));
     listeners.emplace_back(events.monitor.added.listen([this](PHLMONITOR) { request(); }));
@@ -1625,7 +1639,7 @@ void StageController::Impl::cancelInput() {
     visibilityGesture = false;
     visibilityDelta = 0;
     // Return to the last committed visibility, without an animation/gesture end.
-    visibility = visibilityFrom = visibilityTarget = runtimeVisible.value_or(setting("stage_enabled", 0) != 0) ? 1 : 0;
+    visibility = visibilityFrom = visibilityTarget = requestedVisibility() ? 1 : 0;
     overviewExitScreens.clear();
     stagePassQueued = false;
     for (auto& screen : screens) {
@@ -1733,29 +1747,35 @@ std::vector<StageController::Impl::Card> StageController::Impl::cardsForWorkspac
     // workspace of this sidebar is listed as a slot, but ids owned by any
     // existing workspace (the hidden active one, other tiles, other
     // monitors) are never synthesized there.
-    const auto ownedElsewhere = [&](WorkspaceKey id, bool anyMonitor) {
-        return std::ranges::any_of(workspaces, [&](const auto& workspace) {
-            return workspace && !(workspace->type() == Workspace::eWorkspaceType::SPECIAL) && workspaceKey(workspace) == id &&
-                (anyMonitor || workspace->m_monitor != monitor);
-        });
-    };
     WorkspaceKey slotCeiling = 0, gapCeiling = 0;
     if (const long emptySlots = setting("stage_empty_slots", 0); emptySlots > 0) {
         slotCeiling = static_cast<WorkspaceKey>(emptySlots);
         for (const auto& card : targets)
-            if (card.workspace.lock()) slotCeiling = std::max(slotCeiling, cardID(card));
+            slotCeiling = std::max(slotCeiling, cardID(card));
     }
-    if (showEmpty) {
+    std::unordered_set<WorkspaceKey> existingIds, otherMonitorIds, listedIds;
+    if (showEmpty || slotCeiling > 0) {
+        for (const auto& card : targets)
+            listedIds.insert(cardID(card));
+
+        const auto* tiles = TilesController::get();
+        const bool tiled = tiles && tiles->available();
         for (const auto& workspace : workspaces) {
-            if (!workspace || workspace->type() == Workspace::eWorkspaceType::SPECIAL || workspace->m_monitor != monitor) continue;
-            if (auto* tiles=TilesController::get();tiles && tiles->available() && tiles->preferredTile(workspace,monitor)!=tiles->preferredTile(activeWorkspace,monitor)) continue;
-            gapCeiling = std::max(gapCeiling, workspaceKey(workspace));
+            if (!workspace || workspace->type() == Workspace::eWorkspaceType::SPECIAL)
+                continue;
+            const auto id = workspaceKey(workspace);
+            if (showEmpty)
+                existingIds.insert(id);
+            if (workspace->m_monitor != monitor)
+                otherMonitorIds.insert(id);
+            else if (showEmpty && (!tiled || tiles->preferredTile(workspace, monitor) == tiles->preferredTile(activeWorkspace, monitor)))
+                gapCeiling = std::max(gapCeiling, id);
         }
     }
-    for (WorkspaceKey id = 1; id <= std::max(slotCeiling, gapCeiling); ++id) {
-        if (std::ranges::any_of(targets, [&](const Card& card) { return cardID(card) == id; }))
-            continue;
-        if (ownedElsewhere(id, id > slotCeiling))
+    const auto ceiling = std::max(slotCeiling, gapCeiling);
+    for (WorkspaceKey index = 0; index < ceiling; ++index) {
+        const WorkspaceKey id = index + 1;
+        if (listedIds.contains(id) || (id <= slotCeiling ? otherMonitorIds : existingIds).contains(id))
             continue;
         targets.emplace_back(Card{.syntheticId = id});
     }
@@ -1781,12 +1801,10 @@ void StageController::Impl::sync() {
         return;
     }
     syncing = true;
-    const bool configured = setting("stage_enabled", 0) != 0;
-    if (!runtimeVisible) {
-        runtimeVisible = configured;
-        visibility = visibilityTarget = configured ? 1 : 0;
-    }
-    const bool wanted = *runtimeVisible || enabled || visibilityGesture || visibility > 0;
+    const bool visible = requestedVisibility();
+    if (!startupVisibility && !runtimeVisible && !visibilityGesture)
+        visibility = visibilityFrom = visibilityTarget = visible ? 1 : 0;
+    const bool wanted = visible || enabled || visibilityGesture || visibility > 0;
     const bool wasEnabled = enabled;
     enabled = wanted && installHooks();
     if (!enabled) {
@@ -1929,19 +1947,29 @@ void StageController::Impl::sync() {
             for (std::size_t i = 0; i < targets.size(); ++i)
                 changedCards |= screen->cards[i].workspace != targets[i].workspace || cardID(screen->cards[i]) != cardID(targets[i]);
         }
-        std::vector<std::pair<WorkspaceKey, double>> oldTops;
+        struct OldCard {
+            std::size_t index;
+            double top;
+        };
+        std::unordered_map<WorkspaceKey, OldCard> oldCards;
+        oldCards.reserve(screen->cards.size());
         for (std::size_t i = 0; i < screen->cards.size(); ++i)
-            oldTops.emplace_back(cardID(screen->cards[i]), cardTop(*screen, i) + screen->scroll);
+            oldCards.try_emplace(cardID(screen->cards[i]), OldCard{i, cardTop(*screen, i) + screen->scroll});
         if (changedCards) {
             std::vector<Card> cards;
+            cards.reserve(targets.size());
             for (const auto& target : targets) {
-                auto it = std::ranges::find_if(screen->cards, [&](const auto& card) { return cardID(card) == cardID(target); });
+                const auto it = oldCards.find(cardID(target));
                 // Never reuse a synthetic slot for a workspace that now exists
                 // (or vice versa): the card's rendering path differs.
-                if (it != screen->cards.end() && (it->workspace.lock() ? !target.syntheticId : !!target.syntheticId))
-                    cards.emplace_back(std::move(*it));
-                else
-                    cards.push_back(target);
+                if (it != oldCards.end()) {
+                    auto& previous = screen->cards[it->second.index];
+                    if (previous.workspace.lock() ? !target.syntheticId : !!target.syntheticId) {
+                        cards.emplace_back(std::move(previous));
+                        continue;
+                    }
+                }
+                cards.push_back(target);
             }
             screen->cards = std::move(cards);
             screen->reorderTo.reset();
@@ -1962,11 +1990,11 @@ void StageController::Impl::sync() {
         if (changedCards || changedGeometry) {
             for (std::size_t i = 0; i < screen->cards.size(); ++i) {
                 auto& card = screen->cards[i];
-                const auto old = std::ranges::find_if(oldTops, [&](const auto& entry) { return entry.first == cardID(card); });
-                card.shift = !finishingOverview && !blocked() && !changedOutput && numberSetting("animations:enabled", 1) && setting("stage_transition_ms", 300) > 0 && old != oldTops.end() ?
-                    old->second - screen->geometry.cardTop(i, 0) : 0;
+                const auto old = oldCards.find(cardID(card));
+                card.shift = !finishingOverview && !blocked() && !changedOutput && numberSetting("animations:enabled", 1) && setting("stage_transition_ms", 300) > 0 && old != oldCards.end() ?
+                    old->second.top - screen->geometry.cardTop(i, 0) : 0;
                 card.shiftStart = Clock::now();
-                // oldTops already include any reorder preview offset.
+                // The old card tops already include any reorder preview offset.
                 card.previewFrom = card.previewTo = 0;
                 if (card.shift != 0)
                     armMotion();
@@ -2069,8 +2097,26 @@ void StageController::Impl::armRefresh() {
     if (!enabled || !g_pEventLoopManager)
         return;
     const auto interval = std::clamp(setting("stage_refresh_ms", 16), 1L, 16L);
-    refreshTimer = makeShared<CEventLoopTimer>(std::chrono::milliseconds(interval), [this](SP<CEventLoopTimer>, void*) {
-        request();
+    refreshTimer = makeShared<CEventLoopTimer>(std::chrono::milliseconds(interval), [this, interval](SP<CEventLoopTimer> timer, void*) {
+        if (sessionLocked() || shuttingDown)
+            return;
+        if (!deferred) {
+            // Raw capture can release Stage without an output frame or a
+            // workspace event. Reconcile promptly on suspension changes.
+            const bool previewsBlocked = blocked();
+            const bool suspensionChanged = std::ranges::any_of(screens, [&](const auto& screen) {
+                const auto monitor = screen.monitor.lock();
+                return monitor && screen.suspended != (previewsBlocked || !!monitor->m_activeSpecialWorkspace);
+            });
+            if (suspensionChanged) {
+                request(false);
+            } else {
+                refreshPreviews(true);
+                updatePreviewLiveness();
+            }
+        }
+        if (refreshTimer == timer)
+            timer->updateTimeout(std::chrono::milliseconds(interval));
     }, nullptr);
     g_pEventLoopManager->addTimer(refreshTimer);
 }
@@ -4183,18 +4229,28 @@ void StageController::Impl::ensureBackground(Screen& screen, const PHLMONITOR& m
     screen.backgroundError.clear();
 }
 
-void StageController::Impl::refreshPreviews() {
+bool StageController::Impl::requestedVisibility() const {
+    if (runtimeVisible)
+        return *runtimeVisible;
+    if (startupVisibility)
+        return *startupVisibility;
+    return setting("stage_enabled", 0) != 0;
+}
+
+void StageController::Impl::refreshPreviews(bool refreshVisible) {
     if (!enabled || blocked() || rendering || renderContext().m_data.pMonitor)
         return;
     for (auto& screen : screens) {
-        if (screen.covered || screen.suspended || (visibility <= 0 && !visibilityGesture && !runtimeVisible.value_or(false)))
+        if (screen.covered || screen.suspended || (visibility <= 0 && !visibilityGesture && !requestedVisibility()))
             continue;
         ensureBackground(screen, screen.monitor.lock());
         bool changed = false;
         for (std::size_t i = 0; i < screen.cards.size(); ++i) {
             auto& card = screen.cards[i];
+            if (card.syntheticId || (!refreshVisible && !card.dirty))
+                continue;
             const auto top = cardTop(screen, i);
-            if (!card.dirty || top + screen.geometry.cardHeight <= screen.geometry.paddingTop || top >= screen.base.h - screen.geometry.paddingBottom)
+            if (top + screen.geometry.cardHeight <= screen.geometry.paddingTop || top >= screen.base.h - screen.geometry.paddingBottom)
                 continue;
             if (updatePreviews(screen, card)) {
                 card.dirty = false;
@@ -4226,14 +4282,17 @@ void StageController::Impl::updatePreviewLiveness() {
             for (const auto& flight : swipe->visual.flights)
                 add(flight.preview.window);
         for (const auto& screen : screens) {
-            if (screen.covered || screen.suspended || (visibility <= 0 && !visibilityGesture && !runtimeVisible.value_or(false)))
+            if (screen.covered || screen.suspended || (visibility <= 0 && !visibilityGesture && !requestedVisibility()))
                 continue;
             for (std::size_t i = 0; i < screen.cards.size(); ++i) {
+                const auto& previews = screen.cards[i].previews;
+                if (previews.empty())
+                    continue;
                 const auto top = cardTop(screen, i);
                 if (top + screen.geometry.cardHeight <= screen.geometry.paddingTop || top >= screen.base.h - screen.geometry.paddingBottom)
                     continue;
                 const auto viewport=cardDesktopViewport(screen,CBox{0,0,screen.geometry.cardWidth,screen.geometry.cardHeight});
-                for (const auto& preview : screen.cards[i].previews)
+                for (const auto& preview : previews)
                     if (!clustered(screen) || !previewFootprint(preview.window.lock(),preview.target).intersection(viewport).empty())
                         add(preview.window);
             }
@@ -4332,7 +4391,7 @@ StageController::Impl::~Impl() {
 }
 
 std::string StageController::Impl::stateJson() const {
-    nlohmann::json result{{"visible", runtimeVisible.value_or(setting("stage_enabled", 0) != 0)}, {"visibility_progress", visibility}, {"enabled", enabled}, {"smartisan_mode", smartisan}, {"hooks_ready", hooksReady}, {"preview_renderer", "native_surfaces"},
+    nlohmann::json result{{"visible", requestedVisibility()}, {"visibility_progress", visibility}, {"enabled", enabled}, {"smartisan_mode", smartisan}, {"hooks_ready", hooksReady}, {"preview_renderer", "native_surfaces"},
         {"refresh_interval_ms", std::clamp(setting("stage_refresh_ms", 16), 1L, 16L)}, {"error", error},
         {"swipe_begin_count", swipeBegins}, {"swipe_update_count", swipeUpdates}, {"swipe_end_count", swipeEnds},
         {"raw_swipe_update_count", rawSwipeUpdates},
@@ -4460,7 +4519,6 @@ void StageController::Impl::applyVisibility(double progress) {
 }
 
 void StageController::Impl::settleVisibility(bool visible) {
-    runtimeVisible = visible;
     visibilityGesture = false;
     visibilityFrom = visibility;
     visibilityTarget = visible ? 1 : 0;
@@ -4469,7 +4527,7 @@ void StageController::Impl::settleVisibility(bool visible) {
 }
 
 bool StageController::toggleVisibility() {
-    return setVisibility(!m_impl->runtimeVisible.value_or(setting("stage_enabled", 0) != 0));
+    return setVisibility(!m_impl->requestedVisibility());
 }
 
 bool StageController::setVisibility(bool visible) {
@@ -4477,10 +4535,10 @@ bool StageController::setVisibility(bool visible) {
     if (!visible) cancelTileTransfer();
     if (self.blocked() || self.swipe || self.visibilityGesture)
         return false;
-    const bool previous = self.runtimeVisible.value_or(setting("stage_enabled", 0) != 0);
+    const bool previous = self.requestedVisibility();
+    self.runtimeVisible = visible;
     if (previous == visible && !visible)
         return true;
-    self.runtimeVisible = visible;
     self.sync();
     if (!self.enabled)
         return false;
@@ -4492,7 +4550,7 @@ bool StageController::setVisibility(bool visible) {
 
 std::optional<Rect> StageController::holdRegion(const std::string& name) const {
     const auto& self = *m_impl;
-    if (!self.enabled || self.blocked() || !self.runtimeVisible.value_or(setting("stage_enabled", 0) != 0))
+    if (!self.enabled || self.blocked() || !self.requestedVisibility())
         return std::nullopt;
     for (const auto& screen : self.screens) {
         auto monitor = screen.monitor.lock();
@@ -4525,7 +4583,6 @@ bool StageController::beginVisibilityGesture() {
     auto* self = Impl::instance;
     if (!self || self->blocked() || self->swipe || self->visibilityGesture)
         return false;
-    self->runtimeVisible = self->runtimeVisible.value_or(setting("stage_enabled", 0) != 0);
     self->visibilityGesture = true;
     self->sync();
     if (!self->enabled) {
@@ -4560,7 +4617,9 @@ void StageController::endVisibilityGesture(bool cancelled) {
     auto* self = Impl::instance;
     if (!self || !self->visibilityGesture)
         return;
-    self->settleVisibility(cancelled ? self->runtimeVisible.value_or(false) : self->visibility >= 0.5);
+    if (!cancelled)
+        self->runtimeVisible = self->visibility >= 0.5;
+    self->settleVisibility(self->requestedVisibility());
 }
 
 void StageController::initialize() { m_impl->initialize(); }

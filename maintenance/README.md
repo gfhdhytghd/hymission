@@ -14,3 +14,9 @@ a symlink to this directory on the maintainer's hymission checkout.
 - `bin/sandbox.sh` — the sandbox wrapper (read-only system, no network, no home, render node only).
 
 State, logs, prefixes and per-run workspaces live outside the repository in `~/.local/state/hyprland-plugins-maintenance/`.
+
+An issue or PR gets up to three attempts for the same activity, with retries eligible after one and four hours.
+New item activity restores the retry budget. Automation replies do not restore it.
+A completed sync attempt or a hard failure is recorded per target branch and default-branch commit.
+A blocked sync can retry the same commit within the retry budget.
+The notifications timer marks only open issues and PRs with a matching handled snapshot as read.

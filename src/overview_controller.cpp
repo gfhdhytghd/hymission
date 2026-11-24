@@ -317,6 +317,7 @@ constexpr double STRIP_DRAG_DIM_ALPHA = 0.28;
 // filters out incidental cross-through.
 constexpr auto   HOVER_SELECTION_RETARGET_DWELL = std::chrono::milliseconds(150);
 constexpr auto   TOGGLE_SWITCH_RELEASE_POLL_INTERVAL = std::chrono::milliseconds(16);
+constexpr auto   RAW_WINDOW_RENDER_TIMEOUT = std::chrono::seconds(10);
 constexpr auto   CAPTURE_INPUT_SUPPRESS_TIMEOUT = std::chrono::seconds(10);
 constexpr auto   PICK_LABEL_PREFIX_TIMEOUT = std::chrono::milliseconds(1500);
 constexpr auto   MISSION_CONTROL_WORKSPACE_NAME = "Mission Control";
@@ -2361,6 +2362,7 @@ OverviewController::~OverviewController() {
     clearStripWindowDragState();
     cancelAndClearTimer(m_hiddenStripProxyRefreshTimer);
     cancelAndClearTimer(m_stripRefreshTimer);
+    cancelAndClearTimer(m_externalRawWindowRenderTimer);
     stopSearchInput();
     setDamageTrackingOverride(false);
     destroyGaussianBlurPipeline();
@@ -2437,8 +2439,29 @@ bool OverviewController::initialize() {
         // Copy the signal payload immediately; forwarding the raw listener arg
         // has produced corrupted button/state values on current Hyprland builds.
         const auto copiedEvent = event;
-        if (handleMouseButton(copiedEvent))
+        if (copiedEvent.button >= BTN_LEFT && copiedEvent.button <= BTN_TASK && copiedEvent.state == WL_POINTER_BUTTON_STATE_RELEASED) {
+            const bool owned = m_consumedMouseButtons.erase(copiedEvent.button) != 0;
+            if (!owned) {
+                // Keep the existing fallback for a press whose button code was
+                // unusable, provided Hyprland has no native press to release.
+                if (!isVisible() || (copiedEvent.button == BTN_LEFT && m_primaryButtonPressed && !g_pInputManager->hasHeldButtons()))
+                    info.cancelled |= handleMouseButton(copiedEvent);
+                return;
+            }
+
+            handleMouseButton(copiedEvent);
+            // The bus event does not identify the pointer. A native press on
+            // another pointer may share this button code, so let Hyprland
+            // match the release whenever it is tracking any held button.
+            if (!g_pInputManager->hasHeldButtons())
+                info.cancelled = true;
+            return;
+        }
+        if (handleMouseButton(copiedEvent)) {
+            if (copiedEvent.state == WL_POINTER_BUTTON_STATE_PRESSED)
+                m_consumedMouseButtons.insert(copiedEvent.button);
             info.cancelled = true;
+        }
     });
     m_mouseAxisListener = events.input.mouse.axis.listen([this](const IPointer::SAxisEvent& event, Event::SCallbackInfo& info) {
         if (sessionLocked())
@@ -2514,6 +2537,10 @@ bool OverviewController::initialize() {
     m_windowMoveWorkspaceListener =
         events.window.moveToWorkspace.listen([this](PHLWINDOW window, PHLWORKSPACE) { handleWindowSetChange(window, WindowSetChangeKind::MoveToWorkspace); });
     m_workspaceActiveListener = events.workspace.active.listen([this](PHLWORKSPACE workspace) { handleWorkspaceChange(workspace); });
+    m_specialWorkspaceActiveListener = events.workspace.specialActive.listen([this](PHLWORKSPACE, PHLMONITOR monitor) {
+        if (isVisible() && m_state.collectionPolicy.includeSpecial && ownsMonitor(monitor))
+            scheduleVisibleStateRebuild();
+    });
     m_monitorRemovedListener = events.monitor.removed.listen([this](PHLMONITOR monitor) { handleMonitorChange(monitor); });
     m_monitorFocusedListener = events.monitor.focused.listen([this](PHLMONITOR) {
         if (isVisible() && shouldHandleInput())
@@ -2949,6 +2976,9 @@ std::string OverviewController::handleRawWindowRenderCommand(const std::string& 
 
         m_externalRawWindowRenderToken = token;
         ++m_externalRawWindowRenderDepth;
+        armOrRescheduleTimer(m_externalRawWindowRenderTimer, RAW_WINDOW_RENDER_TIMEOUT, [this](SP<CEventLoopTimer>, void*) {
+            clearRawWindowRender();
+        });
         return "ok\n";
     }
 
@@ -2957,9 +2987,17 @@ std::string OverviewController::handleRawWindowRenderCommand(const std::string& 
 
     --m_externalRawWindowRenderDepth;
     if (m_externalRawWindowRenderDepth == 0)
-        m_externalRawWindowRenderToken.clear();
+        clearRawWindowRender();
 
     return "ok\n";
+}
+
+void OverviewController::clearRawWindowRender() {
+    m_externalRawWindowRenderDepth = 0;
+    m_externalRawWindowRenderToken.clear();
+    cancelAndClearTimer(m_externalRawWindowRenderTimer);
+    if (isVisible())
+        damageOwnedMonitors();
 }
 
 bool OverviewController::rawWindowRenderActive() const {
@@ -4140,6 +4178,24 @@ void OverviewController::handleMonitorChange(PHLMONITOR monitor) {
         return;
 
     clearSpatialPickCache();
+
+    const bool hasRemainingOutput = std::ranges::any_of(m_state.participatingMonitors, [&](const auto& candidate) {
+        return candidate && candidate != monitor && candidate->enabled();
+    });
+    if (!hasRemainingOutput && ownsMonitor(monitor)) {
+        // The removed output no longer schedules frames. Finish the abort
+        // from idle even when we were already closing.
+        m_gestureSession = {};
+        m_scrollGestureSession = {};
+        m_workspaceSwipeGesture = {};
+        clearRelayoutProgressAnimation();
+        m_state.closeMode = CloseMode::Abort;
+        m_state.pendingExitFocus.reset();
+        m_state.phase = Phase::Closing;
+        m_deactivatePending = true;
+        scheduleDeactivate();
+        return;
+    }
 
     if (m_workspaceTransition.active) {
         clearOverviewWorkspaceTransition();
@@ -11336,8 +11392,6 @@ void OverviewController::schedulePendingWindowGeometryRetry(const PHLWINDOW& win
     const auto pendingTarget = m_pendingWindowGeometryRetryTarget.lock();
     if (pendingTarget != window)
         m_pendingWindowGeometryRetryRemaining = 2;
-    else
-        m_pendingWindowGeometryRetryRemaining = std::max<std::size_t>(m_pendingWindowGeometryRetryRemaining, 2);
     m_pendingWindowGeometryRetryTarget = window;
 
     if (m_pendingWindowGeometryRetryScheduled)
@@ -12069,6 +12123,7 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
 
 void OverviewController::handleSessionLock() {
     ++inputGeneration;
+    m_consumedMouseButtons.clear();
     // Discard ownership without calling any gesture completion/commit path.
     m_gestureSession = {};
     m_scrollGestureSession = {};
@@ -12266,10 +12321,12 @@ void OverviewController::deactivate() {
     m_state = {};
     StageController::finishOverview();
     for (const auto& ownedMonitor : ownedMonitors) {
+        if (!ownedMonitor->enabled())
+            continue;
         g_pHyprRenderer->damageMonitor(ownedMonitor);
         ownedMonitor->scheduleFrame();
     }
-    if (monitor) {
+    if (monitor && monitor->enabled()) {
         g_pHyprRenderer->damageMonitor(monitor);
         monitor->scheduleFrame();
     }
@@ -12323,6 +12380,8 @@ void OverviewController::scheduleDeactivate() {
 
 void OverviewController::damageOwnedMonitors() const {
     for (const auto& monitor : ownedMonitors()) {
+        if (!monitor->enabled())
+            continue;
         g_pHyprRenderer->damageMonitor(monitor);
         monitor->scheduleFrame();
     }
