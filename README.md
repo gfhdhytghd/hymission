@@ -56,8 +56,9 @@ that compositor (`hyprpm` builds from the running compositor's own headers).
 See the [compatibility record](docs/compatibility/hyprland-master.md) for the
 tested revisions, the hook ABI checks and runtime evidence limits.
 
-On `hyprland-master` the flake locks official `main` (currently `7a5e469c`,
-aquamarine `163b138`). To check the latest `main`:
+The flake on `hyprland-master` follows official `main`. It currently locks
+`df40c0bd2c7c1dfa2cfd77e91c0f561500fdcc01` (aquamarine `a0228bb8`).
+To check the latest `main`:
 
 ```sh
 nix flake update hyprland

@@ -1,8 +1,17 @@
 # Hyprland compatibility baseline
 
+The flake follows official `hyprwm/Hyprland` `main` and currently locks
+`df40c0bd2c7c1dfa2cfd77e91c0f561500fdcc01` (aquamarine `a0228bb8`).
+The Release build against this revision passed 20 CTests. The AArch64 hook
+test skipped on x86_64. The binary audit resolved all 47 development lookups
+and all 41 exact tiles symbols. The private compositor loaded the plugin,
+ran the overview toggle twice, and unloaded the plugin successfully.
+
+## Historical baseline (2026-11-07)
+
 - `hyprland-master`: official `hyprwm/Hyprland` `main` =
   `ab6141897d57e609e24c571a762c30c963e0885a` (`version.h` 0.57.0). The flake
-  pins and locks this revision.
+  pinned this revision for that run.
 - `master`: official release `v0.57.2` = `11cbc6c5` (aquamarine `52ea11f`); see
   that branch's copy of this record.
 - Fork: the project's `gfhdhytghd/Hyprland` v0.57.0 (`f6725e43`, aquamarine

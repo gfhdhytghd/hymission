@@ -29,6 +29,8 @@ jobs:
         run: |
           nix flake update hyprland
           nix flake metadata --json > hyprland-master-inputs.json
+          revision=$(jq -er '.nodes.hyprland | select(.original.ref == "main") | .locked.rev | select(test("^[0-9a-f]{40}$"))' flake.lock)
+          echo "Hyprland main: $revision"
       - name: Build plugin and run offline tests
         run: nix build -L .#hymission
       - uses: actions/upload-artifact@v4
