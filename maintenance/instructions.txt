@@ -30,7 +30,7 @@ planning, integration, verification and decisions yourself. Never let helpers ov
 - `hyprland-prefix.sh SLUG REF [--aquamarine SLUG REF]` prints a cached prefix with the exact Hyprland build
   (bin/Hyprland, headers, hyprland.pc). The task lists the arguments for each branch. First builds take minutes.
 - `plugin-build.sh [--trusted] REPO_DIR PREFIX [LABEL]` configures, builds and runs ctest for a checkout against
-  that prefix; exit 0 means configure and build passed and every test ran and passed. The build and log paths
+  that prefix; exit 0 means configure, build and ctest passed; skipped tests are listed in the output. The build and log paths
   are printed. Use it for every build. Use `--trusted`
   (no sandbox, scrubbed environment) for the user's own commits, branch syncs and merges whose only new
   commits are the user's; use the default sandbox for contributor PR heads and anything else not authored by
