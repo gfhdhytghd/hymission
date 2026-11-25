@@ -7,6 +7,7 @@
 #include "mission_layout.hpp"
 #include "stage_logic.hpp"
 #include <string>
+#include <hyprland/src/helpers/math/CornerRadii.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
 namespace hymission {
@@ -49,8 +50,8 @@ class StageController {
     // the gesture without falling through to the desktop layout.
     static std::optional<PHLWORKSPACE> hoveredScrollWorkspace();
     static void rememberCanvasScroll(const PHLWORKSPACE& workspace, double offset);
-    // Scope a native shadow cutout radius without changing window rules.
-    static void withWindowRounding(const PHLWINDOW& window, float radius, const std::function<void()>& draw);
+    // Scope native shadow cutout radii without changing window rules.
+    static void withWindowRounding(const PHLWINDOW& window, Math::SCornerRadii radius, const std::function<void()>& draw);
     static CBox transformPreviewBox(CBox box);
     static std::optional<stage::OverviewEndpoint> overviewOrigin(const PHLWINDOW& window);
     // Settled card endpoint after overview activates the requested workspace.

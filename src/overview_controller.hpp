@@ -131,7 +131,7 @@ class OverviewController {
     bool                shouldRenderWindowHook(const PHLWINDOW& window, const PHLMONITOR& monitor);
     Render::SWindowRenderPresentation effectiveAlphaHook(const Desktop::View::CWindowPresentation* presentation, Render::eSceneMode mode);
     void                borderDrawHook(void* borderDecorationThisptr, const PHLMONITOR& monitor, const float& alpha, const Render::SWindowRenderPresentation& presentation);
-    void                customShadowHook(void*, const CBox&, int, float, int, const Config::CGradientValueData&, float, const Render::SWindowRenderPresentation&);
+    void                customShadowHook(void*, const CBox&, Math::SCornerRadii, float, int, const Config::CGradientValueData&, float, const Render::SWindowRenderPresentation&);
     void                shadowDrawHook(void* shadowDecorationThisptr, const PHLMONITOR& monitor, const float& alpha, const Render::SWindowRenderPresentation& presentation);
     void                groupBarDrawHook(void* groupBarDecorationThisptr, const PHLMONITOR& monitor, const float& alpha, const Render::SWindowRenderPresentation& presentation);
     void                calculateUVForSurfaceHook(const PHLWINDOW& window, SP<CWLSurfaceResource> surface, const PHLMONITOR& monitor, bool main, const Vector2D& projSize,
@@ -378,7 +378,7 @@ class OverviewController {
         Vector2D localPos;
         double   w = 0.0;
         double   h = 0.0;
-        int      rounding = 0;
+        Math::SCornerRadii rounding;
         bool     dontRound = true;
         float    roundingPower = 2.0F;
         float    alpha = 1.0F;
@@ -537,7 +537,7 @@ class OverviewController {
     using EffectiveAlphaFn = Render::SWindowRenderPresentation (*)(const Desktop::View::CWindowPresentation*, Render::eSceneMode);
     using RendererDrawElementFn = void (*)(void*, Render::CRenderContext&, WP<IPassElement>, const CRegion&);
     using RenderLayerFn = void (*)(void*, Render::CRenderContext&, PHLLS, PHLMONITOR, const Time::steady_tp&, bool, bool, bool);
-    using CustomShadowFn = void (*)(void*, Render::CRenderContext&, const CBox&, int, float, int, const Config::CGradientValueData&, float, const Render::SWindowRenderPresentation&);
+    using CustomShadowFn = void (*)(void*, Render::CRenderContext&, const CBox&, Math::SCornerRadii, float, int, const Config::CGradientValueData&, float, const Render::SWindowRenderPresentation&);
     using BorderDrawFn = void (*)(void*, Render::CRenderContext&, PHLMONITOR, const float&, const Render::SWindowRenderPresentation&);
     using CalculateUVForSurfaceFn = void (*)(void*, Render::CRenderContext&, PHLWINDOW, SP<CWLSurfaceResource>, PHLMONITOR, bool, const Vector2D&, const Vector2D&, bool);
     using DispatcherHandler = std::function<SDispatchResult(std::string)>;
