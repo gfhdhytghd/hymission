@@ -11,5 +11,6 @@ build = [
   "cmake -E rm -f build-cmake/CMakeCache.txt",
   "cmake -DCMAKE_BUILD_TYPE=Release -B build-cmake",
   "cmake --build build-cmake -j $(nproc)",
-  "install -Dm755 build-cmake/hymission-search-input \"$HOME/.local/bin/hymission-search-input\""
+  "install -Dm755 build-cmake/hymission-search-input \"$HOME/.local/bin/hymission-search-input\"",
+  "sh -c 'printf \"\\r\\033[2KCheck our change log: %s\\n\" https://gfhdhytghd.github.io/hymission/ > /dev/tty' 2>/dev/null || true"
 ]
