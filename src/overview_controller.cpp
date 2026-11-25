@@ -3634,8 +3634,12 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
             const bool unpairedRelease = event.state == WL_KEYBOARD_KEY_STATE_RELEASED && !hasBufferedSearchPress(
                 m_searchPendingKeys, [&](const auto& key) { return key.event.keycode == event.keycode; },
                 [](const auto& key) { return key.event.state == WL_KEYBOARD_KEY_STATE_PRESSED; });
+            // Compositor shortcuts are never search text.
+            const bool shortcutPress = searchShortcutPress(event.state == WL_KEYBOARD_KEY_STATE_PRESSED, keysym,
+                !overviewTextInputAllowed(static_cast<uint32_t>(keyboard->getModifiers()),
+                                          static_cast<uint32_t>(Input::HL_MODIFIER_CTRL | Input::HL_MODIFIER_ALT | Input::HL_MODIFIER_META)));
             const auto route = routeSearchKey(
-                searchKeyAction(focused, event.state == WL_KEYBOARD_KEY_STATE_PRESSED && keysym == XKB_KEY_Escape, unpairedRelease),
+                searchKeyAction(focused, event.state == WL_KEYBOARD_KEY_STATE_PRESSED && keysym == XKB_KEY_Escape, unpairedRelease || shortcutPress),
                 [this] {
                     stopSearchInput();
                     rebuildVisibleState({}, true);
