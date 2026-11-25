@@ -18,12 +18,12 @@ inline bool hasBufferedSearchPress(const Range& keys, MatchesKey matchesKey, IsP
 }
 
 // Escape must remain a way out while a spawned helper is not yet usable.
-inline SearchKeyAction searchKeyAction(bool focused, bool escapePressed, bool unpairedRelease) {
+inline SearchKeyAction searchKeyAction(bool focused, bool escapePressed, bool passToCore) {
     if (focused)
         return SearchKeyAction::Forward;
     if (escapePressed)
         return SearchKeyAction::Stop;
-    return unpairedRelease ? SearchKeyAction::Pass : SearchKeyAction::Buffer;
+    return passToCore ? SearchKeyAction::Pass : SearchKeyAction::Buffer;
 }
 
 // Stopping an unavailable helper must resume overview handling of this same
