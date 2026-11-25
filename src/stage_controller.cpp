@@ -1,5 +1,7 @@
 #include "native_function_lookup.hpp"
 #include "hook_broker.hpp"
+#include "hook_abi.hpp"
+#include "corner_radii.hpp"
 #include "stage_controller.hpp"
 #include "numeric_config.hpp"
 #include "stage_logic.hpp"
@@ -34,6 +36,7 @@
 #include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
+#include <hyprland/src/config/shared/complex/CornersData.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/GlobalWindowController.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
@@ -166,6 +169,15 @@ double numberSetting(const char* key, double fallback, double minimum = 0.0, dou
     return fallback;
 }
 
+Math::SCornerRadii previewRadii(const CBox& box) {
+    static auto systemRounding = CConfigValue<Config::IComplexConfigValue>("decoration:rounding");
+    const auto configured = numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096);
+    const Math::SCornerRadii system{*static_cast<Config::CCornersData*>(systemRounding.ptr())};
+    return mapCornerRadii(system, [&](float radius) {
+        return stage::previewRounding(configured, radius, box.w, box.h);
+    });
+}
+
 CBox baseArea(const PHLMONITOR& monitor) {
     return monitor->m_reservedArea.apply(CBox{monitor->m_position, monitor->m_size});
 }
@@ -251,8 +263,8 @@ struct StageController::Impl {
         Preview preview;
         CBox from;
         CBox to;
-        float fromRadius = 0;
-        float toRadius = 0;
+        Math::SCornerRadii fromRadius;
+        Math::SCornerRadii toRadius;
         bool dropToCard = false;
         bool offscreen = false;
         std::optional<stage::EdgeViewport> fromViewport;
@@ -261,6 +273,19 @@ struct StageController::Impl {
         bool desktopDecorations = false;
         bool nativeDestination = false;
         bool previewOnly = false; // Returning a card ghost must not hide its real desktop.
+
+        Math::SCornerRadii roundingAt(double progress) const {
+            const double eased = stage::transitionProgress(progress, 1);
+            const auto interpolate = [=](float from, float to) {
+                return static_cast<float>(from + (to - from) * eased);
+            };
+            return {
+                interpolate(fromRadius.topLeft, toRadius.topLeft),
+                interpolate(fromRadius.topRight, toRadius.topRight),
+                interpolate(fromRadius.bottomRight, toRadius.bottomRight),
+                interpolate(fromRadius.bottomLeft, toRadius.bottomLeft),
+            };
+        }
     };
     struct DragHover {
         PHLWINDOWREF window;
@@ -362,7 +387,7 @@ struct StageController::Impl {
     using WindowFocusFn = void (*)(Desktop::CFocusState*, PHLWINDOW, Desktop::eFocusReason, SP<CWLSurfaceResource>);
     using ScrollFocusFn = void (*)(Layout::Tiled::CScrollingAlgorithm*, SP<Layout::ITarget>, Layout::Tiled::CScrollingAlgorithm::eInputMode);
     using WindowAtFn = PHLWINDOW (*)(const Desktop::CViewHitTester*, const Vector2D&, uint16_t, PHLWINDOW);
-    using RoundingFn = float (*)(Desktop::View::CWindowPresentation*);
+    using RoundingFn = Math::SCornerRadii (*)(Desktop::View::CWindowPresentation*);
     using RenderWindowFn = void (*)(Render::IHyprRenderer*, Render::CRenderContext&, PHLWINDOW, PHLMONITOR, const Render::SWindowRenderPresentation&, const Time::steady_tp&, bool, Render::eRenderPassMode, bool, bool);
     using ShouldBlurFn = bool (*)(const Desktop::View::CWindow*, const Render::SWindowRenderPresentation&);
     using SurfaceBoxFn = CBox (*)(CSurfacePassElement*);
@@ -437,9 +462,9 @@ struct StageController::Impl {
     uint64_t drawNanos=0,drawMaxNanos=0;
     SwipeBeginFn swipeBeginOriginal = nullptr;
     bool drawingDecoration = false;
-    float decorationRadius = 0;
+    Math::SCornerRadii decorationRadius;
     PHLWINDOWREF roundingWindow;
-    float roundingOverride = 0;
+    Math::SCornerRadii roundingOverride;
     CBox decorationClip;
     struct SurfaceTransform {
         CBox source;
@@ -558,7 +583,7 @@ struct StageController::Impl {
     void drawDragHover(const PHLMONITOR& monitor);
     void drawOne(const PHLMONITOR& monitor);
     void drawFlights(Screen& screen, const PHLMONITOR& monitor);
-    void drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, double radius,
+    void drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, Math::SCornerRadii radius,
                      std::optional<stage::EdgeViewport> viewport = std::nullopt, double* captureRounding = nullptr, bool forceDecorations = false);
     void drawWindowPasses(StageWindowPassElement::Elements& elements, const PHLMONITOR& monitor, const stage::EdgeViewport& viewport,
                           const Rect& clip);
@@ -613,7 +638,7 @@ struct StageController::Impl {
     void clearDragHover();
     void traceDrop(const char* phase, const PHLWINDOW& window, const PHLWORKSPACE& destination, bool begin = false);
     void finishDrop(const PHLWORKSPACE& destination, const PHLWINDOW& window, const CBox& dropOrigin,
-                    float dropRadius, const Vector2D& dropPoint, const Vector2D& grabOffset,
+                    Math::SCornerRadii dropRadius, const Vector2D& dropPoint, const Vector2D& grabOffset,
                     std::optional<Vector2D> floatingCenter, std::optional<stage::EdgeViewport> originViewport, bool edgeTransfer);
     void finishThumbnailDrag();
     void button(const IPointer::SButtonEvent& event, Event::SCallbackInfo& info);
@@ -941,7 +966,7 @@ struct StageController::Impl {
         Hyprutils::Utils::CScopeGuard restore{[&] { renderer->bindFB(renderContext(), destination); }};
         return original(renderer, ctx, alpha, damage, blurContext);
     }
-    static float roundingThunk(Desktop::View::CWindowPresentation* presentation) {
+    static Math::SCornerRadii roundingThunk(Desktop::View::CWindowPresentation* presentation) {
         auto* self = instance;
         // Native decorations query a pre-scale radius; surfaces receive their
         // final displayed radius directly without changing the real window.
@@ -1360,6 +1385,7 @@ bool StageController::Impl::installHooks() {
     static_assert(std::is_same_v<ScrollFocusFn, decltype(&scrollFocusThunk)>);
     static_assert(std::is_same_v<WindowAtFn, decltype(&windowAtThunk)>);
     static_assert(std::is_same_v<RoundingFn, decltype(&roundingThunk)>);
+    HYMISSION_NATIVE_HOOK_ABI(RoundingFn, Desktop::View::CWindowPresentation, Desktop::View::CWindowPresentation, rounding);
     static_assert(std::is_same_v<RenderWindowFn, decltype(&renderWindowThunk)>);
     static_assert(std::is_same_v<SurfaceBoxFn, decltype(&surfaceBoxThunk)>);
     static_assert(std::is_same_v<SurfaceVisibleFn, decltype(&surfaceVisibleThunk)>);
@@ -2794,8 +2820,7 @@ void StageController::Impl::finishThumbnailDrag() {
         return;
     const bool toDesktop = destination->visible();
     traceDrop("thumbnail_release", window, destination, true);
-    finishDrop(destination, window, from, stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
-        numberSetting("decoration:rounding", 0), from.w, from.h), center, {}, center, frame.viewport, edgeTransfer);
+    finishDrop(destination, window, from, previewRadii(from), center, {}, center, frame.viewport, edgeTransfer);
     if (!toDesktop || window->m_workspace != destination)
         return;
     forceRefresh = true;
@@ -2855,7 +2880,7 @@ bool StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
     CBox dropOrigin;
     std::optional<stage::EdgeViewport> originViewport;
     bool edgeTransfer = false;
-    float dropRadius = 0;
+    Math::SCornerRadii dropRadius;
     // Keybind handling clears the native threshold flag after starting a drag.
     // With a zero threshold, motion never sets it again: dragging is immediate.
     const bool thresholdReached = numberSetting("binds:drag_threshold", 0) <= 0 || drag->dragThresholdReached();
@@ -2888,8 +2913,7 @@ bool StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
                     dropOrigin = box(frame.window);
                     originViewport = frame.viewport;
                     edgeTransfer = dragHover->edgeTransfer;
-                    dropRadius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
-                        numberSetting("decoration:rounding", 0), dropOrigin.w, dropOrigin.h);
+                    dropRadius = previewRadii(dropOrigin);
                 }
                 const auto placement = edgeTransfer ? dragHover->to.middle() : dropOrigin.middle();
                 const auto center = stage::mapPreviewCenter(
@@ -2922,7 +2946,7 @@ bool StageController::Impl::endDrag(Layout::Supplementary::CDragStateController*
 }
 
 void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PHLWINDOW& window, const CBox& dropOrigin,
-                                     float dropRadius, const Vector2D& dropPoint, const Vector2D& grabOffset,
+                                     Math::SCornerRadii dropRadius, const Vector2D& dropPoint, const Vector2D& grabOffset,
                                      std::optional<Vector2D> floatingCenter, std::optional<stage::EdgeViewport> originViewport, bool edgeTransfer) {
     if (sessionLocked())
         return;
@@ -3018,8 +3042,7 @@ void StageController::Impl::finishDrop(const PHLWORKSPACE& destination, const PH
                         std::erase_if(screen->flights, [&](const auto& f) { return f.preview.window == window; });
                         const auto target = preview->target.copy().translate(Vector2D{sidebar(*screen).x + screen->geometry.padding,
                             screen->base.y + screen->geometry.cardTop(std::distance(screen->cards.begin(), card),screen->scroll)});
-                        screen->flights.push_back({*preview, dropOrigin, target, dropRadius, static_cast<float>(stage::previewRounding(
-                            numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096), numberSetting("decoration:rounding", 0), target.w, target.h)), true});
+                        screen->flights.push_back({*preview, dropOrigin, target, dropRadius, previewRadii(target), true});
                         if (edgeTransfer || scrollingTiled(window)) {
                             screen->flights.back().fromViewport = edgeTransfer ? originViewport.value_or(desktopViewport(*screen)) :
                                 stage::edgeViewport(rect(dropOrigin), 0, 0);
@@ -3187,9 +3210,9 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
             // Drag reorder: the lifted card's slot travels to the previewed
             // position as an empty, accent-tinted placeholder.
             const auto accent = CHyprColor(static_cast<uint64_t>(setting("focus_selected_color", 0xF23DC7FF)));
-            const double round = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
-                numberSetting("decoration:rounding", 0), box.w, box.h);
-            const int ringRound = static_cast<int>(std::lround(round * monitor->m_scale));
+            const auto ringRound = mapCornerRadii(previewRadii(box), [&](float radius) {
+                return std::lround(radius * monitor->m_scale);
+            });
             renderContext().m_data.clipBox = stripClip;
             g_pHyprOpenGL->renderRect(renderContext(), physical(box), accent.modifyA(0.12F), {.round = ringRound, .roundingPower = 2.0F});
             g_pHyprOpenGL->renderBorder(renderContext(), physical(box), Config::CGradientValueData{accent},
@@ -3228,8 +3251,7 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
                 const auto window = preview.window.lock();
                 if (!window || !window->mapped() || window->isHidden() || static_cast<bool>(window->m_state & Desktop::View::WINDOW_STATE_PINNED) || window->m_workspace != workspace || flying(*screen, window) || thumbnailDrag == window || (TilesController::get() && TilesController::get()->transferDragging() && TilesController::get()->transferMember(window)))
                     continue;
-                const auto radius = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
-                    numberSetting("decoration:rounding", 0), preview.target.w, preview.target.h);
+                const auto radius = previewRadii(preview.target);
                 const CBox target = preview.target.copy().translate(box.pos());
                 // Export the geometry actually drawn into this frame, including
                 // slide/scroll offsets and card/output clipping. Consumers select
@@ -3253,24 +3275,29 @@ void StageController::Impl::drawOne(const PHLMONITOR& monitor) {
             // output: the sidebar clip would cut the desktop-facing edge.
             if (setting("stage_active_glow", 0) != 0 && workspace == screenWorkspace(*screen)) {
                 const auto glow = CHyprColor(static_cast<uint64_t>(setting("focus_selected_color", 0xF23DC7FF)));
-                const double glowRound = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
-                    numberSetting("decoration:rounding", 0), box.w, box.h);
-                const int ringRound = static_cast<int>(std::lround(glowRound * monitor->m_scale));
+                const auto glowRound = previewRadii(box);
+                const bool rounded = glowRound.isRounded();
+                const auto ringRound = [&](int outset) {
+                    return mapCornerRadii(glowRound, [&](float radius) {
+                        // Keep the legacy outset when the entire card is square.
+                        return radius > 0.F || !rounded ? std::lround(radius * monitor->m_scale) + outset : 0L;
+                    });
+                };
                 const auto ringBox = physical(CBox{box.x - 2, box.y - 2, box.w + 4, box.h + 4});
                 const auto haloBox = physical(CBox{box.x - 7, box.y - 7, box.w + 14, box.h + 14});
                 renderContext().m_data.clipBox = outputClip;
                 g_pHyprOpenGL->renderBorder(renderContext(), haloBox, Config::CGradientValueData{glow.modifyA(static_cast<float>(glow.a * 0.30))},
-                    {.round = ringRound + 5, .roundingPower = 2.0F, .borderSize = 5, .a = 0.5F, .outerRound = -1});
+                    {.round = ringRound(5), .roundingPower = 2.0F, .borderSize = 5, .a = 0.5F, .outerRound = -1});
                 g_pHyprOpenGL->renderBorder(renderContext(), ringBox, Config::CGradientValueData{glow},
-                    {.round = ringRound + 1, .roundingPower = 2.0F, .borderSize = 2, .a = 1.0F, .outerRound = -1});
+                    {.round = ringRound(1), .roundingPower = 2.0F, .borderSize = 2, .a = 1.0F, .outerRound = -1});
                 renderContext().m_data.clipBox = stripClip;
             }
             // Mark the original numbered slot while its drag ghost is away.
             if (screen->reorderHover == i && !screen->reorderTo) {
                 const auto accent = CHyprColor(static_cast<uint64_t>(setting("focus_selected_color", 0xF23DC7FF)));
-                const double hoverRound = stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
-                    numberSetting("decoration:rounding", 0), box.w, box.h);
-                const int hoverRingRound = static_cast<int>(std::lround(hoverRound * monitor->m_scale));
+                const auto hoverRingRound = mapCornerRadii(previewRadii(box), [&](float radius) {
+                    return std::lround(radius * monitor->m_scale);
+                });
                 renderContext().m_data.clipBox = outputClip;
                 g_pHyprOpenGL->renderRect(renderContext(), physical(box), accent.modifyA(0.18F), {});
                 g_pHyprOpenGL->renderBorder(renderContext(), physical(box), Config::CGradientValueData{accent},
@@ -3562,8 +3589,7 @@ void StageController::Impl::returnSidebarCard(const PHLWORKSPACE& workspace, con
         if (preview==card->previews.end()) continue;
         std::erase_if(screen->flights,[&](const Flight& f) { return f.preview.window==window; });
         const auto target=preview->target.copy().translate(slot.pos());
-        screen->flights.push_back({*preview,box(ghost.target),target,8,static_cast<float>(stage::previewRounding(
-            numberSetting("plugin:hymission:stage_window_rounding",-1,-1,4096),numberSetting("decoration:rounding",0),target.w,target.h)),true});
+        screen->flights.push_back({*preview,box(ghost.target),target,8,previewRadii(target),true});
         screen->flights.back().nativeDestination=true; // Preserve the sampled ghost, clipping at the output only.
         screen->flights.back().previewOnly=true;
         if (scrollingTiled(window)) {
@@ -3583,8 +3609,7 @@ void StageController::Impl::drawDragHover(const PHLMONITOR& monitor) {
             const auto box = hymission::box(frame.window);
             const auto bounds = dragHover->onDesktop ? rect(CBox{monitor->m_position, monitor->m_size}) : flightBounds(monitor);
             const auto clip = physical(CBox{bounds.x, bounds.y, bounds.width, bounds.height});
-            const double radius = dragHover->onDesktop ? window->presentation().rounding() : stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096),
-                numberSetting("decoration:rounding", 0), box.w, box.h);
+            const auto radius = dragHover->onDesktop ? window->presentation().rounding() : previewRadii(box);
             if ((TilesController::get() && TilesController::get()->enabled(monitor)) || !dragHover->edgeTransfer)
                 drawPreview(window, monitor, box, clip, radius, std::nullopt, nullptr, dragHover->onDesktop);
             else if (stage::overviewEndpointVisible({frame.window, frame.viewport, frame.viewport.box}))
@@ -3729,9 +3754,6 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
                     screen.base.y + geometry.cardTop(std::distance(cards.begin(), it), scroll) + shift + (natural.y - screen.base.y) * scale,
                     natural.w * scale, natural.h * scale};
     };
-    const auto radius = [&](const CBox& box) {
-        return stage::previewRounding(numberSetting("plugin:hymission:stage_window_rounding", -1, -1, 4096), numberSetting("decoration:rounding", 0), box.w, box.h);
-    };
     for (const auto& workspace : workspaces) {
         Screen capture;
         capture.monitor = monitor;
@@ -3766,10 +3788,10 @@ void StageController::Impl::startFlights(Screen& screen, WorkspaceKey previous, 
             if (!from || !to)
                 continue;
             const auto nativeRadius = window->presentation().rounding();
-            const double fromRadius = old != previousFlights.end() ? old->fromRadius + (old->toRadius - old->fromRadius) * stage::transitionProgress(oldProgress, 1) :
-                workspaceKey(workspace) == previous ? nativeRadius : radius(*from);
-            const double toRadius = workspace == activeWorkspace ? nativeRadius : radius(*to);
-            screen.flights.push_back({std::move(preview), *from, *to, static_cast<float>(fromRadius), static_cast<float>(toRadius)});
+            const auto fromRadius = old != previousFlights.end() ? old->roundingAt(oldProgress) :
+                workspaceKey(workspace) == previous ? nativeRadius : previewRadii(*from);
+            const auto toRadius = workspace == activeWorkspace ? nativeRadius : previewRadii(*to);
+            screen.flights.push_back({std::move(preview), *from, *to, fromRadius, toRadius});
             auto& flight = screen.flights.back();
             // Tile-native gaps can differ from the output's gaps_out. Fitting
             // either endpoint to the latter moves the window at the handoff.
@@ -3883,7 +3905,7 @@ void StageController::Impl::retargetFlight(Flight& flight, double progress, cons
     const auto [window, viewport] = flightFrame(flight, progress, monitor);
     flight.from = box(window);
     flight.fromViewport = viewport;
-    flight.fromRadius += (flight.toRadius - flight.fromRadius) * stage::transitionProgress(progress, 1);
+    flight.fromRadius = flight.roundingAt(progress);
 }
 
 void StageController::Impl::captureWindowPasses(Render::IHyprRenderer* renderer, const PHLMONITOR& monitor,
@@ -4037,7 +4059,7 @@ void StageController::Impl::drawWindowPasses(StageWindowPassElement::Elements& e
             element->discard(renderContext());
 }
 
-void StageController::Impl::drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, double radius,
+void StageController::Impl::drawPreview(const PHLWINDOW& window, const PHLMONITOR& monitor, const CBox& target, const CBox& clip, Math::SCornerRadii radius,
                                        std::optional<stage::EdgeViewport> viewport, double* captureRounding, bool forceDecorations) {
     if (!hooksReady || !renderWindowHook || !renderWindowHook->enabled || !renderWindowHook->m_original || !renderWindow || !window)
         return;
@@ -4063,7 +4085,7 @@ void StageController::Impl::drawPreview(const PHLWINDOW& window, const PHLMONITO
         return;
     const double scale = std::min(target.w / footprint.w, target.h / footprint.h);
     const CBox fitted{target.middle() - footprint.size() * scale / 2, footprint.size() * scale};
-    radius = std::clamp(radius, 0.0, std::min(source.w, source.h) * scale / 2);
+    radius = radius.clamped(source.size() * scale);
     auto& state = renderContext().m_data;
     const auto previousClip = state.clipBox;
     const auto previousWindow = state.currentWindow;
@@ -4124,12 +4146,14 @@ void StageController::Impl::drawPreview(const PHLWINDOW& window, const PHLMONITO
     data.w = source.w;
     data.h = source.h;
     data.clipBox = clip;
-    data.rounding = static_cast<int>(std::lround(radius * monitor->m_scale)) + 1;
-    data.dontRound = radius <= 0;
-    // Export the final surface radius after fitting, clamping and physical
-    // pixel quantization, in the logical coordinates used by capture clients.
+    data.rounding = mapCornerRadii(radius, [&](float corner) {
+        return corner > 0.F ? std::lround(corner * monitor->m_scale) + 1 : 0L;
+    });
+    data.dontRound = !radius.isRounded();
+    // The capture API reports one logical radius. Use the largest corner
+    // so a consumer can cover every rounded corner with that value.
     if (captureRounding)
-        *captureRounding = data.dontRound ? 0.0 : data.rounding / monitor->m_scale;
+        *captureRounding = data.rounding.max() / monitor->m_scale;
     data.roundingPower = window->presentation().roundingPower();
     data.blur = shouldBlur && shouldBlur(window.get(), window->presentation().renderPresentation());
     data.blockBlurOptimization = true;
@@ -4183,8 +4207,7 @@ void StageController::Impl::drawFlights(Screen& screen, const PHLMONITOR& monito
         if (flight.edgeTransfer && viewport && !stage::overviewEndpointVisible({frame, *viewport, viewport->box}))
             continue; // Do not leave a shadow visible during the hidden size change.
         const CBox drawClip = !screen.tile && flight.desktopDecorations ? CBox{0, 0, monitor->m_size.x * monitor->m_scale, monitor->m_size.y * monitor->m_scale} : clip;
-        const double radius = flight.desktopDecorations ? window->presentation().rounding() :
-            flight.fromRadius + (flight.toRadius - flight.fromRadius) * stage::transitionProgress(p, 1);
+        const auto radius = flight.desktopDecorations ? window->presentation().rounding() : flight.roundingAt(p);
         // Flights use the same output plane as native single-column Stage.
         // Keep the flight's own interpolated scrolling viewport, not tile or
         // sidebar scissors belonging to stationary content beneath it.
@@ -5016,7 +5039,7 @@ bool StageController::renderingPreview() {
     return Impl::instance && Impl::instance->rendering && Impl::instance->surfaceTransform.has_value();
 }
 
-void StageController::withWindowRounding(const PHLWINDOW& window, float radius, const std::function<void()>& draw) {
+void StageController::withWindowRounding(const PHLWINDOW& window, Math::SCornerRadii radius, const std::function<void()>& draw) {
     auto* self = Impl::instance;
     if (!self || !self->hooksReady) {
         draw();

@@ -2,6 +2,7 @@
 #include "hook_broker.hpp"
 #include "overview_controller.hpp"
 #include "hook_abi.hpp"
+#include "corner_radii.hpp"
 #include "numeric_config.hpp"
 #include "overview_expansion.hpp"
 #include "search_geometry.hpp"
@@ -89,6 +90,7 @@
 #include <hyprland/src/managers/input/UnifiedWorkspaceSwipeGesture.hpp>
 #include <hyprland/src/protocols/core/Compositor.hpp>
 #include <hyprland/src/protocols/LayerShell.hpp>
+#include <hyprland/src/render/GLRenderer.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/decorations/CHyprDropShadowDecoration.hpp>
@@ -204,8 +206,8 @@ class OverviewOverlayPassElement final : public IPassElement {
 
 class OverviewShadowPassElement final : public IPassElement {
   public:
-    OverviewShadowPassElement(CBox box, int round, float roundingPower, int range, CHyprColor color, float alpha,
-                              PHLWINDOW cutoutWindow = {}, CBox cutoutSource = {}, CBox cutoutTarget = {}, float cutoutRadius = 0, std::optional<CBox> shadowClip = {}) :
+    OverviewShadowPassElement(CBox box, Math::SCornerRadii round, float roundingPower, int range, CHyprColor color, float alpha,
+                              PHLWINDOW cutoutWindow = {}, CBox cutoutSource = {}, CBox cutoutTarget = {}, Math::SCornerRadii cutoutRadius = {}, std::optional<CBox> shadowClip = {}) :
         m_box(box), m_round(round), m_roundingPower(roundingPower), m_range(range), m_color(color), m_alpha(alpha),
         m_cutoutWindow(cutoutWindow), m_cutoutSource(cutoutSource), m_cutoutTarget(cutoutTarget), m_cutoutRadius(cutoutRadius), m_shadowClip(shadowClip) {
     }
@@ -239,7 +241,7 @@ class OverviewShadowPassElement final : public IPassElement {
             nativeBox.translate(-m_cutoutTarget.pos()).scale(1.0 / scale).translate(m_cutoutSource.pos());
             // Native shadow exclusion scales window rounding with renderModif,
             // while overview surfaces retain their displayed corner radius.
-            const float nativeRadius = m_cutoutRadius / (state.pMonitor->m_scale * scale);
+            const auto nativeRadius = m_cutoutRadius / (state.pMonitor->m_scale * scale);
             StageController::withWindowRounding(window, nativeRadius, [&] {
                 g_pHyprOpenGL->renderRoundedShadow(renderContext(), nativeBox, m_round, m_roundingPower, m_range,
                     Config::CGradientValueData{m_color}, m_alpha, window->presentation().renderPresentation());
@@ -269,7 +271,7 @@ class OverviewShadowPassElement final : public IPassElement {
 
   private:
     CBox       m_box;
-    int        m_round = 0;
+    Math::SCornerRadii m_round;
     float      m_roundingPower = 2.0F;
     int        m_range = 0;
     CHyprColor m_color;
@@ -277,11 +279,38 @@ class OverviewShadowPassElement final : public IPassElement {
     PHLWINDOWREF m_cutoutWindow;
     CBox       m_cutoutSource;
     CBox       m_cutoutTarget;
-    float      m_cutoutRadius = 0;
+    Math::SCornerRadii m_cutoutRadius;
     std::optional<CBox> m_shadowClip;
 };
 
 namespace {
+
+Math::SCornerRadii roundPreviewRadii(const Math::SCornerRadii& radii, double scale) {
+    return mapCornerRadii(radii, [=](float radius) { return std::max(0.0, std::round(radius * scale)); });
+}
+
+Math::SCornerRadii clampPreviewRadii(const Math::SCornerRadii& radii, const Vector2D& size) {
+    // Preview passes keep their existing whole-pixel radius limit.
+    return radii.clamped({2 * std::floor(size.x * 0.5), 2 * std::floor(size.y * 0.5)});
+}
+
+Math::SCornerRadii previewSurfaceRadii(const Math::SCornerRadii& radii, double scale, const Vector2D& size) {
+    // The native surface data previously truncated to whole pixels before
+    // applying the preview scale. Keep that order for each corner.
+    const auto pixels = mapCornerRadii(radii, [=](float radius) { return std::max(0.0, std::round(std::trunc(radius) * scale)); });
+    return clampPreviewRadii(pixels, size);
+}
+
+Math::SCornerRadii outerPreviewRadii(const Math::SCornerRadii& radii, double scale, double outset, double renderScale) {
+    const bool rounded = radii.isRounded();
+    return mapCornerRadii(radii, [=](float radius) {
+        // Keep the legacy outset for an entirely square preview. In a mixed
+        // shape, Hyprland keeps each square corner square when expanding it.
+        if (rounded && radius <= 0.F)
+            return 0.0;
+        return std::max(0.0, std::round((radius * scale + outset) * renderScale));
+    });
+}
 
 constexpr double OPEN_DURATION_MS = 180.0;
 constexpr double CLOSE_DURATION_MS = 140.0;
@@ -2188,7 +2217,7 @@ void hkBorderDraw(void* borderDecorationThisptr, Render::CRenderContext& ctx, PH
     g_controller->borderDrawHook(borderDecorationThisptr, monitor, alpha, presentation);
 }
 
-void hkCustomShadow(void* renderer, Render::CRenderContext& ctx, const CBox& box, int round, float power, int range,
+void hkCustomShadow(void* renderer, Render::CRenderContext& ctx, const CBox& box, Math::SCornerRadii round, float power, int range,
                     const Config::CGradientValueData& color, float alpha, const Render::SWindowRenderPresentation& presentation) {
     RenderContextScope contextScope{ctx};
     if (g_controller)
@@ -4399,12 +4428,9 @@ void OverviewController::renderOverviewBorderForRect(const PHLWINDOW& window, co
     const double roundingScale = previewDecorationRoundingScale(monitor);
     const double roundingPower = window->presentation().roundingPower();
     const double correctionOffset = borderSizeLogical * (M_SQRT2 - 1.0) * std::max(2.0 - roundingPower, 0.0);
-    const double innerRoundingLogical = std::max(0.0, static_cast<double>(window->presentation().rounding()) * roundingScale * decorationScale);
-    const int    innerRounding =
-        std::min(static_cast<int>(std::floor(std::min(borderBox.width, borderBox.height) * 0.5)),
-                 std::max(0, static_cast<int>(std::lround(innerRoundingLogical * renderScale))));
-    const int outerRound =
-        std::max(0, static_cast<int>(std::lround((innerRoundingLogical + borderSizeLogical - correctionOffset) * renderScale)));
+    const auto radii = window->presentation().rounding();
+    const auto innerRounding = clampPreviewRadii(roundPreviewRadii(radii, roundingScale * decorationScale * renderScale), borderBox.size());
+    const auto outerRound = outerPreviewRadii(radii, roundingScale * decorationScale, borderSizeLogical - correctionOffset, renderScale);
 
     std::optional<CAnimatedDecorationGradient::SRenderState> gradient;
     const auto decoration = window->presentation().decoration(DECORATION_BORDER);
@@ -4522,8 +4548,8 @@ void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, co
     const double roundingScale = previewDecorationRoundingScale(monitor);
     const double roundingPower = window->presentation().roundingPower();
     const double correctionOffset = borderSize * (M_SQRT2 - 1.0) * std::max(2.0 - roundingPower, 0.0);
-    const int    shadowRound = std::max(
-        0, static_cast<int>(std::lround((static_cast<double>(window->presentation().rounding()) * roundingScale * decorationScale + borderSize - correctionOffset) * renderScale)));
+    const auto radii = window->presentation().rounding();
+    const auto shadowRound = outerPreviewRadii(radii, roundingScale * decorationScale, borderSize - correctionOffset, renderScale);
     const int renderRange = std::max(1, static_cast<int>(std::lround(shadowRange * renderScale)));
 
     // Desktop decorations do not disappear as the overview reaches its native
@@ -4534,7 +4560,7 @@ void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, co
     else {
         PHLWINDOW cutoutWindow;
         CBox cutoutSource, cutoutTarget;
-        float cutoutRadius = 0;
+        Math::SCornerRadii cutoutRadius;
         // Preserve the owner and map native shadow exclusion into the preview.
         // Stage submits this shadow outside its cropped window-content layer.
         // Other overview paths retain their existing rendering.
@@ -4547,9 +4573,7 @@ void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, co
             cutoutSource.translate(window->presentation().floatingOffset() - monitor->m_position).scale(monitor->m_scale);
             cutoutTarget = toBox(rectToMonitorRenderLocal(previewRect, monitor));
             // Match transformSurfaceRenderDataForWindow, including its size cap.
-            const int surfaceRadius = static_cast<int>(window->presentation().rounding() * monitor->m_scale);
-            const int maxRadius = std::max(0, static_cast<int>(std::floor(std::min(previewRect.width, previewRect.height) * 0.5)));
-            cutoutRadius = std::min(maxRadius, std::max(0, static_cast<int>(std::lround(surfaceRadius * roundingScale))));
+            cutoutRadius = previewSurfaceRadii(radii * monitor->m_scale, roundingScale, {previewRect.width, previewRect.height});
         }
         std::optional<CBox> shadowClip;
         if (auto* tiles=TilesController::get();workspaceScoped() && !m_stripPreviewContext.active && tiles && tiles->enabled(monitor)) {
@@ -4586,7 +4610,7 @@ void OverviewController::borderDrawHook(void* borderDecorationThisptr, const PHL
 // Viewflow restores currentWindow inside its deferred custom pass. Transform
 // the shader call here, where that identity is available, rather than relying
 // on the native CHyprDropShadowDecoration hook which custom decorations bypass.
-void OverviewController::customShadowHook(void* renderer, const CBox& box, int round, float power, int range,
+void OverviewController::customShadowHook(void* renderer, const CBox& box, Math::SCornerRadii round, float power, int range,
                                          const Config::CGradientValueData& color, float alpha, const Render::SWindowRenderPresentation& presentation) {
     if (!m_customShadowOriginal)
         return;
@@ -4609,7 +4633,7 @@ void OverviewController::customShadowHook(void* renderer, const CBox& box, int r
     const double scale = std::min(target.w / source.w, target.h / source.h);
     CBox mapped = box;
     mapped.translate(-source.pos()).scale(scale).translate(target.pos());
-    m_customShadowOriginal(renderer, renderContext(), mapped, std::max(0, static_cast<int>(std::lround(round * scale))), power,
+    m_customShadowOriginal(renderer, renderContext(), mapped, roundPreviewRadii(round, scale), power,
                            std::max(1, static_cast<int>(std::lround(range * scale))), color, managedPreviewAlphaFor(window, alpha), presentation);
 }
 
@@ -7857,6 +7881,7 @@ bool OverviewController::installHooks() {
     static_assert(std::is_same_v<RenderLayerFn, decltype(&hkRenderLayer)>);
     HYMISSION_NATIVE_HOOK_ABI(RenderLayerFn, Render::IHyprRenderer, OverviewRendererMembers, renderLayer);
     static_assert(std::is_same_v<CustomShadowFn, decltype(&hkCustomShadow)>);
+    HYMISSION_NATIVE_HOOK_ABI(CustomShadowFn, Render::GL::CHyprGLRenderer, Render::GL::CHyprGLRenderer, drawShadow);
     static_assert(std::is_same_v<BorderDrawFn, decltype(&hkBorderDraw)>);
     static_assert(std::is_same_v<CalculateUVForSurfaceFn, decltype(&hkCalculateUVForSurface)>);
     static_assert(std::is_same_v<WorkspaceSwipeBeginFn, decltype(&hkWorkspaceSwipeBegin)>);
@@ -7960,7 +7985,7 @@ bool OverviewController::installHooks() {
         return initFailed("[hymission] failed to hook shadow decoration draw");
     }
 
-    if (!hookFunction("drawShadow", "Render::GL::CHyprGLRenderer::drawShadow(Render::CRenderContext&, Hyprutils::Math::CBox const&, int, float, int, Config::CGradientValueData const&, float, Render::SWindowRenderPresentation const&)",
+    if (!hookFunction("drawShadow", "Render::GL::CHyprGLRenderer::drawShadow(Render::CRenderContext&, Hyprutils::Math::CBox const&, Math::SCornerRadii, float, int, Config::CGradientValueData const&, float, Render::SWindowRenderPresentation const&)",
                       m_customShadowHook, hooks::target(&hkCustomShadow)))
         debugLog("[hymission] Viewflow shadow hook unavailable");
 
@@ -9241,11 +9266,10 @@ bool OverviewController::transformSurfaceRenderDataForWindow(const PHLWINDOW& wi
     renderData.localPos = transformedLocalPos;
     renderData.w = std::max(1.0, renderData.w * transform->scaleX);
     renderData.h = std::max(1.0, renderData.h * transform->scaleY);
-    if (!renderData.dontRound && renderData.rounding > 0) {
+    if (!renderData.dontRound && renderData.rounding.isRounded()) {
         const double scale = previewDecorationRoundingScale(monitor);
-        const int    maxRounding = std::max(0, static_cast<int>(std::floor(std::min(renderData.w, renderData.h) * 0.5)));
-        renderData.rounding = std::min(maxRounding, std::max(0, static_cast<int>(std::lround(static_cast<double>(renderData.rounding) * scale))));
-        renderData.dontRound = renderData.rounding <= 0;
+        renderData.rounding = previewSurfaceRadii(renderData.rounding, scale, {renderData.w, renderData.h});
+        renderData.dontRound = !renderData.rounding.isRounded();
     }
 
     // Keep overview previews independent from normal-layout monitor clipping.
@@ -13769,7 +13793,7 @@ void OverviewController::renderDraggedWindowPreview() const {
 
     const Rect local = rectToMonitorRenderLocal(preview, renderMonitor);
     const double renderScale = renderScaleForMonitor(renderMonitor);
-    const int rounding = std::max(0, static_cast<int>(std::lround(static_cast<double>(window->presentation().rounding()) * decorationScale * renderScale)));
+    const auto rounding = roundPreviewRadii(window->presentation().rounding(), decorationScale * renderScale);
     const float roundingPower = static_cast<float>(window->presentation().roundingPower());
     g_pHyprOpenGL->renderTexture(renderContext(), texture, toBox(local), {.a = static_cast<float>(alpha), .round = rounding, .roundingPower = roundingPower});
 
@@ -14158,18 +14182,18 @@ void OverviewController::renderPreviewOutline(const PHLWINDOW& window, const Rec
     // Follow the preview's own corners: renderWindow draws fullscreen windows square,
     // otherwise the preview keeps the window's unscaled rounding.
     const bool   fullscreen = Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
-    const double rounding = fullscreen ? 0.0 : std::max(0.0, static_cast<double>(window->presentation().rounding()));
+    const auto   rounding = fullscreen ? Math::SCornerRadii{} : window->presentation().rounding();
     const double roundingPower = fullscreen ? 2.0 : window->presentation().roundingPower();
     const double renderScale = renderScaleForMonitor(renderMonitor);
     // Same outer corner as renderOverviewBorderForRect and Hyprland's border decoration.
     const double correctionOffset = borderSize * (M_SQRT2 - 1.0) * std::max(2.0 - roundingPower, 0.0);
-    const int    round = std::min(static_cast<int>(std::floor(std::min(box.width, box.height) * 0.5)), static_cast<int>(std::lround(rounding * renderScale)));
+    const auto   round = clampPreviewRadii(roundPreviewRadii(rounding, renderScale), box.size());
     const Render::GL::CHyprOpenGLImpl::SBorderRenderData data{
         .round = round,
         .roundingPower = static_cast<float>(roundingPower),
         .borderSize = borderSize,
         .a = 1.F,
-        .outerRound = std::max(0, static_cast<int>(std::lround((rounding + borderSize - correctionOffset) * renderScale))),
+        .outerRound = outerPreviewRadii(rounding, 1.0, borderSize - correctionOffset, renderScale),
     };
     g_pHyprOpenGL->renderBorder(renderContext(), box, Config::CGradientValueData{color}, data);
 }
