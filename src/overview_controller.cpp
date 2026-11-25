@@ -581,6 +581,22 @@ std::optional<uint32_t> switchReleaseModifierMask(const std::string& value) {
     return std::nullopt;
 }
 
+bool isShortcutModifierKeysym(xkb_keysym_t keysym) {
+    switch (keysym) {
+        case XKB_KEY_Super_L:
+        case XKB_KEY_Super_R:
+        case XKB_KEY_Control_L:
+        case XKB_KEY_Control_R:
+        case XKB_KEY_Alt_L:
+        case XKB_KEY_Alt_R:
+        case XKB_KEY_Meta_L:
+        case XKB_KEY_Meta_R:
+        case XKB_KEY_Hyper_L:
+        case XKB_KEY_Hyper_R: return true;
+        default: return false;
+    }
+}
+
 xkb_keysym_t keysymFromConfiguredSwitchReleaseKey(const std::string& value) {
     if (value.empty())
         return XKB_KEY_NoSymbol;
@@ -3634,8 +3650,13 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
             const bool unpairedRelease = event.state == WL_KEYBOARD_KEY_STATE_RELEASED && !hasBufferedSearchPress(
                 m_searchPendingKeys, [&](const auto& key) { return key.event.keycode == event.keycode; },
                 [](const auto& key) { return key.event.state == WL_KEYBOARD_KEY_STATE_PRESSED; });
+            // Compositor shortcuts are never search text.
+            const bool shortcutPress = event.state == WL_KEYBOARD_KEY_STATE_PRESSED &&
+                (isShortcutModifierKeysym(keysym) ||
+                 !overviewTextInputAllowed(static_cast<uint32_t>(keyboard->getModifiers()),
+                                           static_cast<uint32_t>(Input::HL_MODIFIER_CTRL | Input::HL_MODIFIER_ALT | Input::HL_MODIFIER_META)));
             const auto route = routeSearchKey(
-                searchKeyAction(focused, event.state == WL_KEYBOARD_KEY_STATE_PRESSED && keysym == XKB_KEY_Escape, unpairedRelease),
+                searchKeyAction(focused, event.state == WL_KEYBOARD_KEY_STATE_PRESSED && keysym == XKB_KEY_Escape, unpairedRelease || shortcutPress),
                 [this] {
                     stopSearchInput();
                     rebuildVisibleState({}, true);
