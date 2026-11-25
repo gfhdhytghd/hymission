@@ -30,6 +30,10 @@ int main() {
         searchKeyAction(true, true, true) != SearchKeyAction::Forward ||
         searchKeyAction(true, false, true) != SearchKeyAction::Forward)
         return EXIT_FAILURE;
+    if (!searchShortcutPress(true, XKB_KEY_Super_L, false) || !searchShortcutPress(true, XKB_KEY_Return, true) ||
+        searchShortcutPress(true, XKB_KEY_Shift_L, false) || searchShortcutPress(true, XKB_KEY_a, false) ||
+        searchShortcutPress(false, XKB_KEY_Super_L, true))
+        return EXIT_FAILURE;
     std::vector<std::pair<unsigned, bool>> pending;
     const auto unpairedRelease = [&](unsigned keycode, bool pressed) {
         return !pressed && !hasBufferedSearchPress(pending, [=](const auto& key) { return key.first == keycode; },

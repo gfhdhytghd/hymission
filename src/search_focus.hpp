@@ -1,7 +1,10 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <optional>
+
+#include <xkbcommon/xkbcommon-keysyms.h>
 
 namespace hymission {
 
@@ -18,12 +21,30 @@ inline bool hasBufferedSearchPress(const Range& keys, MatchesKey matchesKey, IsP
 }
 
 // Escape must remain a way out while a spawned helper is not yet usable.
-inline SearchKeyAction searchKeyAction(bool focused, bool escapePressed, bool unpairedRelease) {
+inline bool searchShortcutPress(bool pressed, uint32_t keysym, bool commandModifierHeld) {
+    if (!pressed)
+        return false;
+    switch (keysym) {
+        case XKB_KEY_Super_L:
+        case XKB_KEY_Super_R:
+        case XKB_KEY_Control_L:
+        case XKB_KEY_Control_R:
+        case XKB_KEY_Alt_L:
+        case XKB_KEY_Alt_R:
+        case XKB_KEY_Meta_L:
+        case XKB_KEY_Meta_R:
+        case XKB_KEY_Hyper_L:
+        case XKB_KEY_Hyper_R: return true;
+        default: return commandModifierHeld;
+    }
+}
+
+inline SearchKeyAction searchKeyAction(bool focused, bool escapePressed, bool passToCore) {
     if (focused)
         return SearchKeyAction::Forward;
     if (escapePressed)
         return SearchKeyAction::Stop;
-    return unpairedRelease ? SearchKeyAction::Pass : SearchKeyAction::Buffer;
+    return passToCore ? SearchKeyAction::Pass : SearchKeyAction::Buffer;
 }
 
 // Stopping an unavailable helper must resume overview handling of this same
